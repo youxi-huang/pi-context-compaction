@@ -2,7 +2,7 @@
 
 Context compaction for [Pi](https://github.com/earendil-works/pi), with source-linked notes, original-history retrieval and write safeguards.
 
-**Experimental source distribution: `v0.1.0-alpha.1`, based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
+**Latest tagged release: `v0.1.0-alpha.1`, an experimental source distribution based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
 
 At compaction, a fixed writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
 
@@ -18,6 +18,8 @@ The scope is preserving task continuity when model context is compacted. History
 - A restart-latched fallback switch and explicit-copy migration for complete original histories.
 
 The [architecture](docs/context-memory/architecture.md) explains the host boundary and failure behavior. [Validation](docs/context-memory/validation.md) states what has actually been checked and what remains unproven.
+
+The [changelog](CHANGELOG.md) separates released versions from changes on `main` that have not been released. The build instructions below check out the latest release tag and do not include those unreleased changes.
 
 ## Build from source
 

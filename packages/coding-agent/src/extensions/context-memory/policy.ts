@@ -13,16 +13,25 @@ export function isResident(extension: Extension): boolean {
 	return residents.has(extension);
 }
 
-export function assertExclusiveCompaction(extensions: readonly Extension[]): void {
-	const resident = extensions.find(isResident);
-	if (!resident?.handlers.get("session_before_compact")?.length) return;
-	const other = extensions.filter(
-		(extension) => !isResident(extension) && extension.handlers.get("session_before_compact")?.length,
+/**
+ * Orders extensions for `session_before_compact`: other extensions first, the resident last.
+ * Observers see the event before the writer runs, and a competing compactor is rejected
+ * before the resident spends a writer call.
+ */
+export function orderCompactionExtensions(extensions: readonly Extension[]): Extension[] {
+	return [...extensions.filter((extension) => !isResident(extension)), ...extensions.filter(isResident)];
+}
+
+/**
+ * Rejects any `session_before_compact` result from a non-resident extension. Handlers that only
+ * observe the event and return `undefined` are allowed; a handler that returns a compaction or a
+ * cancellation competes with the resident and fails the compaction with an explicit error.
+ */
+export function assertCompactionResult(extension: Extension, result: unknown): void {
+	if (isResident(extension) || result === undefined || result === null) return;
+	throw new Error(
+		`CONTEXT_COMPACTOR_CONFLICT: ${extension.path} returned a session_before_compact result; only observers that return undefined may coexist with the resident compactor`,
 	);
-	if (other.length)
-		throw new Error(
-			`CONTEXT_COMPACTOR_CONFLICT: disable competing session_before_compact handlers: ${other.map((extension) => extension.path).join(", ")}`,
-		);
 }
 
 export function assertResidentExtensions(
@@ -33,7 +42,6 @@ export function assertResidentExtensions(
 		throw new Error(
 			`CONTEXT_RESIDENT_REQUIRED: exactly one ${CONTEXT_MEMORY_PATH} must be installed through createAgentSession`,
 		);
-	assertExclusiveCompaction(extensions);
 	const resident = extensions.find(isResident)!;
 	const protectedTools = new Set(resident.tools.keys());
 	const otherTools = extensions

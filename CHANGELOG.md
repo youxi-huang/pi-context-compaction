@@ -8,6 +8,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Changed
 
+- Extensions that only observe `session_before_compact` and return `undefined` no longer trigger `CONTEXT_COMPACTOR_CONFLICT`. They run before the resident compactor and its writer call. A non-resident handler that returns a compaction or a cancellation still fails the compaction with the same error, now raised at the point the result is returned rather than at startup, so a competing compactor is rejected before the writer spends a request. Previously any handler registered for the event was treated as a competing compactor, which blocked startup when unrelated extensions used the event as a signal.
 - Renamed the public project from Pi Context Memory to Pi Context Compaction and the repository to `pi-context-compaction`, clarifying its focus on task continuity during context compaction.
 - Retained the `pi-context-memory.json` configuration file, `contextMemory` integration API, tool names, checkpoint identifiers and `context-memory` source paths. The rename does not require configuration or session migration.
 

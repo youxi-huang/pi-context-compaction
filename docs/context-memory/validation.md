@@ -27,7 +27,7 @@ Two earlier attempts stopped: one during OAuth response decoding before inferenc
 - Concurrent writers and recovery of a crashed process lease.
 - Child-scoped grants, tampered references, cross-process reads and revocation.
 - Exact quotations, pagination, branch isolation and long source chunks.
-- Resident filtering/reload, restart-latched settings and a second compactor.
+- Resident filtering/reload, restart-latched settings, a passive `session_before_compact` observer and a second compactor whose result is rejected before the writer runs.
 - Two checkpoints and reopening, failed compaction and request blocking.
 - Cancelled/stale candidates, source changes and metadata-only updates.
 

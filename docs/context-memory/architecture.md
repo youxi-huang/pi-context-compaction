@@ -7,7 +7,7 @@ The original session JSONL is the history store. A checkpoint contains a structu
 | Module | Responsibility |
 | --- | --- |
 | `config.ts` | Process-latched enable flag, writer selection and capacity budgets. |
-| `loader.ts`, `extension.ts`, `policy.ts` | Resident loading, tools, ownership and competing-compactor checks. |
+| `loader.ts`, `extension.ts`, `policy.ts` | Resident loading, tools, ownership, handler ordering and competing-compactor rejection. |
 | `controller.ts` | Freeze source, invoke writer, validate candidate and block requests after failure. |
 | `writer.ts`, `notes.ts` | Source chunks, structured notes, quotation/citation checks and accumulated usage. |
 | `history.ts`, `grant-file.ts` | Snapshots, bounded search/read, child identity and revocation. |
@@ -16,7 +16,7 @@ The original session JSONL is the history store. A checkpoint contains a structu
 
 ## Host changes
 
-The SDK wraps resource loaders so ordinary filtering cannot remove the resident. Runtime construction checks ownership and tools. The extension runner propagates request-blocking failures from the resident instead of swallowing them.
+The SDK wraps resource loaders so ordinary filtering cannot remove the resident. Runtime construction checks ownership and tools. The extension runner propagates request-blocking failures from the resident instead of swallowing them. For `session_before_compact` it runs other extensions first and the resident last; a non-resident handler may observe the event and return `undefined`, but any returned compaction or cancellation is rejected before the writer runs.
 
 `SessionManager` calls storage before publishing candidate entries to its in-memory tree. This includes first flush and subsequent writes. Session opening, branching and forking acquire a destination lease before exposing writable state. Extension events alone run too late to enforce these boundaries.
 

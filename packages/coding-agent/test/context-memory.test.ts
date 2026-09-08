@@ -339,12 +339,44 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(session.hasExtensionHandlers("session_before_compact")).toBe(true);
 	});
 
-	it("a second compactor fails before either handler runs", async () => {
-		const observer = vi.fn();
-		await expect(
-			sdk(manager(false), { extensions: [(pi) => pi.on("session_before_compact", observer)] }),
-		).rejects.toThrow("CONTEXT_COMPACTOR_CONFLICT");
-		expect(observer).not.toHaveBeenCalled();
+	it("a session_before_compact observer runs before the writer and does not block compaction", async () => {
+		const store = manager();
+		const original = seed(store);
+		const order: string[] = [];
+		const observer = vi.fn(() => {
+			order.push("observer");
+			return undefined;
+		});
+		const { session, runtime, settings } = await sdk(store, {
+			extensions: [(pi) => pi.on("session_before_compact", observer)],
+		});
+		vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
+			order.push("writer");
+			return reply(JSON.stringify(note(original)));
+		});
+		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+		await session.compact();
+		expect(observer).toHaveBeenCalledTimes(1);
+		expect(order).toEqual(["observer", "writer"]);
+		expect(latestMemory(store.getBranch())?.memory.note.state[0].text).toContain("4317");
+	});
+
+	it("a second compactor's result is rejected before the writer runs", async () => {
+		for (const competing of [
+			{ compaction: { summary: "foreign", firstKeptEntryId: "x", tokensBefore: 1 } },
+			{ cancel: true },
+		]) {
+			const store = manager();
+			seed(store);
+			const { session, runtime, settings } = await sdk(store, {
+				extensions: [(pi) => pi.on("session_before_compact", () => competing as never)],
+			});
+			const writer = vi.spyOn(runtime, "completeSimple");
+			settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+			await expect(session.compact()).rejects.toThrow("CONTEXT_COMPACTOR_CONFLICT");
+			expect(writer).not.toHaveBeenCalled();
+			expect(latestMemory(store.getBranch())).toBeUndefined();
+		}
 	});
 
 	it("two checkpoints retain raw-source coverage and latest decisions across reopen", async () => {

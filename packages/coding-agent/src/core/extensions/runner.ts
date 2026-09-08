@@ -5,7 +5,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model, Provider, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { assertExclusiveCompaction, isResident } from "../../extensions/context-memory/policy.ts";
+import {
+	assertCompactionResult,
+	isResident,
+	orderCompactionExtensions,
+} from "../../extensions/context-memory/policy.ts";
 import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
@@ -850,17 +854,18 @@ export class ExtensionRunner {
 	}
 
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
-		if (event.type === "session_before_compact") assertExclusiveCompaction(this.extensions);
+		const compaction = event.type === "session_before_compact";
 		const ctx = this.createContext();
 		let result: SessionBeforeEventResult | undefined;
 
-		for (const ext of this.extensions) {
+		for (const ext of compaction ? orderCompactionExtensions(this.extensions) : this.extensions) {
 			const handlers = ext.handlers.get(event.type);
 			if (!handlers || handlers.length === 0) continue;
 
 			for (const handler of handlers) {
 				try {
 					const handlerResult = await handler(event, ctx);
+					if (compaction) assertCompactionResult(ext, handlerResult);
 
 					if (this.isSessionBeforeEvent(event) && handlerResult) {
 						result = handlerResult as SessionBeforeEventResult;

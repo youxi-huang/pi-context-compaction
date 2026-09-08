@@ -6,6 +6,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+No unreleased changes.
+
+## [v0.1.1] — 2026-09-08
+
+Maintenance release on the same Pi `v0.85.1` baseline. It carries the project rename, the reviewed security fixes, CI and dependency maintenance, and a compaction-handler compatibility fix. Still an experimental source distribution; see the validation record for what remains unproven.
+
 ### Changed
 
 - Extensions that only observe `session_before_compact` and return `undefined` no longer trigger `CONTEXT_COMPACTOR_CONFLICT`. They run before the resident compactor and its writer call. A non-resident handler that returns a compaction or a cancellation still fails the compaction with the same error, now raised at the point the result is returned rather than at startup, so a competing compactor is rejected before the writer spends a request. Previously any handler registered for the event was treated as a competing compactor, which blocked startup when unrelated extensions used the event as a signal.
@@ -24,7 +30,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - Added `node scripts/security-regression-check.mjs` to the existing CI workflow. Its 429 focused tests cover affected host behavior and existing OAuth HTML escaping and message-frame index validation, alongside the separate 18 context-compaction regressions.
 - Added weekly Dependabot version checks for npm and GitHub Actions. npm minor and patch updates are grouped by production or development dependency, with a seven-day version cooldown and a limit of three version PRs. Pi host packages remain tied to the reviewed source baseline. Updates require review and are not automatically merged.
 
-Implementation: [87b5d68](https://github.com/youxi-huang/pi-context-compaction/commit/87b5d688d113acafd522676aeaeb4453ae5c23a2). The offline build and focused checks passed in [Linux CI](https://github.com/youxi-huang/pi-context-compaction/actions/runs/34193631511). See the [validation record](docs/context-memory/validation.md) for coverage and limits.
+Implementation: [87b5d68](https://github.com/youxi-huang/pi-context-compaction/commit/87b5d688d113acafd522676aeaeb4453ae5c23a2) and [PR #6](https://github.com/youxi-huang/pi-context-compaction/pull/6). The offline build and focused checks passed in [Linux CI](https://github.com/youxi-huang/pi-context-compaction/actions/runs/34193631511) and on the merged observer fix. See the [validation record](docs/context-memory/validation.md) for coverage and limits.
 
 ## [v0.1.0-alpha.1] — 2026-09-07
 
@@ -48,5 +54,7 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.0-alpha.1...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.1...main
+[v0.1.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.1
+[v0.1.1 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.0-alpha.1...v0.1.1
 [v0.1.0-alpha.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.0-alpha.1

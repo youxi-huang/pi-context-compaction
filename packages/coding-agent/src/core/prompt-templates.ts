@@ -69,36 +69,42 @@ export function parseCommandArgs(argsString: string): string[] {
  */
 export function substituteArgs(content: string, args: string[]): string {
 	const allArgs = args.join(" ");
+	const placeholders = /\$\{(\d+|ARGUMENTS|@):-|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g;
+	let result = "";
+	let copiedUntil = 0;
+	let noClosingBrace = false;
 
-	return content.replace(
-		/\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
-		(_match, defaultTarget, defaultValue, sliceStart, sliceLength, simple) => {
-			if (defaultTarget) {
-				const value =
-					defaultTarget === "@" || defaultTarget === "ARGUMENTS" ? allArgs : args[parseInt(defaultTarget, 10) - 1];
-				return value ? value : defaultValue;
+	for (const match of content.matchAll(placeholders)) {
+		// A default value is literal text, including any placeholders inside it.
+		if (match.index < copiedUntil) continue;
+		const [, defaultTarget, sliceStart, sliceLength, simple] = match;
+		let end = match.index + match[0].length;
+		let replacement: string;
+		if (defaultTarget) {
+			if (noClosingBrace) continue;
+			const closingBrace = content.indexOf("}", end);
+			if (closingBrace < 0) {
+				// Do not rescan an unterminated suffix for every subsequent default placeholder.
+				noClosingBrace = true;
+				continue;
 			}
-
-			if (sliceStart) {
-				let start = parseInt(sliceStart, 10) - 1; // Convert to 0-indexed (user provides 1-indexed)
-				// Treat 0 as 1 (bash convention: args start at 1)
-				if (start < 0) start = 0;
-
-				if (sliceLength) {
-					const length = parseInt(sliceLength, 10);
-					return args.slice(start, start + length).join(" ");
-				}
-				return args.slice(start).join(" ");
-			}
-
-			if (simple === "ARGUMENTS" || simple === "@") {
-				return allArgs;
-			}
-
-			const index = parseInt(simple, 10) - 1;
-			return args[index] ?? "";
-		},
-	);
+			const value =
+				defaultTarget === "@" || defaultTarget === "ARGUMENTS" ? allArgs : args[parseInt(defaultTarget, 10) - 1];
+			replacement = value || content.slice(end, closingBrace);
+			end = closingBrace + 1;
+		} else if (sliceStart) {
+			// Convert to 0-indexed, treating 0 as 1 as before.
+			const start = Math.max(0, parseInt(sliceStart, 10) - 1);
+			replacement = sliceLength
+				? args.slice(start, start + parseInt(sliceLength, 10)).join(" ")
+				: args.slice(start).join(" ");
+		} else {
+			replacement = simple === "ARGUMENTS" || simple === "@" ? allArgs : (args[parseInt(simple, 10) - 1] ?? "");
+		}
+		result += content.slice(copiedUntil, match.index) + replacement;
+		copiedUntil = end;
+	}
+	return result + content.slice(copiedUntil);
 }
 
 function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptTemplate | null {

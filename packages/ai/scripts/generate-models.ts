@@ -23,6 +23,7 @@ import type {
 	OpenAICompletionsCompat,
 	OpenAIResponsesCompat,
 } from "../src/types.ts";
+import { isUrlFromDomain } from "../src/utils/url-domain.ts";
 import {
 	assertExactModelIds,
 	createModelDataManifest,
@@ -639,38 +640,40 @@ function detectOpenAICompletionsCompat(model: Model<"openai-completions">): Open
 	const isZai =
 		provider === "zai" ||
 		provider === "zai-coding-cn" ||
-		baseUrl.includes("api.z.ai") ||
-		baseUrl.includes("open.bigmodel.cn");
+		isUrlFromDomain(baseUrl, "api.z.ai") ||
+		isUrlFromDomain(baseUrl, "open.bigmodel.cn");
 	const isTogether =
-		provider === "together" || baseUrl.includes("api.together.ai") || baseUrl.includes("api.together.xyz");
-	const isMoonshot = provider === "moonshotai" || provider === "moonshotai-cn" || baseUrl.includes("api.moonshot.");
-	const isOpenRouter = provider === "openrouter" || baseUrl.includes("openrouter.ai");
-	const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || baseUrl.includes("api.cloudflare.com");
-	const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || baseUrl.includes("gateway.ai.cloudflare.com");
-	const isNvidia = provider === "nvidia" || baseUrl.includes("integrate.api.nvidia.com");
-	const isAntLing = provider === "ant-ling" || baseUrl.includes("api.ant-ling.com");
+		provider === "together" || isUrlFromDomain(baseUrl, "api.together.ai") || isUrlFromDomain(baseUrl, "api.together.xyz");
+	const isMoonshot =
+		provider === "moonshotai" || provider === "moonshotai-cn" ||
+		isUrlFromDomain(baseUrl, "api.moonshot.ai") || isUrlFromDomain(baseUrl, "api.moonshot.cn");
+	const isOpenRouter = provider === "openrouter" || isUrlFromDomain(baseUrl, "openrouter.ai");
+	const isCloudflareWorkersAI = provider === "cloudflare-workers-ai" || isUrlFromDomain(baseUrl, "api.cloudflare.com");
+	const isCloudflareAiGateway = provider === "cloudflare-ai-gateway" || isUrlFromDomain(baseUrl, "gateway.ai.cloudflare.com");
+	const isNvidia = provider === "nvidia" || isUrlFromDomain(baseUrl, "integrate.api.nvidia.com");
+	const isAntLing = provider === "ant-ling" || isUrlFromDomain(baseUrl, "api.ant-ling.com");
 	const isTogetherReasoningOnly = isTogether && TOGETHER_REASONING_ONLY_MODELS.has(model.id);
-	const isDeepSeek = provider === "deepseek" || baseUrl.toLowerCase().includes("deepseek.com");
+	const isDeepSeek = provider === "deepseek" || isUrlFromDomain(baseUrl, "deepseek.com");
 
 	const isNonStandard =
 		isNvidia ||
 		provider === "cerebras" ||
-		baseUrl.includes("cerebras.ai") ||
+		isUrlFromDomain(baseUrl, "cerebras.ai") ||
 		provider === "xai" ||
-		baseUrl.includes("api.x.ai") ||
+		isUrlFromDomain(baseUrl, "api.x.ai") ||
 		isTogether ||
-		baseUrl.includes("chutes.ai") ||
+		isUrlFromDomain(baseUrl, "chutes.ai") ||
 		isDeepSeek ||
 		isZai ||
 		isMoonshot ||
 		provider === "opencode" ||
-		baseUrl.includes("opencode.ai") ||
+		isUrlFromDomain(baseUrl, "opencode.ai") ||
 		isCloudflareWorkersAI ||
 		isCloudflareAiGateway ||
 		isAntLing;
 
 	const useMaxTokens =
-		baseUrl.includes("chutes.ai") ||
+		isUrlFromDomain(baseUrl, "chutes.ai") ||
 		isDeepSeek ||
 		isMoonshot ||
 		isCloudflareAiGateway ||
@@ -679,7 +682,7 @@ function detectOpenAICompletionsCompat(model: Model<"openai-completions">): Open
 		isAntLing ||
 		isZai;
 
-	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
+	const isGrok = provider === "xai" || isUrlFromDomain(baseUrl, "api.x.ai");
 	const isOpenRouterDeveloperRoleModel =
 		isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
 	const cacheControlFormat =

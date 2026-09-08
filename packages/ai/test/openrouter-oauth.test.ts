@@ -164,6 +164,38 @@ describe.sequential("OpenRouter OAuth", () => {
 		expect((await firstCallback)?.status).toBe(200);
 	});
 
+	// CodeQL #29: exercise both untrusted error sources through the real loopback response.
+	it.each(["callback", "token exchange"])("escapes HTML in %s errors", async (source) => {
+		const payload = '<img src=x onerror="alert(1)"> & <script>alert(2)</script>';
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ error: { message: payload } }, 403)),
+		);
+		let callbackResponse: Promise<Response> | undefined;
+		const login = openRouterOAuth.login({
+			signal: neverAbortedSignal,
+			prompt: () => new Promise<string>(() => {}),
+			notify: (event) => {
+				if (event.type !== "auth_url") return;
+				const callbackUrl = new URL(new URL(event.url).searchParams.get("callback_url") ?? "");
+				if (source === "callback") {
+					callbackUrl.searchParams.set("error", "access_denied");
+					callbackUrl.searchParams.set("error_description", payload);
+				} else {
+					callbackUrl.searchParams.set("code", "test-code");
+				}
+				callbackResponse = nativeFetch(callbackUrl);
+			},
+		});
+		await expect(login).rejects.toThrow(payload);
+		const response = await callbackResponse;
+		expect(response?.status).toBe(source === "callback" ? 400 : 502);
+		const html = await response?.text();
+		expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+		expect(html).toContain("&amp; &lt;script&gt;alert(2)&lt;/script&gt;");
+		expect(html).not.toContain(payload);
+	});
+
 	it("rejects a successful response that does not contain a key", async () => {
 		vi.stubGlobal(
 			"fetch",

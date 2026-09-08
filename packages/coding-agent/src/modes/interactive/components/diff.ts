@@ -6,9 +6,12 @@ import { theme } from "../theme/theme.ts";
  * Format: "+123 content" or "-123 content" or " 123 content" or "     ..."
  */
 function parseDiffLine(line: string): { prefix: string; lineNum: string; content: string } | null {
-	const match = line.match(/^([+-\s])(\s*\d*)\s(.*)$/);
+	// Parse the header separately so a malformed body cannot backtrack through its whitespace.
+	const match = line.match(/^([+-\s])(\s*\d*)\s/);
 	if (!match) return null;
-	return { prefix: match[1], lineNum: match[2], content: match[3] };
+	const content = line.slice(match[0].length).match(/^(.*)$/);
+	if (!content) return null;
+	return { prefix: match[1], lineNum: match[2], content: content[1] };
 }
 
 /**

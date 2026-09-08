@@ -1,4 +1,4 @@
-name: Context memory
+name: Context compaction
 
 on:
   push:
@@ -30,3 +30,4 @@ jobs:
       - run: git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts
       - run: npm run build:offline
       - run: node scripts/context-memory-check.mjs
+      - run: node scripts/security-regression-check.mjs

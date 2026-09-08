@@ -256,11 +256,7 @@ async function loadSkillFromFile(
 	context: Context,
 ): Promise<{ skill: Skill | null; diagnostics: SkillDiagnostic[] }> {
 	const diagnostics: SkillDiagnostic[] = [];
-	const isDeclaredSkill =
-		filePath
-			.replace(/[\\/]+$/, "")
-			.split(/[\\/]/)
-			.pop() === "SKILL.md";
+	const isDeclaredSkill = trimTrailingSeparators(filePath).split(/[\\/]/).pop() === "SKILL.md";
 	const rawContent = await env.readTextFile(filePath, context);
 	if (!rawContent.ok) {
 		diagnostics.push({ type: "warning", code: "read_failed", message: rawContent.error.message, path: filePath });
@@ -379,16 +375,22 @@ async function resolveKind(
 	return target.value.kind === "file" || target.value.kind === "directory" ? target.value.kind : undefined;
 }
 
+function trimTrailingSeparators(path: string): string {
+	let end = path.length;
+	while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+	return path.slice(0, end);
+}
+
 function dirnameEnvPath(path: string): string {
-	const normalized = path.replace(/[\\/]+$/, "");
+	const normalized = trimTrailingSeparators(path);
 	const separatorIndex = Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
 	if (separatorIndex === 2 && normalized[1] === ":") return normalized.slice(0, 3);
 	return separatorIndex <= 0 ? "/" : normalized.slice(0, separatorIndex);
 }
 
 function relativeEnvPath(root: string, path: string): string {
-	const normalizedRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
-	const normalizedPath = path.replace(/\\/g, "/").replace(/\/+$/, "");
+	const normalizedRoot = trimTrailingSeparators(root.replace(/\\/g, "/"));
+	const normalizedPath = trimTrailingSeparators(path.replace(/\\/g, "/"));
 	if (normalizedPath === normalizedRoot) return "";
 	return normalizedPath.startsWith(`${normalizedRoot}/`)
 		? normalizedPath.slice(normalizedRoot.length + 1)

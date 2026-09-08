@@ -1,10 +1,12 @@
-# Pi Context Memory
+# Pi Context Compaction
 
-Evidence-backed context notes and branch-scoped history retrieval for [Pi](https://github.com/earendil-works/pi).
+Context compaction for [Pi](https://github.com/earendil-works/pi), with source-linked notes, original-history retrieval and write safeguards.
 
 **Experimental source distribution: `v0.1.0-alpha.1`, based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
 
 At compaction, a fixed writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
+
+The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store.
 
 ## What it provides
 
@@ -22,8 +24,8 @@ The [architecture](docs/context-memory/architecture.md) explains the host bounda
 Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent sessions currently support macOS and Linux.
 
 ```sh
-git clone https://github.com/youxi-huang/pi-context-memory.git
-cd pi-context-memory
+git clone https://github.com/youxi-huang/pi-context-compaction.git
+cd pi-context-compaction
 git checkout v0.1.0-alpha.1
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
@@ -56,7 +58,7 @@ Start with a fresh session:
 node packages/coding-agent/dist/bundle/cli.js --no-extensions
 ```
 
-`--no-extensions` disables ordinary extension discovery. Context memory is built into this host. Add trusted provider extensions explicitly with `-e` if your model needs one. The SDK is available from `packages/coding-agent/dist/index.js` after building.
+`--no-extensions` disables ordinary extension discovery. The compaction extension is built into this host. Add trusted provider extensions explicitly with `-e` if your model needs one. The SDK is available from `packages/coding-agent/dist/index.js` after building.
 
 Use `/compaction-status` to inspect the build, writer, checkpoint and request state. Set `enabled` to `false` and restart Pi to use default Pi compaction. `/reload` does not change this setting. Storage protections and the opaque-checkpoint migration guard remain active in fallback mode.
 
@@ -68,7 +70,9 @@ Notes, tool results and history can contain sensitive information. They remain i
 
 Opaque checkpoints from older provider-specific compactors require a reviewed migration copy before resuming. Run `node scripts/context-memory-migrate.mjs --help` for the workflow. It cannot recover missing evidence or decrypt remote checkpoints.
 
-This release contains the host and memory modules. Locally adapted BTW, subagent and provider packages are not bundled. Integrators can use the exported `contextMemory` API; unmodified third-party packages should not be assumed compatible. Windows persistence, long-running semantic quality and repeated incremental-note comparisons are not validated.
+This release contains the host and compaction modules. Locally adapted BTW, subagent and provider packages are not bundled. Integrators can use the exported `contextMemory` API; unmodified third-party packages should not be assumed compatible. Windows persistence, long-running semantic quality and repeated incremental-note comparisons are not validated.
+
+The project was initially named Pi Context Memory. Existing `context-memory` source paths, the `pi-context-memory.json` configuration file, the `contextMemory` API and stored checkpoint identifiers retain their original names. The project rename does not require configuration or session migration.
 
 ## License and acknowledgments
 

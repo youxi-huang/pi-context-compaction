@@ -102,6 +102,8 @@ function hasUnsafeGitInstallPart(value: string, allowSlash: boolean): boolean {
 }
 
 function buildGitSource(args: { repo: string; host: string; path: string; ref?: string }): GitSource | null {
+	// Refs are command operands, never git options (including on the first checkout).
+	if (args.ref?.startsWith("-") || args.ref?.includes("\0")) return null;
 	if (args.path.startsWith("/")) {
 		return null;
 	}

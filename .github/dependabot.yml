@@ -1,0 +1,47 @@
+version: 2
+
+updates:
+  - package-ecosystem: npm
+    directories:
+      - /
+      - /packages/coding-agent/examples/extensions/custom-provider-anthropic
+      - /packages/coding-agent/examples/extensions/gondolin
+      - /packages/coding-agent/examples/extensions/sandbox
+      - /packages/coding-agent/examples/extensions/with-deps
+      - /packages/agent/docs/mobile-handoff/02-plugins/02-sandbox
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 3
+    versioning-strategy: increase
+    cooldown:
+      default-days: 7
+    ignore:
+      # Host packages are upgraded together with the reviewed Pi source baseline.
+      - dependency-name: '@earendil-works/pi-*'
+      - dependency-name: '@earendil-works/chord'
+    groups:
+      runtime-minor-and-patch:
+        dependency-type: production
+        update-types: [minor, patch]
+      development-minor-and-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: '09:00'
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns: ['*']
+
+# Security PR grouping is enabled in repository settings and has no cooldown.
+# Generated coding-agent install locks must be refreshed with their parent manifests.
+# All PRs require review; this configuration does not enable automatic merging.

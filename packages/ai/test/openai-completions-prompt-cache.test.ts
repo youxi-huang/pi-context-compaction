@@ -14,6 +14,7 @@ interface CapturedCompletionsPayload {
 	prompt_cache_key?: string;
 	prompt_cache_retention?: "24h" | "in-memory" | null;
 	session_id?: string;
+	store?: boolean;
 }
 
 const mockState = vi.hoisted(() => ({
@@ -149,6 +150,45 @@ describe("openai-completions prompt caching", () => {
 
 		expect(payload?.prompt_cache_key).toBeUndefined();
 		expect(payload?.prompt_cache_retention).toBeUndefined();
+	});
+
+	it.each([
+		"https://api.openai.com.example.org/v1",
+		"https://example.org/api.openai.com/v1",
+		"https://api.openai.com@example.org/v1",
+	])("does not send an OpenAI cache key to a lookalike URL: %s", async (baseUrl) => {
+		const { payload } = await captureRequest(
+			{ sessionId: "session-private", cacheRetention: "short" },
+			createModel({ baseUrl }),
+		);
+		expect(payload?.prompt_cache_key).toBeUndefined();
+	});
+
+	it.each([
+		"api.cloudflare.com",
+		"gateway.ai.cloudflare.com",
+		"integrate.api.nvidia.com",
+		"api.ant-ling.com",
+		"api.deepseek.com",
+	])("detects compatibility from the hostname, not a path containing %s", async (hostname) => {
+		const genuine = await captureRequest(
+			undefined,
+			createModel({ provider: "custom", baseUrl: `https://${hostname}/v1` }),
+		);
+		expect(genuine.payload?.store).toBeUndefined();
+		const lookalike = await captureRequest(
+			undefined,
+			createModel({ provider: "custom", baseUrl: `https://example.org/${hostname}/v1` }),
+		);
+		expect(lookalike.payload?.store).toBe(false);
+	});
+
+	it("preserves an explicit provider's compatibility through a custom proxy", async () => {
+		const { payload } = await captureRequest(
+			undefined,
+			createModel({ provider: "deepseek", baseUrl: "https://proxy.example.org/v1" }),
+		);
+		expect(payload?.store).toBeUndefined();
 	});
 
 	it("uses PI_CACHE_RETENTION for direct OpenAI requests", async () => {

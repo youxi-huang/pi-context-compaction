@@ -613,7 +613,11 @@ function replaceCharacters(value: string, replacements: Readonly<Record<string, 
 function formatScript(value: string, kind: "sub" | "sup"): string {
 	value = value.trim();
 	const replacements = kind === "sub" ? SUBSCRIPTS : SUPERSCRIPTS;
-	const unicode = replaceCharacters(value.replace(/\s*([=+-])\s*/g, "$1"), replacements);
+	const compact = value
+		.split(/([=+-])/)
+		.map((part) => part.trim())
+		.join("");
+	const unicode = replaceCharacters(compact, replacements);
 	if (unicode !== undefined) {
 		return unicode;
 	}

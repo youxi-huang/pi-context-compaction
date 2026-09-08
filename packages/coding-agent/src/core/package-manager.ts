@@ -1729,7 +1729,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private parseNpmSpec(spec: string): { name: string; version?: string } {
-		const match = spec.match(/^(@?[^@]+(?:\/[^@]+)?)(?:@(.+))?$/);
+		const match = spec.match(/^(@?[^@]+)(?:@(.+))?$/);
 		if (!match) {
 			return { name: spec };
 		}
@@ -1832,7 +1832,7 @@ export class DefaultPackageManager implements PackageManager {
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (existsSync(targetDir)) {
 			if (source.ref) {
-				await this.ensureGitRef(targetDir, ["fetch", "origin", source.ref], "FETCH_HEAD");
+				await this.ensureGitRef(targetDir, ["fetch", "--", "origin", source.ref], "FETCH_HEAD");
 				return;
 			}
 			const target = await this.getLocalGitUpdateTarget(targetDir);
@@ -1847,7 +1847,7 @@ export class DefaultPackageManager implements PackageManager {
 		rmSync(this.getGitUpdateMarkerPath(targetDir), { force: true });
 
 		try {
-			await this.runCommand("git", ["clone", source.repo, targetDir]);
+			await this.runCommand("git", ["clone", "--", source.repo, targetDir]);
 			if (source.ref) {
 				await this.runCommand("git", ["checkout", source.ref], { cwd: targetDir });
 			}
@@ -1870,7 +1870,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		if (source.ref) {
-			await this.ensureGitRef(targetDir, ["fetch", "origin", source.ref], "FETCH_HEAD");
+			await this.ensureGitRef(targetDir, ["fetch", "--", "origin", source.ref], "FETCH_HEAD");
 			return;
 		}
 

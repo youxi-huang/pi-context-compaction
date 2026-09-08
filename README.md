@@ -2,7 +2,7 @@
 
 Context compaction for [Pi](https://github.com/earendil-works/pi), with source-linked notes, original-history retrieval and write safeguards.
 
-**Latest tagged release: `v0.1.0-alpha.1`, an experimental source distribution based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
+**Latest tagged release: `v0.1.1`, an experimental source distribution based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
 
 At compaction, a fixed writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
 
@@ -28,7 +28,7 @@ Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent session
 ```sh
 git clone https://github.com/youxi-huang/pi-context-compaction.git
 cd pi-context-compaction
-git checkout v0.1.0-alpha.1
+git checkout v0.1.1
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
 node scripts/stamp-context-memory.mjs

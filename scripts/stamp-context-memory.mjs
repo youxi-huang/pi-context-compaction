@@ -21,7 +21,7 @@ const files = [
 const hash = createHash("sha256").update(upstream).update("\n");
 for (const file of files) hash.update(file).update("\0").update(readFileSync(resolve(root, file))).update("\0");
 const sourceHash = hash.digest("hex");
-const build = `0.85.1-context-memory.0.1.0-alpha.1+src.${sourceHash.slice(0, 16)}`;
+const build = `0.85.1-context-memory.0.1.1+src.${sourceHash.slice(0, 16)}`;
 writeFileSync(resolve(root, `${extension}/build.ts`), `/** Fingerprint of the published runtime source. */\nexport const CONTEXT_MEMORY_BUILD = ${JSON.stringify(build)};\n`);
 mkdirSync(resolve(root, ".artifacts"), { recursive: true });
 writeFileSync(resolve(root, ".artifacts/context-memory-build.json"), `${JSON.stringify({ build, upstream, sourceHash, files }, null, 2)}\n`);

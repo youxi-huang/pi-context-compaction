@@ -6,7 +6,9 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
-No unreleased changes.
+### Maintenance
+
+- Disabled Dependabot version-update pull requests for npm manifests. The three open version bumps could not pass `verify`: a lockfile out of sync in an example directory, a Biome release that changes the configuration schema and formatting of upstream files, and a `highlight.js` major release that removes the import path the host uses. Each would also widen the diff against the Pi `v0.85.1` baseline, which this project reduces only through reviewed host ports. Dependabot security updates and grouped GitHub Actions version updates remain enabled.
 
 ## [v0.1.1] — 2026-09-08
 

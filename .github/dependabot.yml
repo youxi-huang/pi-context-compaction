@@ -1,5 +1,8 @@
 version: 2
 
+# npm manifests are inherited from the reviewed Pi source baseline and move only with a host port.
+# Version-update pull requests for them are disabled; security updates stay enabled in repository
+# settings and are reviewed individually. GitHub Actions pins keep weekly grouped version updates.
 updates:
   - package-ecosystem: npm
     directories:
@@ -14,21 +17,12 @@ updates:
       day: monday
       time: '09:00'
       timezone: America/Los_Angeles
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0
     versioning-strategy: increase
-    cooldown:
-      default-days: 7
     ignore:
       # Host packages are upgraded together with the reviewed Pi source baseline.
       - dependency-name: '@earendil-works/pi-*'
       - dependency-name: '@earendil-works/chord'
-    groups:
-      runtime-minor-and-patch:
-        dependency-type: production
-        update-types: [minor, patch]
-      development-minor-and-patch:
-        dependency-type: development
-        update-types: [minor, patch]
 
   - package-ecosystem: github-actions
     directory: /

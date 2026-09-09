@@ -23,6 +23,24 @@ Two earlier attempts stopped: one during OAuth response decoding before inferenc
 
 ## Focused regression coverage
 
+### v0.2.1 reliability checks, 2026-09-09
+
+The focused check passes 43 tests, including nine added cases for repeated compaction within one open tool turn, reopening, actual writer output budgets, failed and cancelled call accounting, and backward-compatible report totals. The relevant host context-assembly and compaction tests separately pass 40 tests, with two provider-dependent tests skipped. The security and compatibility script passes all 429 tests.
+
+An isolated compiled SDK run used `openai-codex/gpt-6-astra` at medium effort for both task work and the session writer. Four manual checkpoints committed. One additional real writer response was deliberately replaced with invalid JSON: no checkpoint or session-file change was published, returned usage was logged, and an explicit retry succeeded. The open tool-turn records were seeded fixtures with actual local read results, not autonomous model-generated tool turns. Initial and resumed file edits and subsequent history retrieval were performed by the real model. Reopening recovered the latest ruling and completed the correct file update while preserving an unrelated file.
+
+A separate probe forked from the fourth checkpoint, before the resumed task's answer could expose the values. It recovered the first and current approved ports, first and current timeouts, the originally rejected port and error code, both original user-entry IDs, and a verbatim still-valid restriction from the first user ruling. All four archived checkpoints and `priorCheckpoints` remained available. The probe's first local assertion incorrectly coerced a text-block array to a string; rechecking the same saved response with the runtime text extractor passed, without another model call. This checks recovery of one early constraint, not retention of arbitrary constraints over long sessions.
+
+The five writer calls used 19,262 provider-reported tokens in total; the deliberately invalidated response accounted for 4,214. The four successful compactions took approximately 19.4–24.4 seconds each. These short, manually compacted fixtures test correctness and accounting, not token savings, automatic-threshold performance or near-window-limit behavior. Capacity boundaries and transport failures were tested synthetically. No native-compaction quality comparison was run.
+
+A subsequent natural task set `compactAt` to 5% in an isolated configuration (52,500 tokens for the selected Astra model). The first run stopped at `CONTEXT_PAYLOAD_TOO_LARGE` before any writer call. It exposed two remaining defects: the trigger was also used as the final payload allowance, and automatic handover pinned the entire unfinished user turn. The fixes separate the actual model allowance from the trigger and let the default automatic handover cover completed tool batches through Pi's existing next-response hook.
+
+On the corrected build, one user prompt caused the model to read nine synthetic deployment ledgers completely (18 paginated reads, 1,215 records), cross two automatic in-task checkpoints, retrieve original history and write the correct audit result. There were no manually triggered compactions or seeded assistant/tool messages. The model distinguished the initial and current approved values, the original bind failure and a later superseding decision, and obeyed the initial write restriction. Both checkpoints were followed by further tool work. Compaction events recorded approximately 55.2k → 2.0k and 58.1k → 2.7k estimated tokens; pauses were 54.4 and 72.3 seconds. This establishes functional continuation for this task, not unobtrusive latency or multi-day reliability. The 5% setting was not applied to the maintainer's normal configuration. Adaptive hard/soft scheduling remains future work.
+
+Release dependency review found one moderate development-server advisory affecting three Vitest-related packages (`GHSA-82fw-gwwq-j7x9`). The production dependency audit reported no findings. This validation uses Node tests rather than an exposed mocker development server; updating the inherited test dependencies is separate maintenance. Existing reviewed CodeQL alerts are not claimed to be resolved by this release.
+
+### Covered contracts
+
 - First flush, append rollback, failed recovery and deferred forks.
 - Concurrent writers and recovery of a crashed process lease.
 - Child-scoped grants, tampered references, cross-process reads and revocation.
@@ -36,9 +54,9 @@ Run `node scripts/context-memory-check.mjs` after building. It combines focused 
 
 ## Host security regressions
 
-Run `node scripts/security-regression-check.mjs` for the host changes reviewed on 2026-09-07. The same command is included in CI. It runs 111 focused tests covering provider URL classification and cache parameters, escaped OAuth errors, message-frame index validation, Git operand boundaries, package sources, prompt arguments, skill paths and LaTeX rendering. Pathological text inputs run in a child process with a timeout so a regular-expression regression cannot hang the test process indefinitely.
+Run `node scripts/security-regression-check.mjs` for the host changes reviewed on 2026-09-07. The same command is included in CI. It runs 429 tests across four groups (77 AI, 235 coding-agent, 6 agent and 111 TUI), covering provider URL classification and cache parameters, escaped OAuth errors, message-frame index validation, Git operand boundaries, package sources, prompt arguments, skill paths and LaTeX rendering. Pathological text inputs run in a child process with a timeout so a regular-expression regression cannot hang the test process indefinitely.
 
-The checks use synthetic input and mocked providers; OAuth callback checks use a local loopback server. They do not make model requests. The 34 context-memory regressions remain a separate check. Passing these checks does not establish that every scanner alert is exploitable or resolved; remote CodeQL and dependency results must be checked on the pushed commit.
+The checks use synthetic input and mocked providers; OAuth callback checks use a local loopback server. They do not make model requests. The 43 context-memory regressions remain a separate check. Passing these checks does not establish that every scanner alert is exploitable or resolved; remote CodeQL and dependency results must be checked on the pushed commit.
 
 ## Practical limits
 

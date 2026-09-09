@@ -30,6 +30,7 @@ Two earlier attempts stopped: one during OAuth response decoding before inferenc
 - Resident filtering/reload, restart-latched settings, a passive `session_before_compact` observer and a second compactor whose result is rejected before the writer runs.
 - Two checkpoints and reopening, failed compaction and request blocking.
 - Cancelled/stale candidates, source changes and metadata-only updates.
+- Event log: committed and failed attempts settled once with error classes, guards counted once per failure, history calls logged without content, per-session quotas surviving restart, rotation and the disable flag.
 
 Run `node scripts/context-memory-check.mjs` after building. It combines focused tests with formatting, typing, dependency and entry-graph checks. CI repeats it on Linux with pinned model data. No provider credentials are needed.
 

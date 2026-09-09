@@ -10,8 +10,10 @@ import type {
 } from "../../core/resource-loader.ts";
 import type { SessionManager } from "../../core/session-manager.ts";
 import type { SettingsManager } from "../../core/settings-manager.ts";
+import { CONTEXT_MEMORY_BUILD } from "./build.ts";
 import { readMemoryConfig } from "./config.ts";
 import { MemoryController, type MemoryHost } from "./controller.ts";
+import { EventLog } from "./events.ts";
 import { memoryExtension } from "./extension.ts";
 import { CONTEXT_MEMORY_PATH } from "./identity.ts";
 import { assertResidentExtensions, registerResident } from "./policy.ts";
@@ -95,8 +97,10 @@ export async function withContextMemory(
 		model?: Model<Api>;
 	},
 ): Promise<ResourceLoader> {
+	const config = readMemoryConfig(options.agentDir);
 	const loader = new MemoryResourceLoader(base, options.cwd, {
-		config: readMemoryConfig(options.agentDir),
+		config,
+		events: new EventLog(options.agentDir, config.enabled && config.eventLog, CONTEXT_MEMORY_BUILD),
 		session: options.session,
 		runtime: options.runtime,
 		setCompaction: (compaction) => options.settings.applyOverrides({ compaction }),

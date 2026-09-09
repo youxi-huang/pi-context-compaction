@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- Local compaction event log. Each compaction attempt, request guard, `context_history` call and `context_note` candidate appends one JSON line to `context-memory-events.jsonl` in the agent directory, recording outcome, error class, durations, token counts, sizes and identifiers. No message text, note content, quotes, queries, file paths or free-form error text is written. Every session has a fixed quota per event kind and the file rotates once at 8 MB. `pi-context-memory.json` accepts `"eventLog": false` to disable it; `/compaction-status` shows the log path and the last write error. `node scripts/context-memory-report.mjs` summarizes the log. Compaction behavior is unchanged.
+
 ### Maintenance
 
 - Disabled Dependabot version-update pull requests for npm manifests. The three open version bumps could not pass `verify`: a lockfile out of sync in an example directory, a Biome release that changes the configuration schema and formatting of upstream files, and a `highlight.js` major release that removes the import path the host uses. Each would also widen the diff against the Pi `v0.85.1` baseline, which this project reduces only through reviewed host ports. Dependabot security updates and grouped GitHub Actions version updates remain enabled.

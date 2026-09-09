@@ -64,6 +64,14 @@ node packages/coding-agent/dist/bundle/cli.js --no-extensions
 
 Use `/compaction-status` to inspect the build, writer, checkpoint and request state. Set `enabled` to `false` and restart Pi to use default Pi compaction. `/reload` does not change this setting. Storage protections and the opaque-checkpoint migration guard remain active in fallback mode.
 
+### Event log
+
+Each compaction attempt, request guard, history retrieval and note candidate appends one line to `context-memory-events.jsonl` in the agent directory. Lines carry outcome, error class, durations, token counts, sizes and identifiers only. No message text, note content, quotes, queries, file paths or free-form error messages are written. Every session has a fixed quota per event kind, so a failure loop cannot grow the file, and the file rotates once at 8 MB. Set `"eventLog": false` in `pi-context-memory.json` to turn it off. Summarize the log with:
+
+```sh
+node scripts/context-memory-report.mjs
+```
+
 Other extensions may observe `session_before_compact` as long as their handlers return `undefined`; they run before the writer. An extension that returns a compaction or a cancellation from that event competes with this feature, and the compaction fails with `CONTEXT_COMPACTOR_CONFLICT` before the writer is called. Disable such compactors before use. This project does not overwrite a global Pi installation or migrate old sessions automatically.
 
 ## Data and compatibility

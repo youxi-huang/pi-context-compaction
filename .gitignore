@@ -58,3 +58,5 @@ plans/
 .pi/hf-sessions-backup/
 collect.sh
 packages/agent/docs/extensions/pi-server-artifact/index.md
+context-memory-events.jsonl
+context-memory-events.jsonl.1

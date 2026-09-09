@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model, Tool } from "@earendil-works/pi-ai";
 import type { CompactionResult } from "../../core/compaction/compaction.ts";
 import { estimateTokens } from "../../core/compaction/index.ts";
 import type {
@@ -8,11 +8,16 @@ import type {
 	SessionCompactEvent,
 	SessionCompactFailedEvent,
 } from "../../core/extensions/types.ts";
+import { convertToLlm } from "../../core/messages.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
-import type { ReadonlySessionManager, SessionEntry } from "../../core/session-manager.ts";
+import {
+	type ReadonlySessionManager,
+	type SessionEntry,
+	sessionEntryToContextMessages,
+} from "../../core/session-manager.ts";
 import type { CompactionSettings } from "../../core/settings-manager.ts";
 import { CONTEXT_MEMORY_BUILD } from "./build.ts";
-import { type MemoryConfig, memoryBudget, textTokens } from "./config.ts";
+import { type MemoryConfig, memoryBudget, SESSION_WRITER, textTokens } from "./config.ts";
 import {
 	type CompactionEvent,
 	type CompactionOutcome,
@@ -21,17 +26,18 @@ import {
 	PROJECT_CODES,
 	summarizeUsage,
 } from "./events.ts";
-import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "./identity.ts";
+import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "./identity.ts";
 import {
 	hashEntries,
 	latestMemory,
 	type MemoryCheckpoint,
+	type MemoryNote,
 	noteIncrements,
 	renderNote,
 	type SourceSnapshot,
 } from "./notes.ts";
 import { assertReadableBranch } from "./storage.ts";
-import { writeMemory } from "./writer.ts";
+import { modelName, resolveWriterModel, writeMemory } from "./writer.ts";
 
 export interface MemoryHost {
 	config: Readonly<MemoryConfig>;
@@ -47,6 +53,7 @@ interface PendingCompaction {
 	reason: CompactionEvent["reason"];
 	willRetry: boolean;
 	model?: string;
+	writerModel?: string;
 	errorCode?: string;
 	fields: Partial<
 		Pick<
@@ -93,6 +100,69 @@ function assertToolPairs(messages: readonly AgentMessage[]): void {
 	if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the current tool batch to finish");
 }
 
+/**
+ * Choose which original entries stay in model context after the checkpoint. With a zero budget nothing stays once
+ * the current turn is complete, so the next request looks like a fresh session that opens with the note; an
+ * unfinished or retried turn keeps its own user message and tool rounds. A positive budget keeps whole recent
+ * turns up to that estimate; a session smaller than the budget keeps only its latest turn.
+ */
+export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: number, willRetry: boolean): number {
+	// Never reach back past the previous checkpoint: its originals are already summarized.
+	let floor = 0;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		if (branch[index].type === "compaction") {
+			floor = index + 1;
+			break;
+		}
+	}
+	const turnStarts: number[] = [];
+	let last: SessionEntry | undefined;
+	for (let index = floor; index < branch.length; index++) {
+		const entry = branch[index];
+		if (entry.type !== "message") continue;
+		last = entry;
+		if (entry.message.role === "user") turnStarts.push(index);
+	}
+	if (!last || turnStarts.length === 0) throw new Error("CONTEXT_NO_CUT: no earlier evidence can be compacted");
+	const latestTurn = turnStarts[turnStarts.length - 1];
+	const finished =
+		last.type === "message" && last.message.role === "assistant" && last.message.stopReason !== "toolUse";
+	if (keepRecentTokens <= 0) return willRetry || !finished ? latestTurn : branch.length;
+	let accumulated = 0;
+	for (let i = branch.length - 1; i >= floor; i--) {
+		accumulated += sessionEntryToContextMessages(branch[i]).reduce(
+			(sum, message) => sum + estimateTokens(message),
+			0,
+		);
+		if (accumulated >= keepRecentTokens) return turnStarts.find((start) => start >= i) ?? latestTurn;
+	}
+	return latestTurn;
+}
+
+/** Replace any stale pending-notes message with the current unverified candidates, placed first. */
+function withPendingNotes(
+	messages: readonly AgentMessage[],
+	increments: readonly MemoryNote[],
+	noteTokens: number,
+): AgentMessage[] {
+	const result = messages.filter(
+		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
+	);
+	if (increments.length) {
+		const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map(renderNote).join("\n\n")}`;
+		// If candidates overflow, the raw recent messages remain available and the writer will reconcile them.
+		if (textTokens(content) <= noteTokens)
+			result.unshift({
+				role: "custom",
+				customType: "context-memory-pending",
+				content,
+				display: false,
+				timestamp: 0,
+			});
+	}
+	return result;
+}
+
 /** One controller survives extension reloads. No background summarizer or per-turn paid work. */
 export class MemoryController {
 	private readonly host: MemoryHost;
@@ -102,9 +172,24 @@ export class MemoryController {
 	private blockReported = false;
 	private pending?: PendingCompaction;
 	private lastModel?: Model<Api>;
+	private activeTools: () => Tool[] = () => [];
 
 	constructor(host: MemoryHost) {
 		this.host = host;
+	}
+
+	/** Tool definitions of the next provider request; the session writer repeats them to keep the prefix cache warm. */
+	bindTools(tools: () => Tool[]): void {
+		this.activeTools = tools;
+	}
+
+	/** The writer that would run now, or the error class explaining why it cannot. */
+	writerStatus(model: Model<Api> | undefined = this.lastModel): { writer?: string; error?: string } {
+		try {
+			return { writer: modelName(resolveWriterModel(this.host.config, this.host.runtime, model)) };
+		} catch (error) {
+			return { error: errorCode(error instanceof Error ? error.message : String(error)) };
+		}
 	}
 
 	status() {
@@ -114,11 +199,12 @@ export class MemoryController {
 			build: CONTEXT_MEMORY_BUILD,
 			enabled: this.host.config.enabled,
 			writerModel: this.host.config.writerModel,
+			...(this.lastModel || this.host.config.writerModel !== SESSION_WRITER ? this.writerStatus() : {}),
 			state: this.frozen ? "preparing" : this.failedBoundary ? "blocked" : "ready",
 			failure: this.failure,
 			checkpointId: checkpoint?.entry.id,
 			noteIncrements: noteIncrements(branch, checkpoint?.entry.id).length,
-			budget: this.lastModel ? memoryBudget(this.lastModel) : undefined,
+			budget: this.lastModel ? memoryBudget(this.lastModel, this.host.config) : undefined,
 			eventLog: this.host.events.file
 				? { enabled: true, file: this.host.events.file, lastError: this.host.events.lastError }
 				: { enabled: false },
@@ -161,7 +247,7 @@ export class MemoryController {
 			outcome,
 			...(outcome === "committed" ? {} : { errorCode: code ?? "UNKNOWN" }),
 			...(pending?.model === undefined ? {} : { model: pending.model }),
-			writerModel: this.host.config.writerModel,
+			writerModel: pending?.writerModel ?? this.writerStatus().writer ?? this.host.config.writerModel,
 			...(pending ? { compactMs: Math.round(performance.now() - pending.startedAt) } : {}),
 			...(checkpointId === undefined ? {} : { checkpointId }),
 		});
@@ -170,7 +256,7 @@ export class MemoryController {
 	refresh(model: Model<Api> | undefined = this.lastModel): void {
 		if (!this.host.config.enabled || !model) return;
 		this.lastModel = model;
-		const budget = memoryBudget(model);
+		const budget = memoryBudget(model, this.host.config);
 		this.host.setCompaction({
 			enabled: true,
 			reserveTokens: budget.capacity - budget.threshold,
@@ -212,22 +298,8 @@ export class MemoryController {
 		const checkpoint = latestMemory(branch);
 		const increments = noteIncrements(branch, checkpoint?.entry.id);
 		const model = ctx.model;
-		const budget = this.guarded(() => memoryBudget(model));
-		const result = messages.filter(
-			(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
-		);
-		if (increments.length) {
-			const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map(renderNote).join("\n\n")}`;
-			if (textTokens(content) <= budget.noteTokens)
-				result.unshift({
-					role: "custom",
-					customType: "context-memory-pending",
-					content,
-					display: false,
-					timestamp: 0,
-				});
-			// If candidates overflow, the raw recent messages remain available and the fixed writer will reconcile them.
-		}
+		const budget = this.guarded(() => memoryBudget(model, this.host.config));
+		const result = withPendingNotes(messages, increments, budget.noteTokens);
 		this.guarded(() => {
 			assertToolPairs(result);
 			const estimate =
@@ -240,13 +312,30 @@ export class MemoryController {
 		return result;
 	}
 
+	/**
+	 * The request Pi would send next, rebuilt the way `context()` shapes it. Other extensions' `context` handlers
+	 * are not replayed here, so an extension that rewrites the context also breaks the provider's prefix cache.
+	 */
+	private sessionPrefix(ctx: ExtensionContext, increments: readonly MemoryNote[], noteTokens: number) {
+		const messages = this.host.session.buildContextEntries().flatMap(sessionEntryToContextMessages);
+		// Overflow recovery removes the failed assistant message from agent state; mirror that here.
+		while (messages.length) {
+			const last = messages[messages.length - 1];
+			if (last.role === "assistant" && ["error", "aborted"].includes(last.stopReason)) messages.pop();
+			else break;
+		}
+		const converted = convertToLlm(withPendingNotes(messages, increments, noteTokens));
+		assertToolPairs(converted);
+		return { systemPrompt: ctx.getSystemPrompt(), messages: converted, tools: this.activeTools() };
+	}
+
 	beforeRequest(payload: unknown): void {
 		this.assertReady();
 		if (!this.host.config.enabled || !this.lastModel) return;
 		const model = this.lastModel;
 		this.guarded(() => {
 			// Final payload also contains tool definitions and provider-specific context additions.
-			if (textTokens(JSON.stringify(payload)) > memoryBudget(model).threshold)
+			if (textTokens(JSON.stringify(payload)) > memoryBudget(model, this.host.config).threshold)
 				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the reserved input allowance");
 		});
 	}
@@ -305,11 +394,14 @@ export class MemoryController {
 		try {
 			if (!ctx.model || !snapshot.leafId) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			event.signal.throwIfAborted();
-			const cut = branch.findIndex((entry) => entry.id === event.preparation.firstKeptEntryId);
+			const budget = memoryBudget(ctx.model, this.host.config);
+			const cut = chooseCut(branch, budget.recentTokens, event.willRetry);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT: no earlier evidence can be compacted");
 			const kept = branch.slice(cut).flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
 			assertToolPairs(kept);
-			const budget = memoryBudget(ctx.model);
+			const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			const session = this.host.config.writerModel === SESSION_WRITER;
+			pending.writerModel = this.writerStatus(ctx.model).writer;
 			const previous = latestMemory(branch);
 			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
 			const increments = noteIncrements(branch, previous?.entry.id);
@@ -324,6 +416,8 @@ export class MemoryController {
 			const written = await writeMemory({
 				config: this.host.config,
 				runtime: this.host.runtime,
+				sessionModel: ctx.model,
+				prefix: session ? this.sessionPrefix(ctx, increments, budget.noteTokens) : undefined,
 				previous: previous?.memory.note,
 				increments,
 				uncovered: branch.slice(after + 1),
@@ -332,6 +426,7 @@ export class MemoryController {
 				signal: event.signal,
 				customInstructions: event.customInstructions,
 			});
+			pending.writerModel = written.writerModel;
 			Object.assign(pending.fields, {
 				writerMs: Math.round(performance.now() - writerStarted),
 				chunkCount: written.chunkCount,
@@ -354,7 +449,7 @@ export class MemoryController {
 				throw new Error("CONTEXT_RECOVERY_TOO_LARGE: note and complete recent tool rounds cannot fit");
 			return {
 				summary,
-				firstKeptEntryId: event.preparation.firstKeptEntryId,
+				firstKeptEntryId,
 				tokensBefore: event.preparation.tokensBefore,
 				usage: written.usage,
 				details: {
@@ -364,7 +459,7 @@ export class MemoryController {
 					coveredThrough: snapshot.leafId,
 					sourceHash: hashEntries(branch),
 					snapshot,
-					writerModel: this.host.config.writerModel,
+					writerModel: written.writerModel,
 					chunkCount: written.chunkCount,
 					build: CONTEXT_MEMORY_BUILD,
 				},

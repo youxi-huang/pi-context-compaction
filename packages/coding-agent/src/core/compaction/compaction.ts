@@ -427,13 +427,10 @@ export function findCutPoint(
 
 		// Check if we've exceeded the budget
 		if (accumulatedTokens >= keepRecentTokens) {
-			// Find the closest valid cut point at or after this entry
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
+			// Find the closest valid cut point at or after this entry. When the budget is met inside the
+			// trailing entries of the last turn (a tool result, say), keep that whole turn rather than
+			// falling back to the first cut point, which would keep everything and compact nothing.
+			cutIndex = cutPoints.find((point) => point >= i) ?? cutPoints[cutPoints.length - 1];
 			break;
 		}
 	}

@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import type { FileEntry, SessionEntry } from "../../core/session-manager.ts";
-import { CONTEXT_MEMORY_KIND, hashEntries, isRecord } from "./identity.ts";
+import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, hashEntries, isRecord } from "./identity.ts";
 import { canonicalSessionPath, SessionLease } from "./lease.ts";
 
 function stamp(file: string): string | undefined {
@@ -50,7 +50,7 @@ export function assertCandidate(entry: SessionEntry, sessionId: string, branch: 
 		snapshot.sessionId !== sessionId ||
 		snapshot.leafId !== entry.parentId ||
 		snapshot.lastCheckpointId !== ([...branch].reverse().find((item) => item.type === "compaction")?.id ?? null) ||
-		!branch.some((item) => item.id === entry.firstKeptEntryId) ||
+		!(entry.firstKeptEntryId === CONTEXT_KEEP_NONE || branch.some((item) => item.id === entry.firstKeptEntryId)) ||
 		entry.details.sourceHash !== hashEntries(branch)
 	) {
 		throw new Error("CONTEXT_SOURCE_CHANGED: checkpoint no longer matches its source branch");

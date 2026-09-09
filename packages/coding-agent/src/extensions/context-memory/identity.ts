@@ -5,6 +5,8 @@ export const CONTEXT_MEMORY_PATH = "<builtin:context-memory>";
 export const CONTEXT_MEMORY_KIND = "pi-context-memory";
 export const CONTEXT_NOTE_TYPE = "context-memory-note";
 export const CONTEXT_MEMORY_VERSION = 1;
+/** `firstKeptEntryId` value meaning that no original message survives the compaction in model context. */
+export const CONTEXT_KEEP_NONE = "context-memory:keep-none";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

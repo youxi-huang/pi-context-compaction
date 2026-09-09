@@ -7,6 +7,8 @@ export interface MemoryConfig {
 	enabled: boolean;
 	writerModel: string;
 	writerEffort: ThinkingLevel;
+	/** Append local evaluation events to `context-memory-events.jsonl` in the agent directory. Off when `enabled` is false. */
+	eventLog: boolean;
 }
 
 const configs = new Map<string, Readonly<MemoryConfig>>();
@@ -23,15 +25,17 @@ export function readMemoryConfig(agentDir: string): Readonly<MemoryConfig> {
 		enabled: value.enabled ?? true,
 		writerModel: value.writerModel ?? "openai-codex/gpt-6-astra",
 		writerEffort: value.writerEffort ?? "medium",
+		eventLog: value.eventLog ?? true,
 	};
 	if (
 		typeof config.enabled !== "boolean" ||
+		typeof config.eventLog !== "boolean" ||
 		typeof config.writerModel !== "string" ||
 		!config.writerModel.includes("/") ||
 		typeof config.writerEffort !== "string" ||
 		!efforts.includes(config.writerEffort)
 	) {
-		throw new Error("CONTEXT_CONFIG: invalid enabled, writerModel or writerEffort");
+		throw new Error("CONTEXT_CONFIG: invalid enabled, eventLog, writerModel or writerEffort");
 	}
 	const result = Object.freeze(config as MemoryConfig);
 	configs.set(path, result);

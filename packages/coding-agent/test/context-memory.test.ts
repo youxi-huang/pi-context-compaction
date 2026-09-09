@@ -13,6 +13,15 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { loadEntriesFromFile, SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { MemoryController } from "../src/extensions/context-memory/controller.ts";
+import {
+	EVENT_CAPS,
+	EVENT_LOG_FILE,
+	EVENT_LOG_ROTATE_BYTES,
+	EventLog,
+	errorCode,
+	type MemoryEvent,
+} from "../src/extensions/context-memory/events.ts";
 import { saveHistoryGrant } from "../src/extensions/context-memory/grant-file.ts";
 import {
 	freezeHistory,
@@ -115,6 +124,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		sessionManager: SessionManager,
 		options: {
 			enabled?: boolean;
+			eventLog?: boolean;
 			extensions?: ExtensionFactory[];
 			filter?: boolean;
 			selectedModel?: Model<Api>;
@@ -125,6 +135,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			join(agentDir, "pi-context-memory.json"),
 			JSON.stringify({
 				enabled: options.enabled ?? true,
+				...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
 				writerModel: "memory-test/memory-writer",
 				writerEffort: "medium",
 			}),
@@ -173,6 +184,18 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		sessions.push(session);
 		await session.bindExtensions({});
 		return { session, runtime, settings, agentDir, requests: () => requests };
+	}
+	function events(agentDir: string): MemoryEvent[] {
+		const file = join(agentDir, EVENT_LOG_FILE);
+		if (!fs.existsSync(file)) return [];
+		return fs
+			.readFileSync(file, "utf8")
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => JSON.parse(line) as MemoryEvent);
+	}
+	function rawEvents(agentDir: string): string {
+		return fs.readFileSync(join(agentDir, EVENT_LOG_FILE), "utf8");
 	}
 
 	it("first flush includes the candidate; a failed append restores file length and never advances the tree", () => {
@@ -419,18 +442,156 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 				usage: { ...usage, input: (round + 1) * 5000, totalTokens: (round + 1) * 5000 + 8 },
 			});
 		}
-		const { session, runtime, requests } = await sdk(store, { selectedModel: { ...model, contextWindow: 30_000 } });
-		const writer = vi.spyOn(runtime, "completeSimple").mockRejectedValue(new Error("injected writer failure"));
+		const { session, runtime, requests, agentDir } = await sdk(store, {
+			selectedModel: { ...model, contextWindow: 30_000 },
+		});
+		const writer = vi
+			.spyOn(runtime, "completeSimple")
+			.mockRejectedValue(new Error("injected writer failure at /private/path/secret.txt"));
 		await session.prompt("Continue.");
 		expect(requests()).toBe(0);
 		expect(writer).toHaveBeenCalledTimes(1);
 		expect(store.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+		// Exactly one failed attempt is logged, by class only; the blocked request is counted once.
+		const logged = events(agentDir);
+		const compactions = logged.filter((event) => event.event === "compaction");
+		expect(compactions).toHaveLength(1);
+		expect(compactions[0]).toMatchObject({ outcome: "failed", reason: "threshold", errorCode: "UNKNOWN" });
+		expect(logged.filter((event) => event.event === "guard").map((event) => event.code)).toEqual(["CONTEXT_BLOCKED"]);
+		expect(rawEvents(agentDir)).not.toContain("secret");
+		expect(rawEvents(agentDir)).not.toContain("evidence");
+	});
+
+	it("committed compactions and history reads are logged as counts, sizes and durations without content", async () => {
+		const store = manager();
+		const original = seed(store);
+		const { session, runtime, settings, agentDir } = await sdk(store);
+		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+		await session.compact();
+		const history = session.agent.state.tools.find((tool) => tool.name === "context_history");
+		if (!history) throw new Error("context_history not active");
+		await history.execute("call-1", { operation: "search", query: "collision" });
+		await expect(history.execute("call-2", { operation: "read", entryId: "missing-entry" })).rejects.toThrow();
+		const logged = events(agentDir);
+		const compaction = logged.find((event) => event.event === "compaction");
+		if (compaction?.event !== "compaction") throw new Error("compaction event missing");
+		expect(compaction).toMatchObject({
+			outcome: "committed",
+			reason: "manual",
+			willRetry: false,
+			model: model.id,
+			writerModel: "memory-test/memory-writer",
+			chunkCount: 1,
+			usage: { input: usage.input, output: usage.output, totalTokens: usage.totalTokens, cost: 0 },
+			checkpointId: latestMemory(store.getBranch())?.entry.id,
+		});
+		expect(compaction.errorCode).toBeUndefined();
+		expect(compaction.compactMs).toBeGreaterThanOrEqual(compaction.writerMs ?? 0);
+		expect(compaction.tokensBefore).toBeGreaterThan(0);
+		expect(compaction.noteTokens).toBeGreaterThan(0);
+		expect(compaction.tokensAfter).toBeLessThanOrEqual(compaction.threshold ?? 0);
+		expect(compaction.sourceEntries).toBe(4);
+		expect(compaction.increments).toBe(0);
+		expect(logged.filter((event) => event.event === "history")).toEqual([
+			expect.objectContaining({ operation: "search", granted: false, entries: 1, cursor: false }),
+			expect.objectContaining({ operation: "read", granted: false, errorCode: "HISTORY_SCOPE_DENIED" }),
+		]);
+		const raw = rawEvents(agentDir);
+		for (const secret of ["4317", "9000", "collision", "missing-entry", original]) expect(raw).not.toContain(secret);
+		expect(fs.statSync(join(agentDir, EVENT_LOG_FILE)).mode & 0o077).toBe(0);
+	});
+
+	it("each session has an event quota per kind that survives restart, and the log rotates once", () => {
+		const agentDir = fs.mkdtempSync(join(root, "agent-"));
+		const file = join(agentDir, EVENT_LOG_FILE);
+		const first = new EventLog(agentDir, true, "test-build");
+		for (let i = 0; i < EVENT_CAPS.guard + 10; i++)
+			first.record({ event: "guard", session: "s1", code: "CONTEXT_BLOCKED" });
+		first.record({ event: "note", session: "s1", accepted: true });
+		first.record({ event: "guard", session: "s2", code: "CONTEXT_BLOCKED" });
+		const lines = () =>
+			fs
+				.readFileSync(file, "utf8")
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line));
+		const s1Guards = lines().filter((event) => event.session === "s1" && event.event === "guard");
+		expect(s1Guards).toHaveLength(EVENT_CAPS.guard);
+		expect(lines().filter((event) => event.event === "capped")).toEqual([
+			expect.objectContaining({ session: "s1", kind: "guard", limit: EVENT_CAPS.guard }),
+		]);
+		expect(lines().filter((event) => event.session === "s2")).toHaveLength(1);
+		// A new process reloads the quota from the file instead of starting from zero.
+		const second = new EventLog(agentDir, true, "test-build");
+		second.record({ event: "guard", session: "s1", code: "CONTEXT_BLOCKED" });
+		second.record({ event: "note", session: "s1", accepted: true });
+		expect(lines().filter((event) => event.session === "s1" && event.event === "guard")).toHaveLength(
+			EVENT_CAPS.guard,
+		);
+		expect(lines().filter((event) => event.session === "s1" && event.event === "note")).toHaveLength(2);
+		expect(second.lastError).toBeUndefined();
+		fs.writeFileSync(file, "x".repeat(EVENT_LOG_ROTATE_BYTES));
+		second.record({ event: "note", session: "s3", accepted: true });
+		expect(fs.statSync(`${file}.1`).size).toBe(EVENT_LOG_ROTATE_BYTES);
+		expect(lines()).toHaveLength(1);
+	});
+
+	it("the event log can be disabled and errors are reduced to bounded codes", async () => {
+		const store = manager(false);
+		seed(store);
+		const { session, agentDir } = await sdk(store, { eventLog: false });
+		await session.extensionRunner.emitContext(session.messages);
+		expect(fs.existsSync(join(agentDir, EVENT_LOG_FILE))).toBe(false);
+		expect(errorCode("Compaction failed: CONTEXT_SOURCE_CHANGED: discard the candidate")).toBe(
+			"CONTEXT_SOURCE_CHANGED",
+		);
+		expect(errorCode("HISTORY_SCOPE_DENIED")).toBe("HISTORY_SCOPE_DENIED");
+		expect(errorCode("This operation was aborted")).toBe("ABORTED");
+		expect(errorCode(undefined, true)).toBe("ABORTED");
+		expect(errorCode("request failed with status 429: rate limited")).toBe("HTTP_429");
+		expect(errorCode("connect ECONNRESET 10.0.0.1:443")).toBe("ECONNRESET");
+		expect(errorCode("Something at /Users/name/secret.txt went wrong")).toBe("UNKNOWN");
+		// Uppercase tokens echoed from untrusted text are not classes.
+		expect(errorCode("user said: HISTORY_OF_MY_MEDICAL_CONDITION")).toBe("UNKNOWN");
+		expect(errorCode("CONTEXT_SOMETHING_NEW: not a known class")).toBe("UNKNOWN");
+		expect(errorCode("EVERYTHING_BROKE")).toBe("UNKNOWN");
+	});
+
+	it("host refusals that never reached the resident are not counted as compaction failures", () => {
+		const store = manager(false);
+		seed(store);
+		const agentDir = fs.mkdtempSync(join(root, "agent-"));
+		const controller = new MemoryController({
+			config: { enabled: true, eventLog: true, writerModel: "memory-test/memory-writer", writerEffort: "medium" },
+			events: new EventLog(agentDir, true, "test-build"),
+			runtime: {} as never,
+			session: store,
+			setCompaction() {},
+		});
+		const failed = (errorMessage: string) =>
+			controller.compactionFailed({
+				type: "session_compact_failed",
+				reason: "manual",
+				errorMessage,
+				aborted: false,
+				willRetry: false,
+				fromExtension: false,
+			});
+		failed("Compaction failed: Nothing to compact (session too small)");
+		failed("Compaction failed: Already compacted");
+		failed("Compaction failed: CONTEXT_BLOCKED: earlier failure");
+		expect(events(agentDir)).toEqual([]);
+		failed("Compaction failed: CONTEXT_COMPACTOR_CONFLICT: another extension returned a compaction");
+		expect(events(agentDir).map((event) => (event.event === "compaction" ? event.errorCode : event.event))).toEqual([
+			"CONTEXT_COMPACTOR_CONFLICT",
+		]);
 	});
 
 	it("cancelled or stale candidates never publish", async () => {
 		const store = manager(false);
 		const id = seed(store);
-		const { session, runtime, settings } = await sdk(store);
+		const { session, runtime, settings, agentDir } = await sdk(store);
 		let finish!: (response: AssistantMessage) => void;
 		const writer = vi.spyOn(runtime, "completeSimple").mockImplementation(
 			() =>
@@ -451,6 +612,14 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		finish(reply(JSON.stringify(note(id))));
 		await expect(next).rejects.toThrow("CONTEXT_SOURCE_CHANGED");
 		expect(store.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+		expect(
+			events(agentDir)
+				.filter((event) => event.event === "compaction")
+				.map((event) => (event.event === "compaction" ? [event.outcome, event.errorCode] : [])),
+		).toEqual([
+			["aborted", "ABORTED"],
+			["failed", "CONTEXT_SOURCE_CHANGED"],
+		]);
 	});
 
 	it("storage rechecks the entire candidate source even when the leaf ID was not changed", () => {

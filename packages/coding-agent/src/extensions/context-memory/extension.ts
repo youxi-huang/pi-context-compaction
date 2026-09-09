@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
 import type { MemoryController, MemoryHost } from "./controller.ts";
-import { freezeHistory, grantedHistory, historyQuerySchema, queryHistory } from "./history.ts";
+import { errorCode } from "./events.ts";
+import { freezeHistory, grantedHistory, type HistoryPage, historyQuerySchema, queryHistory } from "./history.ts";
 import { CONTEXT_NOTE_TYPE } from "./identity.ts";
 import { noteSchema, validateNote } from "./notes.ts";
 
@@ -24,8 +25,8 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 		pi.on("model_select", (event) => controller.refresh(event.model));
 		pi.on("turn_end", (_event, ctx) => controller.refresh(ctx.model));
 		pi.on("session_before_compact", async (event, ctx) => ({ compaction: await controller.compact(event, ctx) }));
-		pi.on("session_compact", () => controller.committed());
-		pi.on("session_compact_failed", (event) => controller.fail(event.errorMessage ?? "Compaction cancelled"));
+		pi.on("session_compact", (event) => controller.committed(event));
+		pi.on("session_compact_failed", (event) => controller.compactionFailed(event));
 		pi.registerTool({
 			name: "context_note",
 			label: "Context note",
@@ -33,9 +34,16 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 				"Submit an optional, source-backed note candidate about current decisions, failed attempts or work state. It is reconciled at compaction; omitting this tool does not block work. Sources must be original entry IDs returned by context_history.",
 			parameters: noteSchema,
 			async execute(_id, value, _signal, _update, ctx) {
-				controller.assertCanNote();
-				const note = validateNote(value, ctx.sessionManager.getBranch(), 2000);
-				pi.appendEntry(CONTEXT_NOTE_TYPE, note);
+				const session = ctx.sessionManager.getSessionId();
+				try {
+					controller.assertCanNote();
+					const note = validateNote(value, ctx.sessionManager.getBranch(), 2000);
+					pi.appendEntry(CONTEXT_NOTE_TYPE, note);
+				} catch (error) {
+					host.events.record({ event: "note", session, accepted: false, errorCode: errorCode(messageOf(error)) });
+					throw error;
+				}
+				host.events.record({ event: "note", session, accepted: true });
 				return {
 					content: [{ type: "text", text: "Note candidate saved; original messages remain authoritative." }],
 					details: {},
@@ -52,13 +60,40 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 			],
 			parameters: historyQuerySchema,
 			async execute(_id, request, signal, _update, ctx) {
-				signal?.throwIfAborted();
-				const snapshot = request.grantId
-					? grantedHistory(request.grantId, ctx.sessionManager.getSessionId())
-					: freezeHistory(ctx.sessionManager);
-				const page = queryHistory(snapshot, request);
+				const session = ctx.sessionManager.getSessionId();
+				const granted = Boolean(request.grantId);
+				const operation = request.operation === "read" ? "read" : "search";
+				let page: HistoryPage;
+				try {
+					signal?.throwIfAborted();
+					const snapshot = request.grantId
+						? grantedHistory(request.grantId, session)
+						: freezeHistory(ctx.sessionManager);
+					page = queryHistory(snapshot, request);
+				} catch (error) {
+					host.events.record({
+						event: "history",
+						session,
+						operation,
+						granted,
+						errorCode: errorCode(messageOf(error)),
+					});
+					throw error;
+				}
+				host.events.record({
+					event: "history",
+					session,
+					operation,
+					granted,
+					entries: page.entries.length,
+					cursor: Boolean(page.cursor),
+				});
 				return { content: [{ type: "text", text: JSON.stringify(page) }], details: page };
 			},
 		});
 	};
+}
+
+function messageOf(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }

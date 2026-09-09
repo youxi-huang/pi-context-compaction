@@ -12,6 +12,7 @@ The original session JSONL is the history store. A checkpoint contains a structu
 | `writer.ts`, `notes.ts` | Source chunks, structured notes, quotation/citation checks and accumulated usage. |
 | `history.ts`, `grant-file.ts` | Snapshots, bounded search/read, child identity and revocation. |
 | `lease.ts`, `storage.ts` | Process identity, writer ownership, atomic first publication and append rollback. |
+| `events.ts` | Local append-only evaluation log: outcomes, error classes, durations and counts, with per-session quotas and no content. |
 | `identity.ts`, `build.ts`, `index.ts` | Format identity, source fingerprint and public integration surface. |
 
 ## Host changes
@@ -21,6 +22,8 @@ The SDK wraps resource loaders so ordinary filtering cannot remove the resident.
 `SessionManager` calls storage before publishing candidate entries to its in-memory tree. This includes first flush and subsequent writes. Session opening, branching and forking acquire a destination lease before exposing writable state. Extension events alone run too late to enforce these boundaries.
 
 The controller returns a compaction candidate to Pi's existing commit path. It does not append checkpoints or replace agent messages itself. Storage checks the source snapshot again at commit. Cancellation, changed sources and disk failures leave the candidate uncommitted. Failed compaction blocks the next provider request until explicit retry or new input.
+
+Each attempt the resident starts is settled exactly once in the event log: on `session_compact` as committed, or on `session_compact_failed` as failed or aborted with the error class recorded by the controller. A failure reported by Pi without a resident attempt is logged only when it carries one of the extension's own error classes, such as a competing compactor; host refusals like "nothing to compact" are not attempts. Every guard rejection is logged except repeated `CONTEXT_BLOCKED` within one failure, which is logged once. Logging never changes compaction behavior; a log write error is shown by `/compaction-status` and otherwise ignored.
 
 ## Notes and retrieval
 

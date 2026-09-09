@@ -128,6 +128,8 @@ export interface HistoryExcerpt {
 	entryId: string;
 	parentId: string | null;
 	role: string;
+	/** Index on the branch; search results are ranked, so this is the only chronology signal. */
+	position: number;
 	offset: number;
 	text: string;
 }
@@ -152,11 +154,16 @@ function searchTerms(query: string): string[] {
 	].slice(0, 64);
 }
 
+function roleWeight(role: string): number {
+	return role === "user" ? 3 : role === "assistant" ? 2 : role === "toolResult" || role === "bashExecution" ? 0 : 1;
+}
+
 /** Branch-scoped literal search and paginated reads. Cursors are bound to the snapshot and query. */
 export function queryHistory(snapshot: HistorySnapshot, request: unknown, budgetTokens = 4000): HistoryPage {
 	if (!Check(historyQuerySchema, request)) throw new Error("HISTORY_QUERY_INVALID");
 	const signature = createHash("sha256")
-		.update(JSON.stringify([request.operation, request.query, request.entryId]))
+		// The ranking version is part of the signature: a cursor indexes the sorted candidate list.
+		.update(JSON.stringify([request.operation, request.query, request.entryId, "rank-v2"]))
 		.digest("hex");
 	let index = 0;
 	let offset = 0;
@@ -197,19 +204,22 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 	if (request.operation === "search" && !terms.length)
 		throw new Error("HISTORY_QUERY_REQUIRED: supply search keywords or read an entry ID");
 	if (request.operation === "read" && !request.entryId) throw new Error("HISTORY_ENTRY_REQUIRED");
+	// Ranking: more matched terms first; among equals, conversation turns before tool output, then newest
+	// first. Tool results are typically the longest entries and would otherwise fill the page with an early file dump.
 	const candidates = snapshot.entries
-		.flatMap((entry) => {
+		.flatMap((entry, position) => {
 			const text = sourceText(entry);
 			if (!text) return [];
-			if (request.operation === "read") return entry.id === request.entryId ? [{ entry, text, score: 1 }] : [];
+			if (request.operation === "read")
+				return entry.id === request.entryId ? [{ entry, text, score: 1, weight: 0, position }] : [];
 			const normalized = text.toLocaleLowerCase();
 			const score = terms.reduce(
 				(total, term) => total + (entry.id === term ? 10 : normalized.includes(term) ? 1 : 0),
 				0,
 			);
-			return score ? [{ entry, text, score }] : [];
+			return score ? [{ entry, text, score, weight: roleWeight(sourceRole(entry)), position }] : [];
 		})
-		.sort((a, b) => b.score - a.score);
+		.sort((a, b) => b.score - a.score || b.weight - a.weight || b.position - a.position);
 	if (request.operation === "read" && candidates.length === 0)
 		throw new Error("HISTORY_SCOPE_DENIED: entry is not in this readable scope");
 	const page: HistoryPage = {
@@ -220,7 +230,7 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 	};
 	let remaining = Math.max(512, Math.min(4000, budgetTokens)) - 350;
 	for (; index < candidates.length; index++) {
-		const { entry, text } = candidates[index];
+		const { entry, text, position } = candidates[index];
 		// Search returns short hit-centered excerpts. Read returns the complete source across pages.
 		let start = offset;
 		if (request.operation === "search") {
@@ -236,6 +246,7 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 			entryId: entry.id,
 			parentId: entry.parentId,
 			role: sourceRole(entry),
+			position,
 			offset: start,
 			text: excerpt,
 		});

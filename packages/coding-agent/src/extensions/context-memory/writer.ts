@@ -1,4 +1,4 @@
-import type { Api, Message, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import type { Api, Message, Model, ThinkingLevel, Tool, Usage } from "@earendil-works/pi-ai";
 import { estimateTokens } from "../../core/compaction/index.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
@@ -75,6 +75,8 @@ export interface WriteMemoryOptions {
 	sessionModel?: Model<Api>;
 	/** Current provider context; required when the writer is `session`. */
 	prefix?: SessionPrefix;
+	/** The session's current thinking level; the session writer follows it instead of `writerEffort`. */
+	sessionThinkingLevel?: ThinkingLevel | "off";
 	previous?: MemoryNote;
 	increments: readonly MemoryNote[];
 	uncovered: readonly SessionEntry[];
@@ -90,6 +92,23 @@ export interface WriteMemoryResult {
 	chunkCount: number;
 	/** `provider/model` that actually wrote the note. */
 	writerModel: string;
+	/** Reasoning effort sent with the writer request, or `off` when none was sent. */
+	writerEffort: ThinkingLevel | "off";
+}
+
+/**
+ * The session writer reasons at the level the session is running at, the way Pi's own summarizer does; a fixed
+ * writer uses the configured effort. Models without declared reasoning support receive no effort at all.
+ */
+function writerReasoning(
+	model: Model<Api>,
+	config: Pick<MemoryConfig, "writerModel" | "writerEffort">,
+	sessionThinkingLevel?: ThinkingLevel | "off",
+): ThinkingLevel | "off" {
+	if (!model.reasoning) return "off";
+	const level =
+		config.writerModel === SESSION_WRITER ? (sessionThinkingLevel ?? config.writerEffort) : config.writerEffort;
+	return level === "off" ? "off" : level;
 }
 
 const NOTE_RULES =
@@ -159,6 +178,7 @@ async function writeWithFixedWriter(model: Model<Api>, options: WriteMemoryOptio
 	let note = options.previous;
 	const usages: Usage[] = [];
 	let chunkCount = 0;
+	const effort = writerReasoning(model, config);
 	for (const chunk of sourceChunks(options.uncovered, chunkBudget)) {
 		signal.throwIfAborted();
 		// Re-open referenced original text alongside the old note; do not repeatedly summarize only summaries.
@@ -175,7 +195,7 @@ async function writeWithFixedWriter(model: Model<Api>, options: WriteMemoryOptio
 			model,
 			{ systemPrompt, messages: [{ role: "user", content: prompt, timestamp: Date.now() }], tools: [] },
 			{
-				...(model.reasoning ? { reasoning: config.writerEffort } : {}),
+				...(effort === "off" ? {} : { reasoning: effort }),
 				maxTokens: Math.min(model.maxTokens, Math.max(4096, noteTokens * 2)),
 				signal,
 				maxRetries: 0,
@@ -191,7 +211,7 @@ async function writeWithFixedWriter(model: Model<Api>, options: WriteMemoryOptio
 	}
 	if (!note || chunkCount === 0)
 		throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
-	return { note, usage: sumMemoryUsage(usages), chunkCount, writerModel: modelName(model) };
+	return { note, usage: sumMemoryUsage(usages), chunkCount, writerModel: modelName(model), writerEffort: effort };
 }
 
 /**
@@ -222,6 +242,7 @@ async function writeWithSession(model: Model<Api>, options: WriteMemoryOptions):
 	if (!instruction)
 		throw new Error("CONTEXT_WRITER_CAPACITY: the session context leaves no room for the handover request");
 	signal.throwIfAborted();
+	const effort = writerReasoning(model, config, options.sessionThinkingLevel);
 	const response = await runtime.completeSimple(
 		model,
 		{
@@ -230,7 +251,7 @@ async function writeWithSession(model: Model<Api>, options: WriteMemoryOptions):
 			tools: [...prefix.tools],
 		},
 		{
-			...(model.reasoning ? { reasoning: config.writerEffort } : {}),
+			...(effort === "off" ? {} : { reasoning: effort }),
 			maxTokens: Math.min(model.maxTokens, Math.max(4096, noteTokens * 2)),
 			signal,
 			maxRetries: 0,
@@ -240,7 +261,7 @@ async function writeWithSession(model: Model<Api>, options: WriteMemoryOptions):
 	);
 	signal.throwIfAborted();
 	const note = validateNote(parseNote(response), branch, noteTokens);
-	return { note, usage: response.usage, chunkCount: 1, writerModel: modelName(model) };
+	return { note, usage: response.usage, chunkCount: 1, writerModel: modelName(model), writerEffort: effort };
 }
 
 function handoverInstruction(options: WriteMemoryOptions, sources: readonly SessionEntry[], head: number): string {

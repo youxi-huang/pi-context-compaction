@@ -28,6 +28,7 @@ import {
 } from "./events.ts";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "./identity.ts";
 import {
+	checkpointLineage,
 	hashEntries,
 	latestMemory,
 	type MemoryCheckpoint,
@@ -35,6 +36,7 @@ import {
 	noteIncrements,
 	renderNote,
 	type SourceSnapshot,
+	shrinkLineage,
 } from "./notes.ts";
 import { assertReadableBranch } from "./storage.ts";
 import { modelName, resolveWriterModel, writeMemory } from "./writer.ts";
@@ -69,6 +71,8 @@ interface PendingCompaction {
 			| "chunkCount"
 			| "usage"
 			| "writerMs"
+			| "writerEffort"
+			| "lineageTokens"
 		>
 	>;
 }
@@ -149,7 +153,7 @@ function withPendingNotes(
 		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
 	);
 	if (increments.length) {
-		const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map(renderNote).join("\n\n")}`;
+		const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map((increment) => renderNote(increment)).join("\n\n")}`;
 		// If candidates overflow, the raw recent messages remain available and the writer will reconcile them.
 		if (textTokens(content) <= noteTokens)
 			result.unshift({
@@ -418,6 +422,7 @@ export class MemoryController {
 				runtime: this.host.runtime,
 				sessionModel: ctx.model,
 				prefix: session ? this.sessionPrefix(ctx, increments, budget.noteTokens) : undefined,
+				sessionThinkingLevel: session ? ctx.thinkingLevel : undefined,
 				previous: previous?.memory.note,
 				increments,
 				uncovered: branch.slice(after + 1),
@@ -431,6 +436,7 @@ export class MemoryController {
 				writerMs: Math.round(performance.now() - writerStarted),
 				chunkCount: written.chunkCount,
 				usage: summarizeUsage(written.usage),
+				writerEffort: written.writerEffort,
 			});
 			event.signal.throwIfAborted();
 			if (
@@ -439,12 +445,19 @@ export class MemoryController {
 				hashEntries(branch) !== hashEntries(this.host.session.getBranch())
 			)
 				throw new Error("CONTEXT_SOURCE_CHANGED: discard the candidate and retry explicitly");
-			const summary = renderNote(written.note);
-			const tokensAfter =
-				textTokens(summary) +
-				textTokens(ctx.getSystemPrompt()) +
-				kept.reduce((total, message) => total + estimateTokens(message), 0);
-			Object.assign(pending.fields, { noteTokens: textTokens(summary), tokensAfter });
+			// Earlier checkpoints are listed by the host so a later phase stays locatable even if the writer dropped it.
+			// The list has no reserved budget: it shrinks before the checkpoint is refused for size.
+			const noteTokens = textTokens(renderNote(written.note));
+			const fixedAfter =
+				textTokens(ctx.getSystemPrompt()) + kept.reduce((total, message) => total + estimateTokens(message), 0);
+			let lineage = checkpointLineage(branch);
+			let summary = renderNote(written.note, lineage);
+			while (lineage.length && textTokens(summary) + fixedAfter > budget.threshold) {
+				lineage = shrinkLineage(lineage);
+				summary = renderNote(written.note, lineage);
+			}
+			const tokensAfter = textTokens(summary) + fixedAfter;
+			Object.assign(pending.fields, { noteTokens, lineageTokens: textTokens(summary) - noteTokens, tokensAfter });
 			if (tokensAfter > budget.threshold)
 				throw new Error("CONTEXT_RECOVERY_TOO_LARGE: note and complete recent tool rounds cannot fit");
 			return {

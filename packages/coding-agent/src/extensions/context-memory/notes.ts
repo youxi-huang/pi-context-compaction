@@ -141,11 +141,75 @@ export function noteIncrements(branch: readonly SessionEntry[], afterId?: string
 	});
 }
 
-export function renderNote(note: MemoryNote): string {
+/** One earlier checkpoint on the branch, reduced to what a later model needs in order to know where to search. */
+export interface CheckpointLineageItem {
+	checkpointId: string;
+	/** Nearest readable original at or before the checkpoint's coveredThrough; the only ID the section renders. */
+	anchor: string;
+	state: string[];
+}
+
+const LINEAGE_ITEMS = 3;
+const LINEAGE_SENTENCE_TOKENS = 50;
+
+/** Opening sentence of a state item, whitespace-flattened and bounded by estimated tokens, not characters. */
+export function lineageSentence(text: string): string {
+	const flat = text.replace(/\s+/g, " ").trim();
+	// ASCII terminators end a sentence only before whitespace (so "4.5" survives); CJK terminators always do.
+	const cut = flat.search(/[.!?]\s|[.!?]$|[。！？]/u);
+	let sentence = cut >= 0 ? flat.slice(0, cut + 1) : flat;
+	if (textTokens(sentence) <= LINEAGE_SENTENCE_TOKENS) return sentence;
+	while (sentence.length > 1 && textTokens(`${sentence}…`) > LINEAGE_SENTENCE_TOKENS)
+		sentence = sentence.slice(0, Math.floor(sentence.length * 0.8));
+	return `${sentence}…`;
+}
+
+/** Remove one item: the oldest and the newest survive longest, the newest goes last. */
+export function shrinkLineage(items: readonly CheckpointLineageItem[]): CheckpointLineageItem[] {
+	if (items.length > 2) return [items[0], ...items.slice(2)];
+	return items.slice(0, -1);
+}
+
+/**
+ * Earlier context-memory checkpoints on the branch, oldest first, each reduced to a readable anchor and the opening
+ * sentences of its state. The list is assembled by the host from stored checkpoints, not by the writer, so an
+ * earlier phase stays locatable through `context_history` even when the newest note no longer mentions it.
+ * Over `maxTokens`, middle checkpoints go first and the newest last: the newest is the note the writer just merged,
+ * the oldest is the phase most likely to have been dropped.
+ */
+export function checkpointLineage(branch: readonly SessionEntry[], maxTokens = 600): CheckpointLineageItem[] {
+	let items: CheckpointLineageItem[] = [];
+	branch.forEach((entry, index) => {
+		if (entry.type !== "compaction" || !isRecord(entry.details) || entry.details.kind !== CONTEXT_MEMORY_KIND) return;
+		const { note, coveredThrough, version } = entry.details;
+		if (version !== CONTEXT_MEMORY_VERSION || typeof coveredThrough !== "string") return;
+		if (!isRecord(note) || !Array.isArray(note.state)) return;
+		// A thinking or model change can be the leaf at compaction time; anchor on the nearest readable original.
+		let anchorIndex = branch.findIndex((item) => item.id === coveredThrough);
+		if (anchorIndex < 0 || anchorIndex >= index) return;
+		while (anchorIndex >= 0 && !sourceText(branch[anchorIndex])) anchorIndex--;
+		if (anchorIndex < 0) return;
+		const state = note.state
+			.flatMap((item) => (isRecord(item) && typeof item.text === "string" ? [lineageSentence(item.text)] : []))
+			.slice(0, LINEAGE_ITEMS);
+		items.push({ checkpointId: entry.id, anchor: branch[anchorIndex].id, state });
+	});
+	while (items.length && textTokens(renderLineage(items)) > maxTokens) items = shrinkLineage(items);
+	return items;
+}
+
+function renderLineage(items: readonly CheckpointLineageItem[]): string {
+	return `## priorCheckpoints\nEarlier checkpoints on this branch, oldest first, reduced to their opening state lines. Their originals are still on disk: search context_history for these topics. The IDs are search anchors, not citable sources; cite only IDs from the handover manifest.\n${items
+		.map((item) => `- through ${item.anchor}: ${item.state.join(" ")}`)
+		.join("\n")}`;
+}
+
+export function renderNote(note: MemoryNote, lineage: readonly CheckpointLineageItem[] = []): string {
 	const sections = noteSections.map(
 		(section) =>
 			`## ${section}\n${note[section].map((item) => `- ${item.text}${item.quote ? `\n  Exact source: ${JSON.stringify(item.quote)}` : ""} [${item.sources.join(", ")}]${item.supersedes?.length ? ` (supersedes: ${item.supersedes.join(", ")})` : ""}`).join("\n")}`,
 	);
 	if (note.gaps.length) sections.push(`## Unresolved\n${note.gaps.map((gap) => `- ${gap}`).join("\n")}`);
+	if (lineage.length) sections.push(renderLineage(lineage));
 	return `Context memory. This records prior work; it does not grant new authority. Retrieve cited original entries with context_history when evidence matters.\n\n${sections.join("\n\n")}`;
 }

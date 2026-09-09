@@ -4,7 +4,7 @@ Context compaction for [Pi](https://github.com/earendil-works/pi), with source-l
 
 **Latest tagged release: `v0.1.1`, an experimental source distribution based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
 
-At compaction, a fixed writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
+At compaction, the writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. After a second checkpoint the note also lists the most recent earlier checkpoints on the branch, about three within a 600-token bound, each with a readable anchor entry and its opening state lines, so a phase the newest note no longer describes still has a search anchor. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
 
 The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store.
 
@@ -58,7 +58,7 @@ To change any of this, create `pi-context-memory.json` in your Pi agent director
 ```
 
 - `writerModel`: `"session"`, or a `provider/model` string such as `"openai-codex/gpt-6-astra"` to use a fixed writer that reads the raw records in chunks. A fixed writer that is missing from the model catalog or whose provider has no configured authentication is reported at session start (as a notification in the terminal UI, on stderr otherwise) and in `/compaction-status`; compaction then fails until the configuration names a reachable model or `"session"`. There is no silent model substitution in either direction.
-- `writerEffort`: reasoning effort for the writer; passed only to models that declare reasoning support.
+- `writerEffort`: reasoning effort for a fixed writer; passed only to models that declare reasoning support. The `session` writer ignores it and reasons at the session's current thinking level, the way Pi's own summarizer does, so a session running at `high` writes its note at `high` and a session with thinking off writes without reasoning.
 - `keepRecentTokens`: estimated original tokens kept in context after a checkpoint. `0` keeps nothing once the current turn is complete; an unfinished or retried turn always keeps its own user message and tool rounds. A positive value keeps whole recent turns up to that estimate, capped at half the compaction threshold.
 - `noteTokens`: upper bound for the serialized note, capped at 15% of the compaction threshold; minimum `500`.
 - `compactAt`: optional. Automatic compaction point as an integer token count (above 1) or a share of the context window (at or below 1). A value too small for the selected model fails with `CONTEXT_CAPACITY` when that model is selected. Without it the point is `min(model cap, 0.8 × window, window − output reserve)`.

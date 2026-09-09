@@ -6,10 +6,10 @@ The original session JSONL is the history store. A checkpoint contains a structu
 
 | Module | Responsibility |
 | --- | --- |
-| `config.ts` | Process-latched enable flag, writer selection and capacity budgets. |
+| `config.ts` | Process-latched enable flag, writer selection (`session` or a fixed `provider/model`), kept-context, note and compaction-point budgets. |
 | `loader.ts`, `extension.ts`, `policy.ts` | Resident loading, tools, ownership, handler ordering and competing-compactor rejection. |
-| `controller.ts` | Freeze source, invoke writer, validate candidate and block requests after failure. |
-| `writer.ts`, `notes.ts` | Source chunks, structured notes, quotation/citation checks and accumulated usage. |
+| `controller.ts` | Freeze source, choose the cut, invoke writer, validate candidate and block requests after failure. |
+| `writer.ts`, `notes.ts` | Session writer over the current provider prefix, fixed writer over raw-source chunks, structured notes, quotation/citation checks and accumulated usage. |
 | `history.ts`, `grant-file.ts` | Snapshots, bounded search/read, child identity and revocation. |
 | `lease.ts`, `storage.ts` | Process identity, writer ownership, atomic first publication and append rollback. |
 | `events.ts` | Local append-only evaluation log: outcomes, error classes, durations and counts, with per-session quotas and no content. |
@@ -27,9 +27,11 @@ Each attempt the resident starts is settled exactly once in the event log: on `s
 
 ## Notes and retrieval
 
-The writer receives the previous note, new original records and bounded excerpts of referenced originals. Increment notes are unverified candidates. Every quote must appear verbatim in a cited record; every source must be on the selected branch. These checks establish reference consistency, not semantic completeness.
+Two writers exist and neither substitutes for the other. The default `session` writer sends the session model its own next provider request, meaning the current system prompt, active tool definitions and converted messages in the same order Pi would send them, followed by one closing user message that carries the note schema, the rules, the previous note, increment candidates, bounded excerpts of referenced originals and a manifest mapping each uncovered entry to its ID with its opening words. The manifest exists because entry IDs are not visible inside the conversation; it shrinks to IDs only when the window is tight, and the request fails with `CONTEXT_WRITER_CAPACITY` rather than dropping the prefix. Keeping the prefix identical is what lets a provider's prompt cache serve the request. A fixed `provider/model` writer instead receives the previous note, new original records in sequential chunks and bounded excerpts of referenced originals. Reasoning effort is passed only to models that declare reasoning support. Increment notes are unverified candidates. Every quote must appear verbatim in a cited record; every source must be on the selected branch. These checks establish reference consistency, not semantic completeness.
 
-The compaction threshold is `min(model cap, 0.8 × context window, context window − output reserve)`. Caps are 400,000 for GPT and 200,000 for Gemini; other families have no extra cap. Final request checks include serialized payload size. Estimates are conservative approximations, not billing measurements.
+The controller chooses the cut itself instead of adopting Pi's `keepRecentTokens` cut. With the default budget of zero, nothing is kept once the last turn is complete and the checkpoint's `firstKeptEntryId` is the sentinel `context-memory:keep-none`, which Pi's context assembly already treats as "no kept entries"; the next request holds the system prompt, the note and the new input. An unfinished turn, or an overflow retry, keeps from its own user message so tool calls and results stay paired. A positive budget keeps whole recent turns up to the estimate; a session smaller than the budget keeps its latest turn. Storage accepts the sentinel; every other `firstKeptEntryId` must exist on the branch.
+
+The compaction threshold is `min(model cap, 0.8 × context window, context window − output reserve, compactAt)`. Caps are 400,000 for GPT and 200,000 for Gemini; other families have no extra cap. Final request checks include serialized payload size. Estimates are conservative approximations, not billing measurements.
 
 `context_history` searches or reads the current ancestor chain. Parent hosts can grant a particular child access to a frozen source range. Revocation stops further reads. Grants exclude later parent messages, sibling branches and recursively inherited authority. Cross-process manifests require parent identity and source checks.
 

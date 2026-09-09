@@ -38,7 +38,7 @@ Run `node scripts/context-memory-check.mjs` after building. It combines focused 
 
 Run `node scripts/security-regression-check.mjs` for the host changes reviewed on 2026-09-07. The same command is included in CI. It runs 429 focused tests covering provider URL classification and cache parameters, escaped OAuth errors, message-frame index validation, Git operand boundaries, package sources, prompt arguments, skill paths and LaTeX rendering. Pathological text inputs run in a child process with a timeout so a regular-expression regression cannot hang the test process indefinitely.
 
-The checks use synthetic input and mocked providers; OAuth callback checks use a local loopback server. They do not make model requests. The original 18 context-memory regressions remain a separate check. Passing these checks does not establish that every scanner alert is exploitable or resolved; remote CodeQL and dependency results must be checked on the pushed commit.
+The checks use synthetic input and mocked providers; OAuth callback checks use a local loopback server. They do not make model requests. The 28 context-memory regressions remain a separate check. Passing these checks does not establish that every scanner alert is exploitable or resolved; remote CodeQL and dependency results must be checked on the pushed commit.
 
 ## Practical limits
 

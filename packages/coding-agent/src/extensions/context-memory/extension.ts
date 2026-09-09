@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "../../core/extensions/types.ts";
+import { SESSION_WRITER } from "./config.ts";
 import type { MemoryController, MemoryHost } from "./controller.ts";
 import { errorCode } from "./events.ts";
 import { freezeHistory, grantedHistory, type HistoryPage, historyQuerySchema, queryHistory } from "./history.ts";
@@ -19,9 +20,26 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 		});
 		if (!host.config.enabled) return;
 
+		controller.bindTools(() => {
+			const active = new Set(pi.getActiveTools());
+			return pi
+				.getAllTools()
+				.filter((tool) => active.has(tool.name))
+				.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
+		});
 		pi.on("input", () => controller.acceptInput());
 		pi.on("session_tree", () => controller.branchChanged());
-		pi.on("session_start", (_event, ctx) => controller.refresh(ctx.model));
+		pi.on("session_start", (_event, ctx) => {
+			controller.refresh(ctx.model);
+			// A fixed writer that this installation cannot reach is reported now, not at the first compaction.
+			if (host.config.writerModel === SESSION_WRITER) return;
+			const status = controller.writerStatus(ctx.model);
+			if (status.error && ctx.hasUI)
+				ctx.ui.notify(
+					`context-memory: writer ${host.config.writerModel} is not available (${status.error}); compaction will fail until pi-context-memory.json names a reachable model or "session"`,
+					"warning",
+				);
+		});
 		pi.on("model_select", (event) => controller.refresh(event.model));
 		pi.on("turn_end", (_event, ctx) => controller.refresh(ctx.model));
 		pi.on("session_before_compact", async (event, ctx) => ({ compaction: await controller.compact(event, ctx) }));

@@ -42,17 +42,30 @@ The focused check runs static checks and context-memory regressions. It does not
 
 ## Configure and run
 
-Choose a writer model available through your own Pi authentication. The default is `openai-codex/gpt-6-astra` with `medium` effort. To override it, create `pi-context-memory.json` in your Pi agent directory (normally `~/.pi/agent/`):
+By default the current session model writes the handover note itself: the request is the session's own provider context plus one closing instruction, so no second model, no extra authentication and no cold read of the history are needed, and the provider's prompt cache applies where the provider offers one. After the checkpoint, model context holds the system prompt and the note only; the original messages stay in the session file and on screen and can be retrieved with `context_history`.
+
+To change any of this, create `pi-context-memory.json` in your Pi agent directory (normally `~/.pi/agent/`). Every key is optional; the values below are the defaults:
 
 ```json
 {
   "enabled": true,
-  "writerModel": "openai-codex/gpt-6-astra",
-  "writerEffort": "medium"
+  "writerModel": "session",
+  "writerEffort": "medium",
+  "keepRecentTokens": 0,
+  "noteTokens": 3000,
+  "eventLog": true
 }
 ```
 
-Authenticate providers through Pi's normal login or API-key configuration. This repository supplies no credentials. If the configured writer is unavailable, compaction stops and reports the problem; there is no silent model substitution.
+- `writerModel`: `"session"`, or a `provider/model` string such as `"openai-codex/gpt-6-astra"` to use a fixed writer that reads the raw records in chunks. A fixed writer that your authentication cannot reach is reported at session start and again in `/compaction-status`; compaction then fails until the configuration names a reachable model or `"session"`. There is no silent model substitution in either direction.
+- `writerEffort`: reasoning effort for the writer; passed only to models that declare reasoning support.
+- `keepRecentTokens`: estimated original tokens kept in context after a checkpoint. `0` keeps nothing once the current turn is complete; an unfinished or retried turn always keeps its own user message and tool rounds. A positive value keeps whole recent turns up to that estimate, capped at half the compaction threshold.
+- `noteTokens`: upper bound for the serialized note, capped at 15% of the compaction threshold; minimum `500`.
+- `compactAt`: optional. Automatic compaction point as a token count (above 1) or a share of the context window (at or below 1). Without it the point is `min(model cap, 0.8 × window, window − output reserve)`.
+
+Manual `/compact` works on any session that holds at least one complete turn, including short conversations.
+
+Authenticate providers through Pi's normal login or API-key configuration. This repository supplies no credentials.
 
 Start with a fresh session:
 

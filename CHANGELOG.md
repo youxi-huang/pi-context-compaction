@@ -6,8 +6,19 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Changed
+
+- The default writer is now the session model itself (`"writerModel": "session"`). The compaction request is the session's own provider context plus one closing handover instruction, so no second model or additional authentication is needed and the provider's prompt cache can serve the request. A fixed `provider/model` writer remains available and behaves as before. Sessions that previously relied on the implicit `openai-codex/gpt-6-astra` default must now name it in `pi-context-memory.json` to keep using it. Neither writer falls back to the other; failure still blocks the next request.
+- After a checkpoint, model context keeps no original messages by default. The next request holds the system prompt, the note and the new input; original records stay in the session file and on screen and remain retrievable with `context_history`. An unfinished or retried turn keeps its own user message and tool rounds. Previously about 20,000 tokens of recent originals were kept, and sessions below that size could not be compacted.
+- Manual `/compact` now works on any session with at least one complete turn, including short conversations.
+- The default note budget is 3,000 estimated tokens (previously 6,000), still capped at 15% of the compaction threshold.
+- Reasoning effort is passed to the writer only when the model declares reasoning support, matching Pi's own summarizer.
+- `/compaction-status` reports the resolved writer, or the error class explaining why it cannot run. A fixed writer that the current authentication cannot reach is reported at session start in the terminal UI.
+- Compaction events and checkpoints record the writer that actually ran (`provider/model`), not the configuration string.
+
 ### Added
 
+- `pi-context-memory.json` accepts `keepRecentTokens` (default `0`), `noteTokens` (default `3000`, minimum `500`) and `compactAt` (a token count above 1 or a window share at or below 1; unset by default). Invalid values fail with `CONTEXT_CONFIG` at startup.
 - Local compaction event log. Each compaction attempt, request guard, `context_history` call and `context_note` candidate appends one JSON line to `context-memory-events.jsonl` in the agent directory, recording outcome, error class, durations, token counts, sizes and identifiers. No message text, note content, quotes, queries, file paths or free-form error text is written. Every session has a fixed quota per event kind; at 8 MB the file is renamed to `.1`, replacing the previous generation. `pi-context-memory.json` accepts `"eventLog": false` to disable it, and `"enabled": false` disables it as well; `/compaction-status` shows the log path and the last write error. `node scripts/context-memory-report.mjs` summarizes the log. Compaction behavior is unchanged.
 
 ### Maintenance

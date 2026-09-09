@@ -62,6 +62,7 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 			async execute(_id, request, signal, _update, ctx) {
 				const session = ctx.sessionManager.getSessionId();
 				const granted = Boolean(request.grantId);
+				const operation = request.operation === "read" ? "read" : "search";
 				let page: HistoryPage;
 				try {
 					signal?.throwIfAborted();
@@ -73,7 +74,7 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 					host.events.record({
 						event: "history",
 						session,
-						operation: request.operation,
+						operation,
 						granted,
 						errorCode: errorCode(messageOf(error)),
 					});
@@ -82,7 +83,7 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 				host.events.record({
 					event: "history",
 					session,
-					operation: request.operation,
+					operation,
 					granted,
 					entries: page.entries.length,
 					cursor: Boolean(page.cursor),

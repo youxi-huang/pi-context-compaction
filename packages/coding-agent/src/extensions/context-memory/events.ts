@@ -1,5 +1,15 @@
-import { appendFileSync, existsSync, readFileSync, renameSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import {
+	appendFileSync,
+	chmodSync,
+	closeSync,
+	existsSync,
+	mkdirSync,
+	openSync,
+	readSync,
+	renameSync,
+	statSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
 import { isRecord } from "./identity.ts";
 
@@ -98,20 +108,89 @@ export const EVENT_CAPS: Readonly<Record<CountedKind, number>> = Object.freeze({
 	history: 300,
 	note: 60,
 });
-/** The file rotates once to `.1` past this size; older rotations are discarded. */
+/** Whenever the file reaches this size it is renamed to `.1`, replacing the previous generation. */
 export const EVENT_LOG_ROTATE_BYTES = 8 * 1024 * 1024;
+/** Quota reload reads at most this many bytes from the end of each generation. */
+export const EVENT_LOG_SCAN_BYTES = 2 * 1024 * 1024;
 
-/** Reduce any error to a bounded class name. Free text never reaches the log. */
+/** Every error class this extension throws. The log never emits a class outside this set, HTTP_nnn or the errno list. */
+export const PROJECT_CODES: ReadonlySet<string> = new Set([
+	"CONTEXT_BLOCKED",
+	"CONTEXT_BUSY",
+	"CONTEXT_CAPACITY",
+	"CONTEXT_COMPACTOR_CONFLICT",
+	"CONTEXT_CONFIG",
+	"CONTEXT_EXTERNAL_WRITE",
+	"CONTEXT_INPUT_TOO_LARGE",
+	"CONTEXT_LOCK_CHANGED",
+	"CONTEXT_LOCK_CLOSED",
+	"CONTEXT_LOCK_IDENTITY",
+	"CONTEXT_LOCK_LOST",
+	"CONTEXT_LOCK_PLATFORM",
+	"CONTEXT_LOCK_UNKNOWN",
+	"CONTEXT_LOCKED",
+	"CONTEXT_MIGRATION_REQUIRED",
+	"CONTEXT_NO_CUT",
+	"CONTEXT_NO_MODEL_OR_SOURCE",
+	"CONTEXT_NO_NEW_SOURCE",
+	"CONTEXT_NOTE_BUDGET",
+	"CONTEXT_NOTE_FROZEN",
+	"CONTEXT_NOTE_INVALID",
+	"CONTEXT_NOTE_QUOTE",
+	"CONTEXT_NOTE_SCOPE",
+	"CONTEXT_NOTE_VERSION",
+	"CONTEXT_PAYLOAD_TOO_LARGE",
+	"CONTEXT_RECOVERY_TOO_LARGE",
+	"CONTEXT_RESIDENT_NOT_INITIALIZED",
+	"CONTEXT_RESIDENT_REQUIRED",
+	"CONTEXT_RUNTIME_CONFLICT",
+	"CONTEXT_SOURCE_CHANGED",
+	"CONTEXT_STORAGE_CLOSED",
+	"CONTEXT_STORAGE_UNCERTAIN",
+	"CONTEXT_TOOL_BOUNDARY",
+	"CONTEXT_TOOL_CONFLICT",
+	"CONTEXT_UNSETTLED",
+	"CONTEXT_WRITER_CAPACITY",
+	"CONTEXT_WRITER_FAILED",
+	"CONTEXT_WRITER_UNAVAILABLE",
+	"HISTORY_CURSOR_INVALID",
+	"HISTORY_ENTRY_REQUIRED",
+	"HISTORY_GRANT_EXISTS",
+	"HISTORY_GRANT_NOT_PERSISTED",
+	"HISTORY_QUERY_INVALID",
+	"HISTORY_QUERY_REQUIRED",
+	"HISTORY_SCOPE_DENIED",
+]);
+const ERRNO_CODES: ReadonlySet<string> = new Set([
+	"EACCES",
+	"EAGAIN",
+	"EBUSY",
+	"ECONNABORTED",
+	"ECONNREFUSED",
+	"ECONNRESET",
+	"EEXIST",
+	"EHOSTUNREACH",
+	"EMFILE",
+	"ENOENT",
+	"ENOSPC",
+	"ENOTFOUND",
+	"EPERM",
+	"EPIPE",
+	"EROFS",
+	"ETIMEDOUT",
+]);
+
+/** Reduce any error to a class from a closed set. Free text never reaches the log. */
 export function errorCode(message: string | undefined, aborted = false): string {
 	// Bounded input and bounded quantifiers only: provider error text is untrusted.
 	const text = (message ?? "").slice(0, 2000);
-	const project = text.match(/\b(?:CONTEXT|HISTORY)_[A-Z_]+/);
-	if (project) return project[0];
+	const project = text.match(/\b(?:CONTEXT|HISTORY)_[A-Z_]{1,40}\b/);
+	if (project && PROJECT_CODES.has(project[0])) return project[0];
 	if (aborted || /\babort|\bcancel/i.test(text)) return "ABORTED";
 	const status = text.match(/\b(?:status(?: code)?|http)[\s:]{0,4}([45]\d\d)\b/i);
 	if (status) return `HTTP_${status[1]}`;
-	const errno = text.match(/\bE[A-Z]{4,}\b/);
-	if (errno) return errno[0];
+	const errno = text.match(/\bE[A-Z]{3,14}\b/);
+	if (errno && ERRNO_CODES.has(errno[0])) return errno[0];
 	return "UNKNOWN";
 }
 
@@ -132,6 +211,7 @@ export class EventLog {
 	readonly file?: string;
 	lastError?: string;
 	private readonly build: string;
+	private prepared = false;
 	private readonly counts = new Map<string, Record<CountedKind, number>>();
 
 	constructor(agentDir: string | undefined, enabled: boolean, build: string) {
@@ -142,15 +222,15 @@ export class EventLog {
 	record(event: Recordable): void {
 		if (!this.file) return;
 		try {
+			this.prepare();
 			const counts = this.sessionCounts(event.session);
 			const limit = EVENT_CAPS[event.event];
+			this.lastError = undefined;
 			if (counts[event.event] >= limit) return;
-			counts[event.event]++;
-			this.rotate();
 			this.write(event);
+			counts[event.event]++;
 			if (counts[event.event] === limit)
 				this.write({ event: "capped", session: event.session, kind: event.event, limit });
-			this.lastError = undefined;
 		} catch (error) {
 			this.lastError = errorCode(error instanceof Error ? error.message : String(error));
 		}
@@ -161,21 +241,29 @@ export class EventLog {
 		appendFileSync(this.file as string, `${line}\n`, { mode: 0o600 });
 	}
 
-	private rotate(): void {
+	/** Directory, permissions and rotation are settled before any count or write. */
+	private prepare(): void {
 		const file = this.file as string;
-		if (!existsSync(file) || statSync(file).size < EVENT_LOG_ROTATE_BYTES) return;
-		renameSync(file, `${file}.1`);
-		this.counts.clear();
+		if (!this.prepared) {
+			mkdirSync(dirname(file), { recursive: true });
+			if (existsSync(file)) chmodSync(file, 0o600);
+			this.prepared = true;
+		}
+		if (existsSync(file) && statSync(file).size >= EVENT_LOG_ROTATE_BYTES) renameSync(file, `${file}.1`);
+		// In-memory counts stay valid across rotation: the quota is per session, not per file generation.
 	}
 
-	/** Quotas survive restarts: the first event of a session in this process counts its existing lines. */
+	/**
+	 * Quotas survive restarts: the first event of a session in this process counts its lines in the tail
+	 * window of the live file and the previous generation. Older lines can only under-count, never over-count.
+	 */
 	private sessionCounts(session: string): Record<CountedKind, number> {
 		const cached = this.counts.get(session);
 		if (cached) return cached;
 		const counts: Record<CountedKind, number> = { compaction: 0, guard: 0, history: 0, note: 0 };
 		const file = this.file as string;
-		if (existsSync(file)) {
-			for (const line of readFileSync(file, "utf8").split("\n")) {
+		for (const candidate of [`${file}.1`, file]) {
+			for (const line of tailLines(candidate, EVENT_LOG_SCAN_BYTES)) {
 				if (!line.includes(session)) continue;
 				try {
 					const parsed: unknown = JSON.parse(line);
@@ -194,4 +282,21 @@ export class EventLog {
 		this.counts.set(session, counts);
 		return counts;
 	}
+}
+
+/** Complete lines from the last `bytes` of a file; a leading partial line is dropped. */
+function tailLines(file: string, bytes: number): string[] {
+	if (!existsSync(file)) return [];
+	const size = statSync(file).size;
+	const start = Math.max(0, size - bytes);
+	const buffer = Buffer.alloc(size - start);
+	const fd = openSync(file, "r");
+	try {
+		readSync(fd, buffer, 0, buffer.length, start);
+	} finally {
+		closeSync(fd);
+	}
+	const lines = buffer.toString("utf8").split("\n");
+	if (start > 0) lines.shift();
+	return lines;
 }

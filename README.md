@@ -66,7 +66,7 @@ Use `/compaction-status` to inspect the build, writer, checkpoint and request st
 
 ### Event log
 
-Each compaction attempt, request guard, history retrieval and note candidate appends one line to `context-memory-events.jsonl` in the agent directory. Lines carry outcome, error class, durations, token counts, sizes and identifiers only. No message text, note content, quotes, queries, file paths or free-form error messages are written. Every session has a fixed quota per event kind, so a failure loop cannot grow the file, and the file rotates once at 8 MB. Set `"eventLog": false` in `pi-context-memory.json` to turn it off. Summarize the log with:
+Each compaction attempt, request guard, history retrieval and note candidate appends one line to `context-memory-events.jsonl` in the agent directory. Lines carry outcome, error class, durations, token counts, sizes and identifiers only. No message text, note content, quotes, queries, file paths or free-form error messages are written. Every session has a fixed quota per event kind, so a failure loop cannot grow the file. When the file reaches 8 MB it is renamed to `.1`, replacing the previous generation, so the log occupies at most about 16 MB. Set `"eventLog": false` in `pi-context-memory.json` to turn it off; `"enabled": false` also turns it off. Summarize the log with:
 
 ```sh
 node scripts/context-memory-report.mjs

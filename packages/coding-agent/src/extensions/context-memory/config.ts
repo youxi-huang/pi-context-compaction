@@ -7,7 +7,7 @@ export interface MemoryConfig {
 	enabled: boolean;
 	writerModel: string;
 	writerEffort: ThinkingLevel;
-	/** Append local evaluation events to `context-memory-events.jsonl` in the agent directory. */
+	/** Append local evaluation events to `context-memory-events.jsonl` in the agent directory. Off when `enabled` is false. */
 	eventLog: boolean;
 }
 

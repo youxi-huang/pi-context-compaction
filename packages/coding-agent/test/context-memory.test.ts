@@ -13,6 +13,7 @@ import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { loadEntriesFromFile, SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
+import { MemoryController } from "../src/extensions/context-memory/controller.ts";
 import {
 	EVENT_CAPS,
 	EVENT_LOG_FILE,
@@ -551,6 +552,40 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(errorCode("request failed with status 429: rate limited")).toBe("HTTP_429");
 		expect(errorCode("connect ECONNRESET 10.0.0.1:443")).toBe("ECONNRESET");
 		expect(errorCode("Something at /Users/name/secret.txt went wrong")).toBe("UNKNOWN");
+		// Uppercase tokens echoed from untrusted text are not classes.
+		expect(errorCode("user said: HISTORY_OF_MY_MEDICAL_CONDITION")).toBe("UNKNOWN");
+		expect(errorCode("CONTEXT_SOMETHING_NEW: not a known class")).toBe("UNKNOWN");
+		expect(errorCode("EVERYTHING_BROKE")).toBe("UNKNOWN");
+	});
+
+	it("host refusals that never reached the resident are not counted as compaction failures", () => {
+		const store = manager(false);
+		seed(store);
+		const agentDir = fs.mkdtempSync(join(root, "agent-"));
+		const controller = new MemoryController({
+			config: { enabled: true, eventLog: true, writerModel: "memory-test/memory-writer", writerEffort: "medium" },
+			events: new EventLog(agentDir, true, "test-build"),
+			runtime: {} as never,
+			session: store,
+			setCompaction() {},
+		});
+		const failed = (errorMessage: string) =>
+			controller.compactionFailed({
+				type: "session_compact_failed",
+				reason: "manual",
+				errorMessage,
+				aborted: false,
+				willRetry: false,
+				fromExtension: false,
+			});
+		failed("Compaction failed: Nothing to compact (session too small)");
+		failed("Compaction failed: Already compacted");
+		failed("Compaction failed: CONTEXT_BLOCKED: earlier failure");
+		expect(events(agentDir)).toEqual([]);
+		failed("Compaction failed: CONTEXT_COMPACTOR_CONFLICT: another extension returned a compaction");
+		expect(events(agentDir).map((event) => (event.event === "compaction" ? event.errorCode : event.event))).toEqual([
+			"CONTEXT_COMPACTOR_CONFLICT",
+		]);
 	});
 
 	it("cancelled or stale candidates never publish", async () => {

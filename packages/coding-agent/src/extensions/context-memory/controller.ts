@@ -13,7 +13,14 @@ import type { ReadonlySessionManager, SessionEntry } from "../../core/session-ma
 import type { CompactionSettings } from "../../core/settings-manager.ts";
 import { CONTEXT_MEMORY_BUILD } from "./build.ts";
 import { type MemoryConfig, memoryBudget, textTokens } from "./config.ts";
-import { type CompactionEvent, type CompactionOutcome, type EventLog, errorCode, summarizeUsage } from "./events.ts";
+import {
+	type CompactionEvent,
+	type CompactionOutcome,
+	type EventLog,
+	errorCode,
+	PROJECT_CODES,
+	summarizeUsage,
+} from "./events.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "./identity.ts";
 import {
 	hashEntries,
@@ -41,7 +48,22 @@ interface PendingCompaction {
 	willRetry: boolean;
 	model?: string;
 	errorCode?: string;
-	fields: Partial<CompactionEvent>;
+	fields: Partial<
+		Pick<
+			CompactionEvent,
+			| "tokensBefore"
+			| "tokensAfter"
+			| "threshold"
+			| "noteTokens"
+			| "noteBudget"
+			| "sourceEntries"
+			| "keptMessages"
+			| "increments"
+			| "chunkCount"
+			| "usage"
+			| "writerMs"
+		>
+	>;
 }
 
 function sourceBoundary(branch: readonly SessionEntry[]): string {
@@ -98,23 +120,19 @@ export class MemoryController {
 			noteIncrements: noteIncrements(branch, checkpoint?.entry.id).length,
 			budget: this.lastModel ? memoryBudget(this.lastModel) : undefined,
 			eventLog: this.host.events.file
-				? { file: this.host.events.file, lastError: this.host.events.lastError }
-				: undefined,
+				? { enabled: true, file: this.host.events.file, lastError: this.host.events.lastError }
+				: { enabled: false },
 		};
 	}
 
-	/** Record a request-side protection once, then rethrow. Blocking is reported once per failure. */
+	/** Record a request-side protection, then rethrow. CONTEXT_BLOCKED is reported once per failure. */
 	private guarded<T>(operation: () => T): T {
 		try {
 			return operation();
 		} catch (error) {
 			const code = errorCode(error instanceof Error ? error.message : String(error));
-			if (code === "CONTEXT_BLOCKED") {
-				if (!this.blockReported) {
-					this.blockReported = true;
-					this.host.events.record({ event: "guard", session: this.host.session.getSessionId(), code });
-				}
-			} else if (code !== "CONTEXT_BUSY") {
+			if (code !== "CONTEXT_BLOCKED" || !this.blockReported) {
+				if (code === "CONTEXT_BLOCKED") this.blockReported = true;
 				this.host.events.record({ event: "guard", session: this.host.session.getSessionId(), code });
 			}
 			throw error;
@@ -130,11 +148,14 @@ export class MemoryController {
 		const pending = this.pending;
 		this.pending = undefined;
 		if (!pending && !event) return;
-		// An attempt rejected by the controller's own request guard is already counted as a guard event.
-		if (!pending && (code === "CONTEXT_BLOCKED" || code === "CONTEXT_BUSY")) return;
+		// Without a pending attempt the resident did no work. Record only a rejection inside the compaction
+		// stack (a competing compactor, a storage check); host refusals such as "nothing to compact" and
+		// attempts already counted as guard events are not compaction failures.
+		if (!pending && (!PROJECT_CODES.has(code ?? "") || code === "CONTEXT_BLOCKED" || code === "CONTEXT_BUSY")) return;
 		this.host.events.record({
 			event: "compaction",
 			session: this.host.session.getSessionId(),
+			...pending?.fields,
 			reason: pending?.reason ?? event?.reason ?? "manual",
 			willRetry: pending?.willRetry ?? event?.willRetry ?? false,
 			outcome,
@@ -142,7 +163,6 @@ export class MemoryController {
 			...(pending?.model === undefined ? {} : { model: pending.model }),
 			writerModel: this.host.config.writerModel,
 			...(pending ? { compactMs: Math.round(performance.now() - pending.startedAt) } : {}),
-			...pending?.fields,
 			...(checkpointId === undefined ? {} : { checkpointId }),
 		});
 	}
@@ -191,7 +211,8 @@ export class MemoryController {
 		const branch = this.host.session.getBranch();
 		const checkpoint = latestMemory(branch);
 		const increments = noteIncrements(branch, checkpoint?.entry.id);
-		const budget = memoryBudget(ctx.model);
+		const model = ctx.model;
+		const budget = this.guarded(() => memoryBudget(model));
 		const result = messages.filter(
 			(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
 		);
@@ -222,10 +243,10 @@ export class MemoryController {
 	beforeRequest(payload: unknown): void {
 		this.assertReady();
 		if (!this.host.config.enabled || !this.lastModel) return;
-		const threshold = memoryBudget(this.lastModel).threshold;
+		const model = this.lastModel;
 		this.guarded(() => {
 			// Final payload also contains tool definitions and provider-specific context additions.
-			if (textTokens(JSON.stringify(payload)) > threshold)
+			if (textTokens(JSON.stringify(payload)) > memoryBudget(model).threshold)
 				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the reserved input allowance");
 		});
 	}
@@ -239,12 +260,11 @@ export class MemoryController {
 
 	/** Pi reports every failed or cancelled attempt here, including failures raised after the writer returned. */
 	compactionFailed(event: SessionCompactFailedEvent): void {
+		const code = this.pending?.errorCode ?? errorCode(event.errorMessage, event.aborted);
 		this.fail(event.errorMessage ?? "Compaction cancelled");
-		this.settle(
-			event.aborted ? "aborted" : "failed",
-			this.pending?.errorCode ?? errorCode(event.errorMessage, event.aborted),
-			event,
-		);
+		// A request guard rejected a competing attempt; the attempt in flight keeps its own settlement.
+		if ((code === "CONTEXT_BUSY" || code === "CONTEXT_BLOCKED") && this.pending?.errorCode === undefined) return;
+		this.settle(event.aborted ? "aborted" : "failed", code, event);
 	}
 
 	committed(event?: SessionCompactEvent): void {

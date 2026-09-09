@@ -8,7 +8,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Added
 
-- Local compaction event log. Each compaction attempt, request guard, `context_history` call and `context_note` candidate appends one JSON line to `context-memory-events.jsonl` in the agent directory, recording outcome, error class, durations, token counts, sizes and identifiers. No message text, note content, quotes, queries, file paths or free-form error text is written. Every session has a fixed quota per event kind and the file rotates once at 8 MB. `pi-context-memory.json` accepts `"eventLog": false` to disable it; `/compaction-status` shows the log path and the last write error. `node scripts/context-memory-report.mjs` summarizes the log. Compaction behavior is unchanged.
+- Local compaction event log. Each compaction attempt, request guard, `context_history` call and `context_note` candidate appends one JSON line to `context-memory-events.jsonl` in the agent directory, recording outcome, error class, durations, token counts, sizes and identifiers. No message text, note content, quotes, queries, file paths or free-form error text is written. Every session has a fixed quota per event kind; at 8 MB the file is renamed to `.1`, replacing the previous generation. `pi-context-memory.json` accepts `"eventLog": false` to disable it, and `"enabled": false` disables it as well; `/compaction-status` shows the log path and the last write error. `node scripts/context-memory-report.mjs` summarizes the log. Compaction behavior is unchanged.
 
 ### Maintenance
 

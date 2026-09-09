@@ -23,7 +23,7 @@ The SDK wraps resource loaders so ordinary filtering cannot remove the resident.
 
 The controller returns a compaction candidate to Pi's existing commit path. It does not append checkpoints or replace agent messages itself. Storage checks the source snapshot again at commit. Cancellation, changed sources and disk failures leave the candidate uncommitted. Failed compaction blocks the next provider request until explicit retry or new input.
 
-Each attempt is settled exactly once in the event log: on `session_compact` as committed, or on `session_compact_failed` as failed or aborted with the error class recorded by the controller. Guards that reject a request are logged once per failure. Logging never changes compaction behavior; a log write error is shown by `/compaction-status` and otherwise ignored.
+Each attempt the resident starts is settled exactly once in the event log: on `session_compact` as committed, or on `session_compact_failed` as failed or aborted with the error class recorded by the controller. A failure reported by Pi without a resident attempt is logged only when it carries one of the extension's own error classes, such as a competing compactor; host refusals like "nothing to compact" are not attempts. Every guard rejection is logged except repeated `CONTEXT_BLOCKED` within one failure, which is logged once. Logging never changes compaction behavior; a log write error is shown by `/compaction-status` and otherwise ignored.
 
 ## Notes and retrieval
 

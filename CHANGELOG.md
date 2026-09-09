@@ -13,6 +13,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - Added `docs/context-memory/upstream-delta.md`: the upstream baseline, what is new, and the seven host source files with the reason each one is changed. `THIRD_PARTY_NOTICES.md` previously counted six; the one-line `findCutPoint` change in `core/compaction/compaction.ts` from v0.2.0 is the seventh.
 - The README now opens with the project's identity (experimental distribution, not a Pi package), the problem it addresses, the intended end state and what has actually been verified. No behavior described elsewhere in the README changed.
 - Corrected the host security regression count in `docs/context-memory/validation.md` from 429 to 111, which is what `scripts/security-regression-check.mjs` reports. The v0.2.0 release notes already said 111.
+- `scripts/stamp-context-memory.mjs` now includes `core/compaction/compaction.ts` in the build fingerprint. The one-line `findCutPoint` change shipped in v0.2.0 was not covered, so a change to that line would not have altered the fingerprint. The build string on `main` changes as a result; no runtime behavior changes.
 
 ## [v0.2.0] — 2026-09-09
 

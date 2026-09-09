@@ -10,6 +10,7 @@ const extension = `${source}/extensions/context-memory`;
 const files = [
 	`${source}/core/agent-session-runtime.ts`,
 	`${source}/core/agent-session.ts`,
+	`${source}/core/compaction/compaction.ts`,
 	`${source}/core/extensions/runner.ts`,
 	`${source}/core/sdk.ts`,
 	`${source}/core/session-manager.ts`,

@@ -80,6 +80,7 @@ try {
 		if (existsSync(destination)) throw new Error("Candidate already exists; choose another path");
 		const agentDir = resolve(values["agent-dir"] ?? getAgentDir());
 		const config = readMemoryConfig(agentDir);
+		if (config.writerModel === "session") throw new Error("Migration needs a fixed writer: set writerModel to a provider/model in pi-context-memory.json for this run");
 		const runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json"), allowModelNetwork: false });
 		const abort = new AbortController();
 		const onInterrupt = () => abort.abort();

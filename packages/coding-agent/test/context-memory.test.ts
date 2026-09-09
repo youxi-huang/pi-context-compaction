@@ -374,14 +374,13 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			order.push("observer");
 			return undefined;
 		});
-		const { session, runtime, settings } = await sdk(store, {
+		const { session, runtime } = await sdk(store, {
 			extensions: [(pi) => pi.on("session_before_compact", observer)],
 		});
 		vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
 			order.push("writer");
 			return reply(JSON.stringify(note(original)));
 		});
-		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 		await session.compact();
 		expect(observer).toHaveBeenCalledTimes(1);
 		expect(order).toEqual(["observer", "writer"]);
@@ -395,11 +394,10 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		]) {
 			const store = manager();
 			seed(store);
-			const { session, runtime, settings } = await sdk(store, {
+			const { session, runtime } = await sdk(store, {
 				extensions: [(pi) => pi.on("session_before_compact", () => competing as never)],
 			});
 			const writer = vi.spyOn(runtime, "completeSimple");
-			settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 			await expect(session.compact()).rejects.toThrow("CONTEXT_COMPACTOR_CONFLICT");
 			expect(writer).not.toHaveBeenCalled();
 			expect(latestMemory(store.getBranch())).toBeUndefined();
@@ -409,9 +407,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	it("two checkpoints retain raw-source coverage and latest decisions across reopen", async () => {
 		const store = manager();
 		const original = seed(store);
-		const { session, runtime, settings } = await sdk(store);
+		const { session, runtime } = await sdk(store);
 		const calls = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
-		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 		await session.compact();
 		const first = latestMemory(store.getBranch());
 		expect(first?.memory.note.state[0].text).toContain("4317");
@@ -469,9 +466,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	it("committed compactions and history reads are logged as counts, sizes and durations without content", async () => {
 		const store = manager();
 		const original = seed(store);
-		const { session, runtime, settings, agentDir } = await sdk(store);
+		const { session, runtime, agentDir } = await sdk(store);
 		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
-		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 		await session.compact();
 		const history = session.agent.state.tools.find((tool) => tool.name === "context_history");
 		if (!history) throw new Error("context_history not active");
@@ -595,7 +591,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	it("cancelled or stale candidates never publish", async () => {
 		const store = manager(false);
 		const id = seed(store);
-		const { session, runtime, settings, agentDir } = await sdk(store);
+		const { session, runtime, agentDir } = await sdk(store);
 		let finish!: (response: AssistantMessage) => void;
 		const writer = vi.spyOn(runtime, "completeSimple").mockImplementation(
 			() =>
@@ -603,7 +599,6 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 					finish = resolve;
 				}),
 		);
-		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 		const operation = session.compact();
 		await vi.waitFor(() => expect(writer).toHaveBeenCalledTimes(1));
 		session.abortCompaction();
@@ -707,11 +702,10 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		const content = "Each source segment remains retrievable. ".repeat(5000);
 		const id = store.appendMessage({ role: "user", content, timestamp: 1 });
 		store.appendMessage(reply());
-		const { session, runtime, settings } = await sdk(store);
+		const { session, runtime } = await sdk(store);
 		const writer = vi
 			.spyOn(runtime, "completeSimple")
 			.mockResolvedValue(reply(JSON.stringify(note(id, "Original source remains retrievable."))));
-		settings.applyOverrides({ compaction: { keepRecentTokens: 1 } });
 		const result = await session.compact();
 		expect(writer.mock.calls.length).toBeGreaterThan(1);
 		const originalParts = writer.mock.calls.flatMap((call) => {
@@ -835,6 +829,69 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(() => chooseCut(branch.slice(0, at(first)), 0, false)).toThrow("CONTEXT_NO_CUT");
 	});
 
+	it("a branch that ends in a tool result compacts with the default budget and keeps its open turn", async () => {
+		const store = manager(false);
+		const original = seed(store);
+		store.appendMessage({ role: "user", content: "Read the config file.", timestamp: 5 });
+		store.appendMessage({
+			...reply(),
+			content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "service.json" } }],
+			stopReason: "toolUse",
+		});
+		store.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [{ type: "text", text: '{"port":4317}' }],
+			isError: false,
+			timestamp: 7,
+		});
+		const { session, runtime } = await sdk(store, { writerModel: "session" });
+		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		expect(store.buildSessionContext().messages.map((message) => message.role)).toEqual([
+			"compactionSummary",
+			"user",
+			"assistant",
+			"toolResult",
+		]);
+	});
+
+	it("a positive keep budget keeps whole recent turns and never reaches back past the previous checkpoint", async () => {
+		const store = manager(false);
+		const original = seed(store);
+		const { session, runtime } = await sdk(store, { writerModel: "session", keepRecentTokens: 1 });
+		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		expect(store.buildSessionContext().messages.map((message) => message.role)).toEqual([
+			"compactionSummary",
+			"user",
+			"assistant",
+		]);
+		// The budget is far larger than the work since the checkpoint; the cut still stops at the checkpoint.
+		store.appendMessage({ role: "user", content: "Small follow-up.", timestamp: 9 });
+		store.appendMessage(reply());
+		const branch = store.getBranch();
+		const checkpointIndex = branch.findIndex((entry) => entry.type === "compaction");
+		expect(chooseCut(branch, 50_000, false)).toBeGreaterThan(checkpointIndex);
+		expect(branch[chooseCut(branch, 50_000, false)].type).toBe("message");
+	});
+
+	it("a catalogued fixed writer without provider authentication is unavailable", async () => {
+		const store = manager(false);
+		seed(store);
+		const { runtime, agentDir } = await sdk(store);
+		const controller = new MemoryController({
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "openai-codex/gpt-6-astra" },
+			events: new EventLog(agentDir, false, "test-build"),
+			runtime,
+			session: store,
+			setCompaction() {},
+		});
+		expect(runtime.getModel("openai-codex", "gpt-6-astra")).toBeDefined();
+		expect(controller.writerStatus(model)).toEqual({ error: "CONTEXT_WRITER_UNAVAILABLE" });
+	});
+
 	it("configuration validates the new budgets and compactAt lowers the threshold", () => {
 		const agentDir = fs.mkdtempSync(join(root, "agent-"));
 		fs.writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ keepRecentTokens: -1 }));
@@ -851,6 +908,10 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(budget.noteTokens).toBe(2000);
 		expect(budget.recentTokens).toBe(4000);
 		expect(memoryBudget(model, { ...config, compactAt: 30_000 }).threshold).toBe(30_000);
+		expect(memoryBudget({ ...model, contextWindow: 19_000 }).noteTokens).toBe(500);
+		const fractional = fs.mkdtempSync(join(root, "agent-"));
+		fs.writeFileSync(join(fractional, "pi-context-memory.json"), JSON.stringify({ compactAt: 1.5 }));
+		expect(() => readMemoryConfig(fractional)).toThrow("CONTEXT_CONFIG");
 		expect(memoryBudget(model).recentTokens).toBe(0);
 		expect(memoryBudget(model).noteTokens).toBe(3000);
 	});

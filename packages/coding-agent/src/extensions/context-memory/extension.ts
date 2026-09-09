@@ -34,11 +34,10 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 			// A fixed writer that this installation cannot reach is reported now, not at the first compaction.
 			if (host.config.writerModel === SESSION_WRITER) return;
 			const status = controller.writerStatus(ctx.model);
-			if (status.error && ctx.hasUI)
-				ctx.ui.notify(
-					`context-memory: writer ${host.config.writerModel} is not available (${status.error}); compaction will fail until pi-context-memory.json names a reachable model or "session"`,
-					"warning",
-				);
+			if (!status.error) return;
+			const text = `context-memory: writer ${host.config.writerModel} is not available (${status.error}); compaction will fail until pi-context-memory.json names a reachable model or "session"`;
+			if (ctx.hasUI) ctx.ui.notify(text, "warning");
+			else console.warn(text);
 		});
 		pi.on("model_select", (event) => controller.refresh(event.model));
 		pi.on("turn_end", (_event, ctx) => controller.refresh(ctx.model));

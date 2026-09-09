@@ -31,6 +31,7 @@ import {
 	hashEntries,
 	latestMemory,
 	type MemoryCheckpoint,
+	type MemoryNote,
 	noteIncrements,
 	renderNote,
 	type SourceSnapshot,
@@ -106,9 +107,18 @@ function assertToolPairs(messages: readonly AgentMessage[]): void {
  * turns up to that estimate; a session smaller than the budget keeps only its latest turn.
  */
 export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: number, willRetry: boolean): number {
+	// Never reach back past the previous checkpoint: its originals are already summarized.
+	let floor = 0;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		if (branch[index].type === "compaction") {
+			floor = index + 1;
+			break;
+		}
+	}
 	const turnStarts: number[] = [];
 	let last: SessionEntry | undefined;
-	for (const [index, entry] of branch.entries()) {
+	for (let index = floor; index < branch.length; index++) {
+		const entry = branch[index];
 		if (entry.type !== "message") continue;
 		last = entry;
 		if (entry.message.role === "user") turnStarts.push(index);
@@ -119,7 +129,7 @@ export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: num
 		last.type === "message" && last.message.role === "assistant" && last.message.stopReason !== "toolUse";
 	if (keepRecentTokens <= 0) return willRetry || !finished ? latestTurn : branch.length;
 	let accumulated = 0;
-	for (let i = branch.length - 1; i >= 0; i--) {
+	for (let i = branch.length - 1; i >= floor; i--) {
 		accumulated += sessionEntryToContextMessages(branch[i]).reduce(
 			(sum, message) => sum + estimateTokens(message),
 			0,
@@ -127,6 +137,30 @@ export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: num
 		if (accumulated >= keepRecentTokens) return turnStarts.find((start) => start >= i) ?? latestTurn;
 	}
 	return latestTurn;
+}
+
+/** Replace any stale pending-notes message with the current unverified candidates, placed first. */
+function withPendingNotes(
+	messages: readonly AgentMessage[],
+	increments: readonly MemoryNote[],
+	noteTokens: number,
+): AgentMessage[] {
+	const result = messages.filter(
+		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
+	);
+	if (increments.length) {
+		const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map(renderNote).join("\n\n")}`;
+		// If candidates overflow, the raw recent messages remain available and the writer will reconcile them.
+		if (textTokens(content) <= noteTokens)
+			result.unshift({
+				role: "custom",
+				customType: "context-memory-pending",
+				content,
+				display: false,
+				timestamp: 0,
+			});
+	}
+	return result;
 }
 
 /** One controller survives extension reloads. No background summarizer or per-turn paid work. */
@@ -165,7 +199,7 @@ export class MemoryController {
 			build: CONTEXT_MEMORY_BUILD,
 			enabled: this.host.config.enabled,
 			writerModel: this.host.config.writerModel,
-			...this.writerStatus(),
+			...(this.lastModel || this.host.config.writerModel !== SESSION_WRITER ? this.writerStatus() : {}),
 			state: this.frozen ? "preparing" : this.failedBoundary ? "blocked" : "ready",
 			failure: this.failure,
 			checkpointId: checkpoint?.entry.id,
@@ -213,7 +247,7 @@ export class MemoryController {
 			outcome,
 			...(outcome === "committed" ? {} : { errorCode: code ?? "UNKNOWN" }),
 			...(pending?.model === undefined ? {} : { model: pending.model }),
-			writerModel: pending?.writerModel ?? this.host.config.writerModel,
+			writerModel: pending?.writerModel ?? this.writerStatus().writer ?? this.host.config.writerModel,
 			...(pending ? { compactMs: Math.round(performance.now() - pending.startedAt) } : {}),
 			...(checkpointId === undefined ? {} : { checkpointId }),
 		});
@@ -265,21 +299,7 @@ export class MemoryController {
 		const increments = noteIncrements(branch, checkpoint?.entry.id);
 		const model = ctx.model;
 		const budget = this.guarded(() => memoryBudget(model, this.host.config));
-		const result = messages.filter(
-			(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
-		);
-		if (increments.length) {
-			const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map(renderNote).join("\n\n")}`;
-			if (textTokens(content) <= budget.noteTokens)
-				result.unshift({
-					role: "custom",
-					customType: "context-memory-pending",
-					content,
-					display: false,
-					timestamp: 0,
-				});
-			// If candidates overflow, the raw recent messages remain available and the fixed writer will reconcile them.
-		}
+		const result = withPendingNotes(messages, increments, budget.noteTokens);
 		this.guarded(() => {
 			assertToolPairs(result);
 			const estimate =
@@ -290,6 +310,23 @@ export class MemoryController {
 				);
 		});
 		return result;
+	}
+
+	/**
+	 * The request Pi would send next, rebuilt the way `context()` shapes it. Other extensions' `context` handlers
+	 * are not replayed here, so an extension that rewrites the context also breaks the provider's prefix cache.
+	 */
+	private sessionPrefix(ctx: ExtensionContext, increments: readonly MemoryNote[], noteTokens: number) {
+		const messages = this.host.session.buildContextEntries().flatMap(sessionEntryToContextMessages);
+		// Overflow recovery removes the failed assistant message from agent state; mirror that here.
+		while (messages.length) {
+			const last = messages[messages.length - 1];
+			if (last.role === "assistant" && ["error", "aborted"].includes(last.stopReason)) messages.pop();
+			else break;
+		}
+		const converted = convertToLlm(withPendingNotes(messages, increments, noteTokens));
+		assertToolPairs(converted);
+		return { systemPrompt: ctx.getSystemPrompt(), messages: converted, tools: this.activeTools() };
 	}
 
 	beforeRequest(payload: unknown): void {
@@ -380,21 +417,7 @@ export class MemoryController {
 				config: this.host.config,
 				runtime: this.host.runtime,
 				sessionModel: ctx.model,
-				prefix: session
-					? {
-							systemPrompt: ctx.getSystemPrompt(),
-							messages: convertToLlm(
-								this.host.session
-									.buildContextEntries()
-									.flatMap(sessionEntryToContextMessages)
-									.filter(
-										(message) =>
-											!(message.role === "custom" && message.customType === "context-memory-pending"),
-									),
-							),
-							tools: this.activeTools(),
-						}
-					: undefined,
+				prefix: session ? this.sessionPrefix(ctx, increments, budget.noteTokens) : undefined,
 				previous: previous?.memory.note,
 				increments,
 				uncovered: branch.slice(after + 1),

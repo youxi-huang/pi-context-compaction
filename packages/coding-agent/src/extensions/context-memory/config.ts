@@ -66,9 +66,14 @@ export function readMemoryConfig(agentDir: string): Readonly<MemoryConfig> {
 		throw new Error("CONTEXT_CONFIG: keepRecentTokens must be an integer >= 0 and noteTokens an integer >= 500");
 	if (
 		config.compactAt !== undefined &&
-		!(typeof config.compactAt === "number" && Number.isFinite(config.compactAt) && config.compactAt > 0)
+		!(
+			typeof config.compactAt === "number" &&
+			Number.isFinite(config.compactAt) &&
+			config.compactAt > 0 &&
+			(config.compactAt <= 1 || Number.isInteger(config.compactAt))
+		)
 	)
-		throw new Error("CONTEXT_CONFIG: compactAt must be a positive token count or a window share in (0, 1]");
+		throw new Error("CONTEXT_CONFIG: compactAt must be an integer token count above 1 or a window share in (0, 1]");
 	const result = Object.freeze(config as MemoryConfig);
 	configs.set(path, result);
 	return result;
@@ -104,7 +109,7 @@ export function memoryBudget(
 		capacity,
 		reserve,
 		threshold,
-		noteTokens: Math.min(config.noteTokens, Math.floor(threshold * 0.15)),
+		noteTokens: Math.max(500, Math.min(config.noteTokens, Math.floor(threshold * 0.15))),
 		recentTokens: Math.min(config.keepRecentTokens, Math.floor(threshold * 0.5)),
 	};
 }

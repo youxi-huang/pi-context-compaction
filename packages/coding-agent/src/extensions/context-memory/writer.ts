@@ -1,4 +1,5 @@
 import type { Api, Message, Model, Tool, Usage } from "@earendil-works/pi-ai";
+import { estimateTokens } from "../../core/compaction/index.ts";
 import type { ModelRuntime } from "../../core/model-runtime.ts";
 import type { SessionEntry } from "../../core/session-manager.ts";
 import { type MemoryConfig, SESSION_WRITER, textTokens } from "./config.ts";
@@ -101,7 +102,9 @@ export function resolveWriterModel(config: Readonly<MemoryConfig>, runtime: Mode
 	}
 	const separator = config.writerModel.indexOf("/");
 	const model = runtime.getModel(config.writerModel.slice(0, separator), config.writerModel.slice(separator + 1));
-	if (!model) throw new Error(`CONTEXT_WRITER_UNAVAILABLE: ${config.writerModel}`);
+	// A catalog entry is not reachability: the provider also needs configured authentication.
+	if (!model || !runtime.hasConfiguredAuth(model.provider))
+		throw new Error(`CONTEXT_WRITER_UNAVAILABLE: ${config.writerModel}`);
 	return model;
 }
 
@@ -202,9 +205,10 @@ async function writeWithSession(model: Model<Api>, options: WriteMemoryOptions):
 	const sources = options.uncovered.filter((entry) => sourceText(entry).length > 0);
 	if (sources.length === 0)
 		throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
+	// Same estimator Pi uses for context accounting, so images count at their flat estimate, not as base64 text.
 	const fixedTokens =
 		textTokens(prefix.systemPrompt) +
-		textTokens(JSON.stringify(prefix.messages)) +
+		prefix.messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
 		textTokens(JSON.stringify(prefix.tools)) +
 		outputBudget(model);
 	let instruction: string | undefined;

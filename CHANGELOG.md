@@ -6,6 +6,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [v0.2.0] — 2026-09-09
+
+Low-friction compaction on the same Pi `v0.85.1` baseline, still an experimental source distribution and marked as a pre-release on GitHub. The session model writes its own handover note, nothing is kept after a checkpoint by default, a local event log records every attempt, and the first real two-checkpoint session drove three follow-up changes. See the validation record for what remains unproven.
+
 ### Changed
 
 - The default writer is now the session model itself (`"writerModel": "session"`). The compaction request is the session's own provider context plus one closing handover instruction, so no second model or additional authentication is needed and the provider's prompt cache can serve the request. A fixed `provider/model` writer remains available and behaves as before. Sessions that previously relied on the implicit `openai-codex/gpt-6-astra` default must now name it in `pi-context-memory.json` to keep using it. Neither writer falls back to the other; failure still blocks the next request.
@@ -77,7 +83,9 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.1...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.0...main
+[v0.2.0]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.0
+[v0.2.0 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.1
 [v0.1.1 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.0-alpha.1...v0.1.1
 [v0.1.0-alpha.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.0-alpha.1

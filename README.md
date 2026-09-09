@@ -17,7 +17,7 @@ The scope is preserving task continuity when model context is compacted. History
 - A configurable fixed writer, bounded source chunks and accumulated writer usage.
 - A restart-latched fallback switch and explicit-copy migration for complete original histories.
 
-The [architecture](docs/context-memory/architecture.md) explains the host boundary and failure behavior. [Validation](docs/context-memory/validation.md) states what has actually been checked and what remains unproven.
+The [architecture](docs/context-memory/architecture.md) explains the host boundary and failure behavior. [Validation](docs/context-memory/validation.md) states what has actually been checked and what remains unproven. The [roadmap](docs/context-memory/roadmap.md) states the version policy, the four measurements and the planned minor releases.
 
 The [changelog](CHANGELOG.md) separates released versions from changes on `main` that have not been released. The build instructions below check out the latest release tag and do not include those unreleased changes.
 

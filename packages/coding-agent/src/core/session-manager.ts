@@ -435,7 +435,8 @@ export function buildContextEntries(
 		if (entry.id === compaction.firstKeptEntryId) {
 			foundFirstKept = true;
 		}
-		if (foundFirstKept) {
+		// A retained turn may span several checkpoints; only the newest summary belongs in context.
+		if (foundFirstKept && entry.type !== "compaction") {
 			contextEntries.push(entry);
 		}
 	}

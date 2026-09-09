@@ -4,7 +4,7 @@ This document states where the project is going and how each step will be judged
 
 ## Version policy
 
-Patch releases (0.x.y) carry adaptation only: ports to new Pi releases, interface changes, dependency and security updates, and CI fixes. They do not change compaction behavior or add capabilities.
+Patch releases (0.x.y) carry adaptation and corrections to already promised behavior: ports to new Pi releases, interface changes, dependency and security updates, CI fixes, and defects in compaction, persistence or accounting. New compaction strategies and capabilities belong in minor releases.
 
 Minor releases (0.x.0) each answer one question about the project. A minor release ships when its acceptance criterion is met, not when a date arrives.
 
@@ -28,6 +28,8 @@ Four measurements track the goals:
 **0.3.0, measurement.** A replayable evaluation enters CI: synthetic session fixtures, probe questions, and the four measurements above. The fixtures include multi-checkpoint sessions: a standing constraint planted before the first checkpoint, two compactions, then a probe after the second, because a real two-checkpoint session on 2026-09-09 showed the newest note dropping every fact from the first phase and a single-checkpoint probe cannot see that. This release changes no compaction behavior. It establishes the baseline that later releases are compared against.
 
 **0.4.0, latency.** Increment notes are written in the background before the threshold is reached, so the compaction itself becomes a validation and commit step. The writer is tiered: a smaller model handles increments and a larger one handles boundaries or failed validation. Accepted when compaction pause falls without a drop in recovery accuracy.
+
+Scheduling needs a separate evaluation in a later 0.x release. **Hard compaction** pauses an unfinished task at a safe boundary, writes and commits a handover, then resumes the task. **Soft compaction** waits until the current task turn is complete before compacting. Automatic selection and adaptation between the two are future work; a threshold change alone must not be presented as support for in-task handover. Hard-compaction acceptance requires actual automatic checkpoints and successful continuation across at least two boundaries, preserving early constraints and distinguishing superseded decisions. Neither mode permits incomplete tool-call/result pairs or an uncommitted handover to reach the next request.
 
 **0.5.0, note quality.** Note structure is revised from evaluation failures rather than from intuition, and history retrieval gains a typed index over decisions, file changes and errors so a model pages less. Accepted when recovery accuracy rises and average retrieval calls fall.
 

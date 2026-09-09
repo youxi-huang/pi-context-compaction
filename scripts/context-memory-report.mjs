@@ -79,6 +79,19 @@ function tally(items, key) {
 	return result;
 }
 
+/** Known usage only. Missing call metadata in legacy logs cannot establish that no paid work occurred. */
+function writerAttempts(items) {
+	return {
+		attempts: items.length,
+		writerCalls: items.reduce((sum, event) => sum + (event.writerCalls ?? 0), 0),
+		usageReports: items.reduce((sum, event) => sum + (event.usageReports ?? 0), 0),
+		callsWithoutUsage: items.reduce((sum, event) => sum + Math.max(0, (event.writerCalls ?? 0) - (event.usageReports ?? 0)), 0),
+		attemptsWithoutCallCounts: items.filter((event) => event.writerCalls === undefined || event.usageReports === undefined).length,
+		tokens: items.reduce((sum, event) => sum + (event.usage?.totalTokens ?? 0), 0),
+		cost: Number(items.reduce((sum, event) => sum + (event.usage?.cost ?? 0), 0).toFixed(4)),
+	};
+}
+
 function summarize(events) {
 	const compactions = events.filter((event) => event.event === "compaction");
 	const committed = compactions.filter((event) => event.outcome === "committed");
@@ -114,6 +127,10 @@ function summarize(events) {
 			writerMs: distribution(committed.map((event) => event.writerMs).filter(Number.isFinite)),
 			failedCompactMs: distribution(failed.map((event) => event.compactMs).filter(Number.isFinite)),
 			chunkCount: distribution(committed.map((event) => event.chunkCount).filter(Number.isFinite)),
+		},
+		writerAttempts: {
+			all: writerAttempts(compactions),
+			byOutcome: Object.fromEntries(["committed", "failed", "aborted"].map((outcome) => [outcome, writerAttempts(compactions.filter((event) => event.outcome === outcome))])),
 		},
 		tokens: {
 			before: tokensBefore,
@@ -182,7 +199,9 @@ function printText(summary, options) {
 	console.log(formatDistribution("Time to failure", compactions.failedCompactMs, " ms"));
 	console.log(formatDistribution("Writer chunks", compactions.chunkCount));
 	console.log("");
-	console.log(`Tokens before compaction: ${tokens.before}; writer tokens: ${tokens.writer}; writer cost: ${tokens.writerCost}`);
+	console.log(`Committed compactions: tokens before ${tokens.before}; writer tokens ${tokens.writer}; writer cost ${tokens.writerCost}`);
+	const all = summary.writerAttempts.all;
+	console.log(`All attempts: known writer tokens ${all.tokens}; known writer cost ${all.cost}; calls without usage ${all.callsWithoutUsage}; attempts without call counts ${all.attemptsWithoutCallCounts}`);
 	console.log(`Writer overhead ratio: ${tokens.writerOverheadRatio ?? "n/a"}; after/before ratio: ${tokens.afterToBeforeRatio ?? "n/a"}`);
 	console.log(`${formatDistribution("Note tokens", tokens.noteTokens)}; mean share of note budget: ${tokens.noteBudgetShare ?? "n/a"}`);
 	console.log("");

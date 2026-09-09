@@ -7,7 +7,7 @@ Context compaction for [Pi](https://github.com/earendil-works/pi) that keeps the
 | **Project type** | Experimental Pi distribution, built from source. Not a Pi package. It cannot be added to an unmodified Pi installation with `pi install`. |
 | **Upstream baseline** | Pi `v0.85.1`, commit `d981de12`, imported as a clean snapshot. |
 | **What is new** | One extension directory, seven adapted host files, project scripts, tests and docs. See [upstream delta](docs/context-memory/upstream-delta.md). |
-| **Latest release** | `v0.2.0`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
+| **Latest release** | `v0.2.1`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
 | **Ordinary extension packaging** | Planned for 1.0, when the host changes are thin enough to submit upstream. See the [roadmap](docs/context-memory/roadmap.md). |
 
 ## The problem, and where this is going
@@ -33,7 +33,7 @@ At compaction, the writer produces a structured note from the original session r
 
 The end state this is built toward is a session that runs for days, compacts many times, and never asks the user to repeat something already said. You come back the next morning, ask why the schema was changed, and the model reads yesterday's decision back from the record by entry ID instead of guessing from a summary. A model that checks the record when it is unsure instead of reconstructing it from a summary. A compaction that costs a few seconds and a small share of the window, so it stops being an event anyone notices. And a host patch thin enough that all of this ships as an ordinary Pi extension. The [roadmap](docs/context-memory/roadmap.md) states the four measurements that decide whether each release moves closer: how many probe questions a model still answers correctly after compaction, how long the pause takes, how many tokens the writer spends, and how many host lines remain changed.
 
-What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a two-checkpoint session; 34 context-memory regressions and 111 host security regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
+What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a two-checkpoint session; 43 context-memory regressions and 429 host security and compatibility regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
 
 The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store. This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading, which is why it is a distribution rather than a drop-in extension.
 
@@ -57,7 +57,7 @@ Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent session
 ```sh
 git clone https://github.com/youxi-huang/pi-context-compaction.git
 cd pi-context-compaction
-git checkout v0.2.0
+git checkout v0.2.1
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
 node scripts/stamp-context-memory.mjs
@@ -88,9 +88,9 @@ To change any of this, create `pi-context-memory.json` in your Pi agent director
 
 - `writerModel`: `"session"`, or a `provider/model` string such as `"openai-codex/gpt-6-astra"` to use a fixed writer that reads the raw records in chunks. A fixed writer that is missing from the model catalog or whose provider has no configured authentication is reported at session start (as a notification in the terminal UI, on stderr otherwise) and in `/compaction-status`; compaction then fails until the configuration names a reachable model or `"session"`. There is no silent model substitution in either direction.
 - `writerEffort`: reasoning effort for a fixed writer; passed only to models that declare reasoning support. The `session` writer ignores it and reasons at the session's current thinking level, the way Pi's own summarizer does, so a session running at `high` writes its note at `high` and a session with thinking off writes without reasoning.
-- `keepRecentTokens`: estimated original tokens kept in context after a checkpoint. `0` keeps nothing once the current turn is complete; an unfinished or retried turn always keeps its own user message and tool rounds. A positive value keeps whole recent turns up to that estimate, capped at half the compaction threshold.
+- `keepRecentTokens`: estimated original tokens kept in context after a checkpoint. `0` keeps nothing once the current turn is complete, or when an automatic in-task handover covers a completed tool batch. Manual compaction of an unfinished turn and overflow retries keep their user message and tool rounds. A positive value keeps whole recent turns up to that estimate, capped at half the compaction threshold.
 - `noteTokens`: upper bound for the serialized note, capped at 15% of the compaction threshold; minimum `500`.
-- `compactAt`: optional. Automatic compaction point as an integer token count (above 1) or a share of the context window (at or below 1). A value too small for the selected model fails with `CONTEXT_CAPACITY` when that model is selected. Without it the point is `min(model cap, 0.8 × window, window − output reserve)`.
+- `compactAt`: optional. Automatic compaction point as an integer token count (above 1) or a share of the context window (at or below 1). A value too small for the selected model fails with `CONTEXT_CAPACITY` when that model is selected. Without it the point is `min(model cap, 0.8 × window, window − output reserve)`. This is a trigger at an available compaction boundary; final request guards separately enforce `window − output reserve` so a low trigger does not cause premature input rejection.
 
 Manual `/compact` works on any session that holds at least one complete turn, including short conversations.
 
@@ -113,6 +113,8 @@ Each compaction attempt, request guard, history retrieval and note candidate app
 ```sh
 node scripts/context-memory-report.mjs
 ```
+
+The existing `tokens` fields describe committed compactions. `writerAttempts.all` and `writerAttempts.byOutcome` also include known usage from failed and aborted attempts. Calls without returned usage, and attempts without call metadata in older logs, are counted explicitly; their missing cost is not evidence of zero cost.
 
 Other extensions may observe `session_before_compact` as long as their handlers return `undefined`; they run before the writer. An extension that returns a compaction or a cancellation from that event competes with this feature, and the compaction fails with `CONTEXT_COMPACTOR_CONFLICT` before the writer is called. Disable such compactors before use. This project does not overwrite a global Pi installation or migrate old sessions automatically.
 

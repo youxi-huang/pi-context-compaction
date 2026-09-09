@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { execFileSync, fork } from "node:child_process";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -42,6 +42,7 @@ import {
 	shrinkLineage,
 	validateNote,
 } from "../src/extensions/context-memory/notes.ts";
+import { writeMemory } from "../src/extensions/context-memory/writer.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -139,6 +140,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			selectedModel?: Model<Api>;
 			writerModel?: string;
 			keepRecentTokens?: number;
+			compactAt?: number;
+			mainReplies?: AssistantMessage[];
 			/** Register the fixed writer memory-test/memory-writer as a reasoning model. */
 			writerReasoning?: boolean;
 		} = {},
@@ -153,6 +156,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 				// Distinct from the default session thinking level (medium) so the two sources stay distinguishable.
 				writerEffort: "low",
 				...(options.keepRecentTokens === undefined ? {} : { keepRecentTokens: options.keepRecentTokens }),
+				...(options.compactAt === undefined ? {} : { compactAt: options.compactAt }),
 			}),
 		);
 		const selectedModel = options.selectedModel ?? model;
@@ -167,7 +171,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			streamSimple: () => {
 				requests++;
 				const stream = createAssistantMessageEventStream();
-				const message = reply();
+				const message = options.mainReplies?.[requests - 1] ?? reply();
 				stream.push({ type: "done", reason: "stop", message });
 				stream.end(message);
 				return stream;
@@ -866,6 +870,324 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			"assistant",
 			"toolResult",
 		]);
+	});
+
+	it.each([0, 1])(
+		"one open turn survives repeated checkpoints and reopen (keep budget %s)",
+		async (keepRecentTokens) => {
+			const store = manager();
+			const original = seed(store);
+			const open = store.appendMessage({ role: "user", content: "Read and verify the config.", timestamp: 5 });
+			const round = (id: string) => {
+				store.appendMessage({
+					...reply(),
+					content: [{ type: "toolCall", id, name: "read", arguments: { path: "service.json" } }],
+					stopReason: "toolUse",
+				});
+				store.appendMessage({
+					role: "toolResult",
+					toolCallId: id,
+					toolName: "read",
+					content: [{ type: "text", text: "verified" }],
+					isError: false,
+					timestamp: Date.now(),
+				});
+			};
+			const { session, runtime } = await sdk(store, { writerModel: "session", keepRecentTokens });
+			vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+			for (let i = 0; i < 3; i++) {
+				round(`call-${i}`);
+				await session.compact();
+				expect(latestMemory(store.getBranch())?.entry.firstKeptEntryId).toBe(open);
+				const roles = store.buildSessionContext().messages.map((message) => message.role);
+				expect(roles).toEqual([
+					"compactionSummary",
+					"user",
+					...Array.from({ length: i + 1 }, () => ["assistant", "toolResult"]).flat(),
+				]);
+			}
+			const file = store.getSessionFile()!;
+			session.dispose();
+			const reopened = SessionManager.open(file);
+			managers.push(reopened);
+			const resumed = await sdk(reopened, { writerModel: "session", keepRecentTokens });
+			vi.spyOn(resumed.runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+			reopened.appendMessage(reply("Verification complete."));
+			const branch = reopened.getBranch();
+			expect(branch[chooseCut(branch, 0, true)].id).toBe(open);
+			await resumed.session.compact();
+			expect(latestMemory(reopened.getBranch())?.entry.firstKeptEntryId).toBe(
+				keepRecentTokens ? open : CONTEXT_KEEP_NONE,
+			);
+			// Context filtering must not remove archived checkpoints, lineage, or readable original evidence.
+			expect(reopened.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(4);
+			expect(latestMemory(reopened.getBranch())?.entry.summary).toContain("## priorCheckpoints");
+			expect(
+				queryHistory(freezeHistory(reopened), { operation: "read", entryId: original }).entries[0].text,
+			).toContain("9000 was rejected");
+			expect(queryHistory(freezeHistory(reopened), { operation: "read", entryId: open }).entries[0].text).toBe(
+				"Read and verify the config.",
+			);
+			expect(
+				reopened.buildSessionContext().messages.filter((message) => message.role === "compactionSummary"),
+			).toHaveLength(1);
+		},
+	);
+
+	it("the writer reserves its requested output budget and still rejects a genuinely full prefix", async () => {
+		const store = manager(false);
+		const original = seed(store);
+		const { runtime } = await sdk(store);
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		const selected = { ...model, contextWindow: 200_000, maxTokens: 64_000 };
+		const request = (tokens: number, maxTokens = selected.maxTokens) =>
+			writeMemory({
+				config: DEFAULT_MEMORY_CONFIG,
+				runtime,
+				sessionModel: { ...selected, maxTokens },
+				prefix: {
+					systemPrompt: "",
+					messages: [{ role: "user", content: "x".repeat(tokens * 4), timestamp: 1 }],
+					tools: [],
+				},
+				increments: [],
+				uncovered: store.getBranch(),
+				branch: store.getBranch(),
+				noteTokens: 3000,
+				signal: new AbortController().signal,
+			});
+		await request(memoryBudget(selected).threshold);
+		expect(writer.mock.calls[0][2]?.maxTokens).toBe(6000);
+		await request(136_000, 2048);
+		expect(writer.mock.calls[1][2]?.maxTokens).toBe(2048);
+		await expect(request(199_000)).rejects.toThrow("CONTEXT_WRITER_CAPACITY");
+		expect(writer).toHaveBeenCalledTimes(2);
+	});
+
+	it("paid invalid notes retain usage, explicit retry recovers, and transport failures remain unknown", async () => {
+		const store = manager(false);
+		const original = seed(store);
+		const { session, runtime, agentDir } = await sdk(store, { writerModel: "session" });
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply("invalid JSON"));
+		await expect(session.compact()).rejects.toThrow("CONTEXT_NOTE_INVALID");
+		expect(latestMemory(store.getBranch())).toBeUndefined();
+		let event = events(agentDir).find((item) => item.event === "compaction");
+		expect(event).toMatchObject({
+			outcome: "failed",
+			errorCode: "CONTEXT_NOTE_INVALID",
+			writerCalls: 1,
+			usageReports: 1,
+			usage: { totalTokens: 20 },
+			writerEffort: "off",
+			writerMs: expect.any(Number),
+		});
+		writer.mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		expect(latestMemory(store.getBranch())).toBeDefined();
+		store.appendMessage({ role: "user", content: "Another complete turn.", timestamp: Date.now() });
+		store.appendMessage(reply());
+		writer.mockRejectedValue(new Error("HTTP 503 private provider detail"));
+		await expect(session.compact()).rejects.toThrow("HTTP 503");
+		event = events(agentDir)
+			.filter((item) => item.event === "compaction")
+			.at(-1);
+		expect(event).toMatchObject({
+			outcome: "failed",
+			errorCode: "HTTP_503",
+			writerCalls: 1,
+			usageReports: 0,
+			writerEffort: "off",
+			writerMs: expect.any(Number),
+		});
+		expect(event).not.toHaveProperty("usage");
+		expect(rawEvents(agentDir)).not.toContain("private provider detail");
+	});
+
+	it("fixed-writer partial failures and cancellation retain every returned usage once", async () => {
+		const store = manager(false);
+		const original = store.appendMessage({ role: "user", content: "source evidence ".repeat(15000), timestamp: 1 });
+		store.appendMessage(reply());
+		const { session, runtime, agentDir } = await sdk(store);
+		const writer = vi
+			.spyOn(runtime, "completeSimple")
+			.mockResolvedValueOnce(reply(JSON.stringify(note(original))))
+			.mockResolvedValue(reply("invalid JSON"));
+		await expect(session.compact()).rejects.toThrow("CONTEXT_NOTE_INVALID");
+		expect(writer).toHaveBeenCalledTimes(2);
+		expect(events(agentDir).find((item) => item.event === "compaction")).toMatchObject({
+			outcome: "failed",
+			writerCalls: 2,
+			usageReports: 2,
+			usage: { totalTokens: 40 },
+		});
+		const abort = new AbortController();
+		writer.mockImplementation(async () => {
+			abort.abort();
+			return reply(JSON.stringify(note(original)));
+		});
+		const progress: unknown[] = [];
+		await expect(
+			writeMemory({
+				config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "memory-test/memory-writer" },
+				runtime,
+				increments: [],
+				uncovered: store.getBranch(),
+				branch: store.getBranch(),
+				noteTokens: 3000,
+				signal: abort.signal,
+				onProgress: (value) => progress.push(value),
+			}),
+		).rejects.toThrow();
+		expect(progress.at(-1)).toMatchObject({ writerCalls: 1, usageReports: 1, usage: { totalTokens: 20 } });
+	});
+
+	it("the report includes failed and aborted usage without changing legacy successful-token fields", () => {
+		const file = join(root, "report-events.jsonl");
+		const records = [
+			{
+				outcome: "committed",
+				tokensBefore: 1000,
+				usage: { totalTokens: 100, cost: 1 },
+				writerCalls: 1,
+				usageReports: 1,
+			},
+			{ outcome: "failed", usage: { totalTokens: 200, cost: 2 }, writerCalls: 2, usageReports: 1 },
+			{ outcome: "aborted", usage: { totalTokens: 50, cost: 0.5 }, writerCalls: 1, usageReports: 1 },
+			{ outcome: "failed", writerCalls: 0, usageReports: 0 },
+			{ outcome: "failed" },
+		];
+		fs.writeFileSync(
+			file,
+			records
+				.map((item) =>
+					JSON.stringify({
+						at: "2026-01-01T00:00:00Z",
+						session: "synthetic",
+						build: "test",
+						event: "compaction",
+						reason: "manual",
+						...item,
+					}),
+				)
+				.join("\n"),
+		);
+		const report = JSON.parse(
+			execFileSync(
+				process.execPath,
+				[
+					fileURLToPath(new URL("../../../scripts/context-memory-report.mjs", import.meta.url)),
+					"--file",
+					file,
+					"--json",
+				],
+				{ encoding: "utf8" },
+			),
+		);
+		expect(report.tokens).toMatchObject({ writer: 100, writerCost: 1, writerOverheadRatio: 0.1 });
+		expect(report.writerAttempts.all).toMatchObject({
+			attempts: 5,
+			writerCalls: 4,
+			usageReports: 3,
+			callsWithoutUsage: 1,
+			attemptsWithoutCallCounts: 1,
+			tokens: 350,
+			cost: 3.5,
+		});
+		expect(report.writerAttempts.byOutcome.failed.tokens).toBe(200);
+		expect(report.writerAttempts.byOutcome.aborted.tokens).toBe(50);
+	});
+
+	it("a low automatic threshold is distinct from the model's final payload allowance", async () => {
+		const store = manager(false);
+		const { runtime } = await sdk(store);
+		const config = { ...DEFAULT_MEMORY_CONFIG, compactAt: 0.05 };
+		const budget = memoryBudget(model, config);
+		expect(budget.threshold).toBe(6400);
+		expect(budget.inputLimit).toBe(111616);
+		const controller = new MemoryController({
+			config,
+			runtime,
+			session: store,
+			events: new EventLog(root, false, "test"),
+			setCompaction: () => {},
+		});
+		controller.refresh(model);
+		expect(() => controller.beforeRequest({ input: "x".repeat(30_000) })).not.toThrow();
+		expect(() => controller.beforeRequest({ input: "x".repeat(400_000) })).toThrow("CONTEXT_PAYLOAD_TOO_LARGE");
+	});
+
+	it("the natural tool loop automatically compacts twice at 5 percent and continues without another user prompt", async () => {
+		const store = manager();
+		const path = join(root, "ledger.txt");
+		fs.writeFileSync(path, "deployment evidence ".repeat(2000));
+		const toolReply = (id: string): AssistantMessage => ({
+			...reply(),
+			content: [{ type: "toolCall", id, name: "read", arguments: { path } }],
+			stopReason: "toolUse",
+		});
+		const { session, runtime, requests, agentDir } = await sdk(store, {
+			writerModel: "session",
+			compactAt: 0.05,
+			mainReplies: [toolReply("first"), toolReply("second"), toolReply("third"), reply("Audit complete.")],
+		});
+		const writer = vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
+			const user = store.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user");
+			if (!user) throw new Error("Expected original user ruling");
+			return reply(
+				JSON.stringify(note(user.id, "Finish the ledger audit. Only the requested output may be written.")),
+			);
+		});
+		await session.prompt(
+			"Inspect the ledger three times and finish the audit. Only the requested output may be written.",
+		);
+		expect(requests()).toBe(4);
+		expect(writer).toHaveBeenCalledTimes(2);
+		expect(session.getLastAssistantText()).toBe("Audit complete.");
+		const checkpoints = store.getBranch().filter((entry) => entry.type === "compaction");
+		expect(checkpoints).toHaveLength(2);
+		for (const checkpoint of checkpoints) expect(checkpoint.firstKeptEntryId).toBe(CONTEXT_KEEP_NONE);
+		const compactions = events(agentDir).filter((event) => event.event === "compaction");
+		expect(compactions).toHaveLength(2);
+		for (const event of compactions)
+			expect(event).toMatchObject({ reason: "threshold", outcome: "committed", keptMessages: 0 });
+		expect(store.buildSessionContext().messages.map((message) => message.role)).toEqual([
+			"compactionSummary",
+			"assistant",
+		]);
+	});
+
+	it("a failed in-task automatic handover blocks the next model request without another writer attempt", async () => {
+		const store = manager();
+		const path = join(root, "ledger.txt");
+		fs.writeFileSync(path, "deployment evidence ".repeat(2000));
+		const { session, runtime, requests, agentDir } = await sdk(store, {
+			writerModel: "session",
+			compactAt: 0.05,
+			mainReplies: [
+				{
+					...reply(),
+					content: [{ type: "toolCall", id: "read-before-failure", name: "read", arguments: { path } }],
+					stopReason: "toolUse",
+				},
+				reply("Must not be reached."),
+			],
+		});
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply("invalid JSON"));
+		await session.prompt("Read the ledger, then finish the audit.");
+		expect(requests()).toBe(1);
+		expect(writer).toHaveBeenCalledTimes(1);
+		expect(store.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+		const logged = events(agentDir);
+		expect(logged.filter((event) => event.event === "compaction")).toEqual([
+			expect.objectContaining({
+				reason: "threshold",
+				outcome: "failed",
+				errorCode: "CONTEXT_NOTE_INVALID",
+				writerCalls: 1,
+				usageReports: 1,
+			}),
+		]);
+		expect(logged.filter((event) => event.event === "guard").map((event) => event.code)).toEqual(["CONTEXT_BLOCKED"]);
 	});
 
 	it("a positive keep budget keeps whole recent turns and never reaches back past the previous checkpoint", async () => {

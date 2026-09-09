@@ -73,6 +73,8 @@ interface PendingCompaction {
 			| "writerMs"
 			| "writerEffort"
 			| "lineageTokens"
+			| "writerCalls"
+			| "usageReports"
 		>
 	>;
 }
@@ -111,11 +113,15 @@ function assertToolPairs(messages: readonly AgentMessage[]): void {
  * turns up to that estimate; a session smaller than the budget keeps only its latest turn.
  */
 export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: number, willRetry: boolean): number {
-	// Never reach back past the previous checkpoint: its originals are already summarized.
+	// New turns never reach back past the checkpoint. An ongoing turn can still begin in its kept prefix.
 	let floor = 0;
 	for (let index = branch.length - 1; index >= 0; index--) {
-		if (branch[index].type === "compaction") {
+		const entry = branch[index];
+		if (entry.type === "compaction") {
 			floor = index + 1;
+			const hasNewTurn = branch.slice(floor).some((item) => item.type === "message" && item.message.role === "user");
+			const kept = branch.findIndex((item) => item.id === entry.firstKeptEntryId);
+			if (!hasNewTurn && kept >= 0 && kept < index) floor = kept;
 			break;
 		}
 	}
@@ -134,6 +140,7 @@ export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: num
 	if (keepRecentTokens <= 0) return willRetry || !finished ? latestTurn : branch.length;
 	let accumulated = 0;
 	for (let i = branch.length - 1; i >= floor; i--) {
+		if (branch[i].type === "compaction") continue;
 		accumulated += sessionEntryToContextMessages(branch[i]).reduce(
 			(sum, message) => sum + estimateTokens(message),
 			0,
@@ -308,7 +315,7 @@ export class MemoryController {
 			assertToolPairs(result);
 			const estimate =
 				result.reduce((total, message) => total + estimateTokens(message), 0) + textTokens(ctx.getSystemPrompt());
-			if (estimate > budget.threshold)
+			if (estimate > budget.inputLimit)
 				throw new Error(
 					"CONTEXT_INPUT_TOO_LARGE: request exceeds the input allowance; compact explicitly or split this input",
 				);
@@ -339,7 +346,7 @@ export class MemoryController {
 		const model = this.lastModel;
 		this.guarded(() => {
 			// Final payload also contains tool definitions and provider-specific context additions.
-			if (textTokens(JSON.stringify(payload)) > memoryBudget(model, this.host.config).threshold)
+			if (textTokens(JSON.stringify(payload)) > memoryBudget(model, this.host.config).inputLimit)
 				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the reserved input allowance");
 		});
 	}
@@ -385,7 +392,7 @@ export class MemoryController {
 			reason: event.reason,
 			willRetry: event.willRetry,
 			model: ctx.model?.id,
-			fields: { tokensBefore: event.preparation.tokensBefore },
+			fields: { tokensBefore: event.preparation.tokensBefore, writerCalls: 0, usageReports: 0 },
 		};
 		this.pending = pending;
 		const branch = structuredClone(this.host.session.getBranch());
@@ -399,7 +406,15 @@ export class MemoryController {
 			if (!ctx.model || !snapshot.leafId) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			event.signal.throwIfAborted();
 			const budget = memoryBudget(ctx.model, this.host.config);
-			const cut = chooseCut(branch, budget.recentTokens, event.willRetry);
+			// The host's next-response hook runs after a complete tool batch. At an automatic threshold,
+			// the default handover can cover that work instead of pinning the entire unfinished user turn.
+			// Manual compaction, overflow retry and explicit keep budgets retain their existing cuts.
+			const lastMessage = [...branch].reverse().find((entry) => entry.type === "message");
+			const releaseToolTurn =
+				event.reason === "threshold" && budget.recentTokens === 0 && lastMessage?.message.role === "toolResult";
+			if (releaseToolTurn)
+				assertToolPairs(this.host.session.buildContextEntries().flatMap(sessionEntryToContextMessages));
+			const cut = releaseToolTurn ? branch.length : chooseCut(branch, budget.recentTokens, event.willRetry);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT: no earlier evidence can be compacted");
 			const kept = branch.slice(cut).flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
 			assertToolPairs(kept);
@@ -430,14 +445,20 @@ export class MemoryController {
 				noteTokens: budget.noteTokens,
 				signal: event.signal,
 				customInstructions: event.customInstructions,
+				onProgress: (progress) => {
+					pending.writerModel = progress.writerModel;
+					Object.assign(pending.fields, {
+						writerCalls: progress.writerCalls,
+						usageReports: progress.usageReports,
+						writerEffort: progress.writerEffort,
+						...(progress.usage ? { usage: summarizeUsage(progress.usage) } : {}),
+					});
+				},
+			}).finally(() => {
+				pending.fields.writerMs = Math.round(performance.now() - writerStarted);
 			});
 			pending.writerModel = written.writerModel;
-			Object.assign(pending.fields, {
-				writerMs: Math.round(performance.now() - writerStarted),
-				chunkCount: written.chunkCount,
-				usage: summarizeUsage(written.usage),
-				writerEffort: written.writerEffort,
-			});
+			pending.fields.chunkCount = written.chunkCount;
 			event.signal.throwIfAborted();
 			if (
 				snapshot.sessionId !== this.host.session.getSessionId() ||

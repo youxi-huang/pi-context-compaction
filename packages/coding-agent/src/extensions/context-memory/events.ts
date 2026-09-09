@@ -52,6 +52,10 @@ export interface CompactionEvent extends EventBase {
 	compactMs?: number;
 	/** Wall-clock spent inside the writer calls. */
 	writerMs?: number;
+	/** Calls started, including calls that threw or returned an invalid note. Absent in older logs. */
+	writerCalls?: number;
+	/** Calls that returned usage. The remainder have unknown cost, not zero cost. */
+	usageReports?: number;
 	tokensBefore?: number;
 	/** Estimated tokens of note, system prompt and kept messages after compaction. */
 	tokensAfter?: number;

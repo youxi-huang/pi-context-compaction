@@ -82,8 +82,10 @@ export function readMemoryConfig(agentDir: string): Readonly<MemoryConfig> {
 export interface MemoryBudget {
 	capacity: number;
 	reserve: number;
-	/** Automatic compaction point and the input allowance for every request. */
+	/** Automatic compaction point; lowering it must not shrink the model's usable input window. */
 	threshold: number;
+	/** Final input safety limit, independent of the preferred compaction point. */
+	inputLimit: number;
 	noteTokens: number;
 	recentTokens: number;
 }
@@ -109,6 +111,7 @@ export function memoryBudget(
 		capacity,
 		reserve,
 		threshold,
+		inputLimit: capacity - reserve,
 		noteTokens: Math.max(500, Math.min(config.noteTokens, Math.floor(threshold * 0.15))),
 		recentTokens: Math.min(config.keepRecentTokens, Math.floor(threshold * 0.5)),
 	};

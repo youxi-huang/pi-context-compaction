@@ -6,7 +6,9 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
-Nothing yet.
+### Maintenance
+
+- Added `docs/context-memory/roadmap.md`: version policy, the four measurements, planned minor releases and the external baseline. Linked from the README.
 
 ## [v0.2.0] — 2026-09-09
 

@@ -103,12 +103,14 @@ export const EVENT_LOG_ROTATE_BYTES = 8 * 1024 * 1024;
 
 /** Reduce any error to a bounded class name. Free text never reaches the log. */
 export function errorCode(message: string | undefined, aborted = false): string {
-	const project = message?.match(/\b(?:CONTEXT|HISTORY)_[A-Z_]+/);
+	// Bounded input and bounded quantifiers only: provider error text is untrusted.
+	const text = (message ?? "").slice(0, 2000);
+	const project = text.match(/\b(?:CONTEXT|HISTORY)_[A-Z_]+/);
 	if (project) return project[0];
-	if (aborted || /\babort|\bcancel/i.test(message ?? "")) return "ABORTED";
-	const status = message?.match(/\b(?:status(?: code)?|HTTP)\s*:?\s*([45]\d\d)\b/i);
+	if (aborted || /\babort|\bcancel/i.test(text)) return "ABORTED";
+	const status = text.match(/\b(?:status(?: code)?|http)[\s:]{0,4}([45]\d\d)\b/i);
 	if (status) return `HTTP_${status[1]}`;
-	const errno = message?.match(/\bE[A-Z]{4,}\b/);
+	const errno = text.match(/\bE[A-Z]{4,}\b/);
 	if (errno) return errno[0];
 	return "UNKNOWN";
 }

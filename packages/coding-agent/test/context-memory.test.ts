@@ -33,7 +33,15 @@ import {
 } from "../src/extensions/context-memory/history.ts";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, hashEntries } from "../src/extensions/context-memory/identity.ts";
 import { SessionLease } from "../src/extensions/context-memory/lease.ts";
-import { latestMemory, type MemoryNote, validateNote } from "../src/extensions/context-memory/notes.ts";
+import {
+	checkpointLineage,
+	latestMemory,
+	lineageSentence,
+	type MemoryNote,
+	renderNote,
+	shrinkLineage,
+	validateNote,
+} from "../src/extensions/context-memory/notes.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -131,6 +139,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			selectedModel?: Model<Api>;
 			writerModel?: string;
 			keepRecentTokens?: number;
+			/** Register the fixed writer memory-test/memory-writer as a reasoning model. */
+			writerReasoning?: boolean;
 		} = {},
 	) {
 		const agentDir = fs.mkdtempSync(join(root, "agent-"));
@@ -140,7 +150,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 				enabled: options.enabled ?? true,
 				...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
 				writerModel: options.writerModel ?? "memory-test/memory-writer",
-				writerEffort: "medium",
+				// Distinct from the default session thinking level (medium) so the two sources stay distinguishable.
+				writerEffort: "low",
 				...(options.keepRecentTokens === undefined ? {} : { keepRecentTokens: options.keepRecentTokens }),
 			}),
 		);
@@ -152,7 +163,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		runtime.registerProvider(model.provider, {
 			api: model.api,
 			apiKey: "fake-test-key",
-			models: [selectedModel, { ...model, id: "memory-writer" }],
+			models: [selectedModel, { ...model, id: "memory-writer", reasoning: options.writerReasoning ?? false }],
 			streamSimple: () => {
 				requests++;
 				const stream = createAssistantMessageEventStream();
@@ -914,5 +925,136 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(() => readMemoryConfig(fractional)).toThrow("CONTEXT_CONFIG");
 		expect(memoryBudget(model).recentTokens).toBe(0);
 		expect(memoryBudget(model).noteTokens).toBe(3000);
+	});
+
+	it("the session writer reasons at the session's thinking level; a fixed writer keeps the configured effort", async () => {
+		const thinking: Model<Api> = { ...model, id: "memory-thinking", reasoning: true };
+		{
+			const store = manager(false);
+			const original = seed(store);
+			const { session, runtime, agentDir } = await sdk(store, { writerModel: "session", selectedModel: thinking });
+			const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+			session.setThinkingLevel("high");
+			await session.compact();
+			expect(writer.mock.calls[0][2]?.reasoning).toBe("high");
+			expect(events(agentDir).find((event) => event.event === "compaction")).toMatchObject({ writerEffort: "high" });
+			session.setThinkingLevel("off");
+			store.appendMessage({ role: "user", content: "More work without reasoning.", timestamp: 8 });
+			store.appendMessage(reply());
+			await session.compact();
+			expect(writer.mock.calls[1][2]?.reasoning).toBeUndefined();
+			expect(events(agentDir).filter((event) => event.event === "compaction")[1]).toMatchObject({
+				writerEffort: "off",
+			});
+		}
+		{
+			const store = manager(false);
+			const original = seed(store);
+			const { session, runtime } = await sdk(store, { selectedModel: thinking, writerReasoning: true });
+			const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+			session.setThinkingLevel("high");
+			await session.compact();
+			// A reasoning-capable fixed writer keeps the configured writerEffort, not the session level.
+			expect(writer.mock.calls[0][1].messages).toHaveLength(1);
+			expect(writer.mock.calls[0][2]?.reasoning).toBe("low");
+		}
+	});
+
+	it("earlier checkpoints stay listed in the note even when the newest writer output drops them", async () => {
+		const store = manager();
+		const original = seed(store);
+		const { session, runtime, agentDir } = await sdk(store, { writerModel: "session" });
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		const first = latestMemory(store.getBranch())!;
+		expect(first.entry.summary).not.toContain("## priorCheckpoints");
+		const revised = store.appendMessage({ role: "user", content: "Now document the deploy script.", timestamp: 9 });
+		store.appendMessage(reply());
+		// The second note mentions only the new phase; the first phase's decision is gone from the writer's output.
+		writer.mockResolvedValue(
+			reply(JSON.stringify(note(revised, "Deploy script documented.\n- dry-run first\n- then release. Tag it."))),
+		);
+		await session.compact();
+		const second = latestMemory(store.getBranch())!;
+		expect(second.memory.note.state.map((item) => item.text)).toEqual([
+			"Deploy script documented.\n- dry-run first\n- then release. Tag it.",
+		]);
+		// Session start appends model and thinking entries after "Ready.", so the anchor is that reply, not the leaf.
+		const ready = store
+			.getBranch()
+			.find(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.content[0]?.type === "text" &&
+					entry.message.content[0].text === "Ready.",
+			)!;
+		expect(ready.id).not.toBe(first.memory.coveredThrough);
+		expect(second.entry.summary).toContain(
+			`## priorCheckpoints\nEarlier checkpoints on this branch, oldest first, reduced to their opening state lines. Their originals are still on disk: search context_history for these topics. The IDs are search anchors, not citable sources; cite only IDs from the handover manifest.\n- through ${ready.id}: Use port 4317; port 9000 was rejected after the collision.`,
+		);
+		expect(second.entry.summary).not.toContain(first.entry.id);
+		expect(store.buildSessionContext().messages.map((message) => message.role)).toEqual(["compactionSummary"]);
+		// The anchor is readable through context_history; the checkpoint entry itself never is.
+		expect(queryHistory(freezeHistory(store), { operation: "read", entryId: ready.id }).entries[0].text).toBe(
+			"Ready.",
+		);
+		expect(() => queryHistory(freezeHistory(store), { operation: "read", entryId: first.entry.id })).toThrow(
+			"HISTORY_SCOPE_DENIED",
+		);
+		// The lineage is host-assembled from stored checkpoints; a leaf that is not an original is anchored earlier.
+		const lineage = checkpointLineage(store.getBranch());
+		expect(lineage.map((item) => item.checkpointId)).toEqual([first.entry.id, second.entry.id]);
+		expect(store.getEntry(first.memory.coveredThrough)?.type).not.toBe("message");
+		expect(lineage[0].anchor).toBe(ready.id);
+		expect(lineage[1].state).toEqual(["Deploy script documented."]);
+		// Trimming drops middle checkpoints first, then the newest; the oldest phase survives longest.
+		const items = ["a", "b", "c", "d"].map((id) => ({ checkpointId: id, anchor: id, state: [] }));
+		expect(shrinkLineage(items).map((item) => item.checkpointId)).toEqual(["a", "c", "d"]);
+		expect(shrinkLineage(shrinkLineage(shrinkLineage(items))).map((item) => item.checkpointId)).toEqual(["a"]);
+		expect(checkpointLineage(store.getBranch(), 80).map((item) => item.checkpointId)).toEqual([]);
+		expect(checkpointLineage(store.getBranch(), 120).map((item) => item.checkpointId)).toEqual([first.entry.id]);
+		expect(renderNote(note(original))).not.toContain("priorCheckpoints");
+		// Sentences are bounded by estimated tokens, so CJK text costs the same share of the budget as ASCII.
+		expect(lineageSentence("第一句。第二句。")).toBe("第一句。");
+		expect(lineageSentence("Alpha beta!  gamma")).toBe("Alpha beta!");
+		const long = lineageSentence("很长的一句话".repeat(40));
+		expect(long.endsWith("…")).toBe(true);
+		expect(Buffer.byteLength(long, "utf8") / 3).toBeLessThanOrEqual(50);
+		const logged = events(agentDir).filter((event) => event.event === "compaction");
+		expect(logged[0]).toMatchObject({ lineageTokens: 0 });
+		expect(logged[1].lineageTokens).toBeGreaterThan(0);
+		expect(logged[1].noteTokens).toBeLessThan(logged[1].tokensAfter!);
+	});
+
+	it("history search ranks conversation turns above tool output and newer entries first", () => {
+		const store = manager(false);
+		const early = store.appendMessage({ role: "user", content: "Let us compact the session later.", timestamp: 1 });
+		store.appendMessage({
+			...reply(),
+			content: [{ type: "toolCall", id: "call-1", name: "read", arguments: { path: "README.md" } }],
+			stopReason: "toolUse",
+		});
+		const dump = store.appendMessage({
+			role: "toolResult",
+			toolCallId: "call-1",
+			toolName: "read",
+			content: [{ type: "text", text: `compact ${"documentation ".repeat(400)}` }],
+			isError: false,
+			timestamp: 3,
+		});
+		const answer = store.appendMessage(reply("The compact command is manual."));
+		const late = store.appendMessage({ role: "user", content: "Run compact now.", timestamp: 5 });
+		const page = queryHistory(freezeHistory(store), { operation: "search", query: "compact" });
+		expect(page.entries.map((entry) => entry.entryId)).toEqual([late, early, answer, dump]);
+		expect(page.entries.map((entry) => entry.position)).toEqual([4, 0, 3, 2]);
+		// More matched terms outrank role: the tool result is the only entry that contains both words.
+		expect(
+			queryHistory(freezeHistory(store), { operation: "search", query: "compact documentation" }).entries[0].entryId,
+		).toBe(dump);
+		// An entry ID in the query still outranks everything else.
+		expect(
+			queryHistory(freezeHistory(store), { operation: "search", query: `compact ${dump}` }).entries[0].entryId,
+		).toBe(dump);
 	});
 });

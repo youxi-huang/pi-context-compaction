@@ -6,6 +6,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [v0.2.0] — 2026-09-09
+
+Low-friction compaction on the same Pi `v0.85.1` baseline, still an experimental source distribution and marked as a pre-release on GitHub. The session model writes its own handover note, nothing is kept after a checkpoint by default, a local event log records every attempt, and the first real two-checkpoint session drove three follow-up changes. See the validation record for what remains unproven.
+
 ### Changed
 
 - The default writer is now the session model itself (`"writerModel": "session"`). The compaction request is the session's own provider context plus one closing handover instruction, so no second model or additional authentication is needed and the provider's prompt cache can serve the request. A fixed `provider/model` writer remains available and behaves as before. Sessions that previously relied on the implicit `openai-codex/gpt-6-astra` default must now name it in `pi-context-memory.json` to keep using it. Neither writer falls back to the other; failure still blocks the next request.
@@ -17,8 +23,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - Pi's `findCutPoint` falls back to the latest cut point instead of the first when the keep budget is met inside the trailing entries of the last turn. Previously a branch ending in a tool result could not prepare a compaction with a small keep budget.
 - `scripts/context-memory-migrate.mjs --prepare` stops with a directed message when the writer is `session`, since the script has no live session; name a fixed writer for the run.
 - Compaction events and checkpoints record the writer that actually ran (`provider/model`), not the configuration string.
+- The `session` writer now reasons at the session's current thinking level, the way Pi's own summarizer does, instead of the configured `writerEffort`; `writerEffort` applies to a fixed writer only. A session with thinking off writes without reasoning. Compaction events record the effort actually sent as `writerEffort`. In a real two-checkpoint session on 2026-09-09 the session ran at `high` while both writer requests carried the configured `medium`; the two settings are now the same setting.
+- `context_history` search ranks matched entries by number of matched terms, then conversation turns (user, then assistant) above tool output, then newest first. Previously ties kept conversation order, so a single-word query opened with the earliest and usually longest tool result on the branch and filled the page with it. Results are therefore no longer chronological; each excerpt now carries `position`, its index on the branch, and the tool description says so. Cursors from earlier builds are rejected with `HISTORY_CURSOR_INVALID` because the ranking version is part of the cursor signature.
 
 ### Added
+
+- After a second checkpoint on a branch, the rendered note carries a `priorCheckpoints` section: the most recent earlier checkpoints (about three within a 600-token bound), oldest first, each as the nearest readable original at or before its `coveredThrough` plus the opening sentence of up to three state items, bounded by estimated tokens so Chinese and English cost the same share. When the bound is exceeded, middle checkpoints are dropped first and the newest last, so the oldest phase survives longest; the section also shrinks before a checkpoint would be refused for size. The host assembles it from stored checkpoints; the writer's JSON note and budget are unchanged, and the section states that its IDs are search anchors, not citable sources. Compaction events record its size as `lineageTokens`, separate from `noteTokens`. This keeps an earlier phase locatable through `context_history` when the newest note no longer mentions it: in a two-checkpoint session on 2026-09-09 the second note lost every conclusion and every entry-ID anchor from the first phase, keeping only a file read location.
 
 - `pi-context-memory.json` accepts `keepRecentTokens` (default `0`), `noteTokens` (default `3000`, minimum `500`) and `compactAt` (an integer token count above 1 or a window share at or below 1; unset by default). Malformed values fail with `CONTEXT_CONFIG` at startup; a `compactAt` too small for the selected model fails with `CONTEXT_CAPACITY` when that model is selected.
 - Local compaction event log. Each compaction attempt, request guard, `context_history` call and `context_note` candidate appends one JSON line to `context-memory-events.jsonl` in the agent directory, recording outcome, error class, durations, token counts, sizes and identifiers. No message text, note content, quotes, queries, file paths or free-form error text is written. Every session has a fixed quota per event kind; at 8 MB the file is renamed to `.1`, replacing the previous generation. `pi-context-memory.json` accepts `"eventLog": false` to disable it, and `"enabled": false` disables it as well; `/compaction-status` shows the log path and the last write error. `node scripts/context-memory-report.mjs` summarizes the log. Compaction behavior is unchanged.
@@ -73,7 +83,9 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.1...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.0...main
+[v0.2.0]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.0
+[v0.2.0 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.1
 [v0.1.1 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.0-alpha.1...v0.1.1
 [v0.1.0-alpha.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.0-alpha.1

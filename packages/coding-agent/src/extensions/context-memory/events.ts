@@ -10,7 +10,7 @@ import {
 	statSync,
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { Usage } from "@earendil-works/pi-ai";
+import type { ThinkingLevel, Usage } from "@earendil-works/pi-ai";
 import { isRecord } from "./identity.ts";
 
 /**
@@ -64,6 +64,10 @@ export interface CompactionEvent extends EventBase {
 	increments?: number;
 	chunkCount?: number;
 	usage?: UsageSummary;
+	/** Reasoning effort sent with the writer request, or `off`. */
+	writerEffort?: ThinkingLevel | "off";
+	/** Estimated tokens of the host-assembled priorCheckpoints section; `noteTokens` measures the note alone. */
+	lineageTokens?: number;
 	checkpointId?: string;
 }
 

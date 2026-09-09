@@ -105,6 +105,10 @@ function summarize(events) {
 			total: compactions.length,
 			byOutcome: tally(compactions, (event) => event.outcome),
 			byReason: tally(compactions, (event) => event.reason),
+			writerEffort: tally(
+				compactions.filter((event) => event.writerEffort !== undefined),
+				(event) => event.writerEffort,
+			),
 			errorCodes: tally(failed, (event) => event.errorCode ?? "UNKNOWN"),
 			compactMs: distribution(committed.map((event) => event.compactMs).filter(Number.isFinite)),
 			writerMs: distribution(committed.map((event) => event.writerMs).filter(Number.isFinite)),
@@ -172,6 +176,7 @@ function printText(summary, options) {
 	console.log("");
 	console.log(`Compactions: ${compactions.total} (${formatCounts(compactions.byOutcome)}); reasons: ${formatCounts(compactions.byReason)}`);
 	console.log(`Failure classes: ${formatCounts(compactions.errorCodes)}`);
+	console.log(`Writer effort (attempts that reached the writer): ${formatCounts(compactions.writerEffort)}`);
 	console.log(formatDistribution("Compaction pause (committed)", compactions.compactMs, " ms"));
 	console.log(formatDistribution("Writer time (committed)", compactions.writerMs, " ms"));
 	console.log(formatDistribution("Time to failure", compactions.failedCompactMs, " ms"));

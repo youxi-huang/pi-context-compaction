@@ -71,7 +71,7 @@ export function memoryExtension(host: MemoryHost, controller: MemoryController) 
 			name: "context_history",
 			label: "Context history",
 			description:
-				"Search or read original history on the current branch. Returns entry IDs, roles, branch anchors and a continuation cursor. Use a host-issued grantId only for explicitly inherited parent evidence. Never infer a missing or truncated result.",
+				"Search or read original history on the current branch. Returns entry IDs, roles, branch positions and a continuation cursor. Search results are ranked (more matched terms first, then user and assistant turns above tool output, then newest first), not chronological; use position to order them. Use a host-issued grantId only for explicitly inherited parent evidence. Never infer a missing or truncated result.",
 			promptGuidelines: [
 				"For earlier decisions or tool evidence omitted by compaction, search context_history, then read the matching entry ID. Follow a returned cursor to read the remaining source.",
 			],

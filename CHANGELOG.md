@@ -9,6 +9,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Maintenance
 
 - Added `docs/context-memory/roadmap.md`: version policy, the four measurements, planned minor releases and the external baseline. Linked from the README.
+- Replaced the inherited upstream `AGENTS.md` with project-level agent instructions. The upstream file is retained as `UPSTREAM_AGENTS.md`. Previously an automated agent reading the repository root would have followed upstream Pi's release, test and changelog rules, which do not apply here.
+- Added `docs/context-memory/upstream-delta.md`: the upstream baseline, what is new, and the seven host source files with the reason each one is changed. `THIRD_PARTY_NOTICES.md` previously counted six; the one-line `findCutPoint` change in `core/compaction/compaction.ts` from v0.2.0 is the seventh.
+- The README now opens with the project's identity (experimental distribution, not a Pi package), the problem it addresses, the intended end state and what has actually been verified. No behavior described elsewhere in the README changed.
+- Corrected the host security regression count in `docs/context-memory/validation.md` from 429 to 111, which is what `scripts/security-regression-check.mjs` reports. The v0.2.0 release notes already said 111.
 
 ## [v0.2.0] — 2026-09-09
 

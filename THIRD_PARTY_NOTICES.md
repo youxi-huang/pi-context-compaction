@@ -6,7 +6,7 @@ This distribution is based on [earendil-works/pi](https://github.com/earendil-wo
 
 Pi is MIT licensed, copyright 2025 Mario Zechner. Its original license is retained in `LICENSE`. Existing notices in source files remain in place. Dependency metadata and upstream package names identify their original authors; this repository does not publish packages under those names.
 
-The source was imported as a clean upstream snapshot. Upstream repository automation, development-agent resources and hooks were omitted. This repository has its own documentation and verification workflow. Context-memory runtime, tests and migration tooling are additions; six host source files are adapted to integrate them.
+The source was imported as a clean upstream snapshot. Upstream repository automation and hooks were omitted. The upstream README, contributing guide and agent development rules are retained for reference as `UPSTREAM_README.md`, `UPSTREAM_CONTRIBUTING.md` and `UPSTREAM_AGENTS.md`; they describe upstream Pi and are not this repository's process. This repository has its own documentation and verification workflow. Context-memory runtime, tests and migration tooling are additions; seven host source files are adapted to integrate them, listed with reasons in `docs/context-memory/upstream-delta.md`.
 
 The new context-memory implementation and release tooling are copyright 2026 youxi-huang, licensed under MIT. Each dependency retains its own license; this statement does not relicense dependencies.
 

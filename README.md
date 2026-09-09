@@ -1,12 +1,41 @@
 # Pi Context Compaction
 
-Context compaction for [Pi](https://github.com/earendil-works/pi), with source-linked notes, original-history retrieval and write safeguards.
+Context compaction for [Pi](https://github.com/earendil-works/pi) that keeps the original transcript as the source of truth: notes cite the records they came from, and the model can read those records back after compaction.
 
-**Latest tagged release: `v0.2.0`, an experimental source distribution based on Pi `v0.85.1`.** This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading. It is not a drop-in extension for an unmodified Pi installation.
+| | |
+| --- | --- |
+| **Project type** | Experimental Pi distribution, built from source. Not a Pi package. It cannot be added to an unmodified Pi installation with `pi install`. |
+| **Upstream baseline** | Pi `v0.85.1`, commit `d981de12`, imported as a clean snapshot. |
+| **What is new** | One extension directory, seven adapted host files, project scripts, tests and docs. See [upstream delta](docs/context-memory/upstream-delta.md). |
+| **Latest release** | `v0.2.0`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
+| **Ordinary extension packaging** | Planned for 1.0, when the host changes are thin enough to submit upstream. See the [roadmap](docs/context-memory/roadmap.md). |
 
-At compaction, the writer produces a structured note from original session records. The next model can retrieve earlier messages and tool results through `context_history`, including the entry IDs behind a decision. After a second checkpoint the note also lists the most recent earlier checkpoints on the branch, about three within a 600-token bound, each with a readable anchor entry and its opening state lines, so a phase the newest note no longer describes still has a search anchor. Optional `context_note` calls supply candidates; boundary compaction still works if a model never calls that tool.
+## The problem, and where this is going
 
-The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store.
+A long coding session outlives its context window. When Pi compacts, everything that fell out of the window survives only as a summary, and the summary keeps what the summarizer judged important at that moment. A decision from the first hour, a constraint the user stated once, the tool output that showed why an approach failed: each is either in the summary or gone, and the model that continues cannot tell which. So it guesses, or it asks again, and the user finds out later which one it did.
+
+This project changes what a compaction leaves behind.
+
+```
+Pi's native compaction
+
+  original messages  ->  summary  ->  the summary is all that remains
+
+This project
+
+  original JSONL  ->  note citing entry IDs  ->  compacted context
+        ^                                              |
+        |                context_history               |
+        +----------------------------------------------+
+```
+
+At compaction, the writer produces a structured note from the original session records. Every quotation in the note is checked verbatim against the record it cites, and every cited record must be on the current branch; a note that fails these checks is refused rather than committed. The original JSONL stays on disk as the history store. After compaction the model can search the branch and read the exact earlier message through `context_history`, including the entry IDs behind a decision. The note is an index over the transcript, not a replacement for it. After a second checkpoint the note also lists the most recent earlier checkpoints on the branch, each with a readable anchor entry and its opening state lines, so a phase the newest note no longer describes still has a search anchor.
+
+The end state this is built toward is a session that runs for days, compacts many times, and never asks the user to repeat something already said. You come back the next morning, ask why the schema was changed, and the model reads yesterday's decision back from the record by entry ID instead of guessing from a summary. A model that checks the record when it is unsure instead of reconstructing it from a summary. A compaction that costs a few seconds and a small share of the window, so it stops being an event anyone notices. And a host patch thin enough that all of this ships as an ordinary Pi extension. The [roadmap](docs/context-memory/roadmap.md) states the four measurements that decide whether each release moves closer: how many probe questions a model still answers correctly after compaction, how long the pause takes, how many tokens the writer spends, and how many host lines remain changed.
+
+What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a two-checkpoint session; 34 context-memory regressions and 111 host security regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
+
+The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store. This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading, which is why it is a distribution rather than a drop-in extension.
 
 ## What it provides
 

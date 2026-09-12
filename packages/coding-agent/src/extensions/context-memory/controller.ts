@@ -30,10 +30,12 @@ import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "
 import {
 	checkpointLineage,
 	hashEntries,
+	inProgressRequests,
 	latestMemory,
 	type MemoryCheckpoint,
 	type MemoryNote,
 	noteIncrements,
+	renderContinuation,
 	renderNote,
 	type SourceSnapshot,
 	shrinkLineage,
@@ -73,6 +75,7 @@ interface PendingCompaction {
 			| "writerMs"
 			| "writerEffort"
 			| "lineageTokens"
+			| "continuationTokens"
 			| "writerCalls"
 			| "usageReports"
 		>
@@ -307,6 +310,15 @@ export class MemoryController {
 		this.refresh(ctx.model);
 		const branch = this.host.session.getBranch();
 		const checkpoint = latestMemory(branch);
+		this.guarded(() => {
+			// The resident runs after ordinary context handlers. A committed note must actually be restored,
+			// not merely exist on disk while a filter removes it or substitutes a stale task summary.
+			if (checkpoint) {
+				const restored = messages.filter((message) => message.role === "compactionSummary");
+				if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary)
+					throw new Error("CONTEXT_RECOVERY_MISSING: the current checkpoint must remain in model context");
+			}
+		});
 		const increments = noteIncrements(branch, checkpoint?.entry.id);
 		const model = ctx.model;
 		const budget = this.guarded(() => memoryBudget(model, this.host.config));
@@ -345,8 +357,12 @@ export class MemoryController {
 		if (!this.host.config.enabled || !this.lastModel) return;
 		const model = this.lastModel;
 		this.guarded(() => {
+			const serialized = JSON.stringify(payload);
+			const checkpoint = latestMemory(this.host.session.getBranch());
+			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1)))
+				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost or changed the current checkpoint");
 			// Final payload also contains tool definitions and provider-specific context additions.
-			if (textTokens(JSON.stringify(payload)) > memoryBudget(model, this.host.config).inputLimit)
+			if (textTokens(serialized ?? "") > memoryBudget(model, this.host.config).inputLimit)
 				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the reserved input allowance");
 		});
 	}
@@ -410,15 +426,42 @@ export class MemoryController {
 			// the default handover can cover that work instead of pinning the entire unfinished user turn.
 			// Manual compaction, overflow retry and explicit keep budgets retain their existing cuts.
 			const lastMessage = [...branch].reverse().find((entry) => entry.type === "message");
-			const releaseToolTurn =
+			const automaticToolHandover =
 				event.reason === "threshold" && budget.recentTokens === 0 && lastMessage?.message.role === "toolResult";
-			if (releaseToolTurn)
+			// Keep the entire current user request and any steering within the unfinished turn independent
+			// of the writer's selection. Earlier checkpoints do not terminate that turn.
+			const activeRequests = automaticToolHandover ? inProgressRequests(branch) : [];
+			if (automaticToolHandover && !activeRequests.length)
+				throw new Error("CONTEXT_CONTINUATION_MISSING: cannot identify the unfinished user request");
+			// Text notes cannot carry image content. Retain the original turn in that case rather than
+			// silently replacing an image-bearing request with a placeholder.
+			const releaseToolTurn =
+				automaticToolHandover &&
+				activeRequests.every(
+					(entry) =>
+						entry.type === "message" &&
+						entry.message.role === "user" &&
+						(typeof entry.message.content === "string" ||
+							entry.message.content.every((part) => part.type === "text")),
+				);
+			if (automaticToolHandover)
 				assertToolPairs(this.host.session.buildContextEntries().flatMap(sessionEntryToContextMessages));
-			const cut = releaseToolTurn ? branch.length : chooseCut(branch, budget.recentTokens, event.willRetry);
+			const cut = releaseToolTurn
+				? branch.length
+				: automaticToolHandover
+					? branch.findIndex((entry) => entry.id === activeRequests[0].id)
+					: chooseCut(branch, budget.recentTokens, event.willRetry);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT: no earlier evidence can be compacted");
 			const kept = branch.slice(cut).flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
 			assertToolPairs(kept);
 			const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			const continuation = releaseToolTurn ? renderContinuation(activeRequests) : "";
+			const continuationTokens = textTokens(continuation);
+			pending.fields.continuationTokens = continuationTokens;
+			if (continuationTokens + textTokens(ctx.getSystemPrompt()) > budget.threshold)
+				throw new Error(
+					"CONTEXT_RECOVERY_TOO_LARGE: the complete active request cannot fit; no checkpoint was committed",
+				);
 			const session = this.host.config.writerModel === SESSION_WRITER;
 			pending.writerModel = this.writerStatus(ctx.model).writer;
 			const previous = latestMemory(branch);
@@ -445,6 +488,7 @@ export class MemoryController {
 				noteTokens: budget.noteTokens,
 				signal: event.signal,
 				customInstructions: event.customInstructions,
+				activeRequests: releaseToolTurn ? activeRequests : undefined,
 				onProgress: (progress) => {
 					pending.writerModel = progress.writerModel;
 					Object.assign(pending.fields, {
@@ -470,7 +514,9 @@ export class MemoryController {
 			// The list has no reserved budget: it shrinks before the checkpoint is refused for size.
 			const noteTokens = textTokens(renderNote(written.note));
 			const fixedAfter =
-				textTokens(ctx.getSystemPrompt()) + kept.reduce((total, message) => total + estimateTokens(message), 0);
+				textTokens(ctx.getSystemPrompt()) +
+				continuationTokens +
+				kept.reduce((total, message) => total + estimateTokens(message), 0);
 			let lineage = checkpointLineage(branch);
 			let summary = renderNote(written.note, lineage);
 			while (lineage.length && textTokens(summary) + fixedAfter > budget.threshold) {
@@ -482,7 +528,7 @@ export class MemoryController {
 			if (tokensAfter > budget.threshold)
 				throw new Error("CONTEXT_RECOVERY_TOO_LARGE: note and complete recent tool rounds cannot fit");
 			return {
-				summary,
+				summary: summary + continuation,
 				firstKeptEntryId,
 				tokensBefore: event.preparation.tokensBefore,
 				usage: written.usage,
@@ -496,6 +542,7 @@ export class MemoryController {
 					writerModel: written.writerModel,
 					chunkCount: written.chunkCount,
 					build: CONTEXT_MEMORY_BUILD,
+					...(releaseToolTurn ? { continuation: activeRequests.map((entry) => entry.id) } : {}),
 				},
 			};
 		} catch (error) {

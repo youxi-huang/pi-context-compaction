@@ -118,7 +118,12 @@ export const historyQuerySchema = Type.Object(
 		operation: Type.Union([Type.Literal("search"), Type.Literal("read")]),
 		query: Type.Optional(Type.String({ maxLength: 1000 })),
 		entryId: Type.Optional(Type.String({ maxLength: 64 })),
-		cursor: Type.Optional(Type.String({ maxLength: 2000 })),
+		cursor: Type.Optional(
+			Type.String({
+				maxLength: 2000,
+				description: "Continuation cursor. Repeat the original operation, query, entryId and grantId unchanged.",
+			}),
+		),
 		grantId: Type.Optional(Type.String({ maxLength: 128 })),
 	},
 	{ additionalProperties: false },
@@ -183,7 +188,9 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 			Number(cursor.index) < 0 ||
 			Number(cursor.offset) < 0
 		) {
-			throw new Error("HISTORY_CURSOR_INVALID: restart the query on the current branch");
+			throw new Error(
+				"HISTORY_CURSOR_INVALID: repeat the original operation, query, entryId and grantId with the cursor, or restart the query on the current branch",
+			);
 		}
 		if (cursor.scope !== snapshot.scopeHash) {
 			const end = snapshot.entries.findIndex((entry) => entry.id === cursor.leafId);

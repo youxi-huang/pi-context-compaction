@@ -7,7 +7,7 @@ Context compaction for [Pi](https://github.com/earendil-works/pi) that keeps the
 | **Project type** | Experimental Pi distribution, built from source. Not a Pi package. It cannot be added to an unmodified Pi installation with `pi install`. |
 | **Upstream baseline** | Pi `v0.85.1`, commit `d981de12`, imported as a clean snapshot. |
 | **What is new** | One extension directory, seven adapted host files, project scripts, tests and docs. See [upstream delta](docs/context-memory/upstream-delta.md). |
-| **Latest release** | `v0.2.1`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
+| **Latest release** | `v0.2.2`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
 | **Ordinary extension packaging** | Planned for 1.0, when the host changes are thin enough to submit upstream. See the [roadmap](docs/context-memory/roadmap.md). |
 
 ## The problem, and where this is going
@@ -33,7 +33,7 @@ At compaction, the writer produces a structured note from the original session r
 
 The end state this is built toward is a session that runs for days, compacts many times, and never asks the user to repeat something already said. You come back the next morning, ask why the schema was changed, and the model reads yesterday's decision back from the record by entry ID instead of guessing from a summary. A model that checks the record when it is unsure instead of reconstructing it from a summary. A compaction that costs a few seconds and a small share of the window, so it stops being an event anyone notices. And a host patch thin enough that all of this ships as an ordinary Pi extension. The [roadmap](docs/context-memory/roadmap.md) states the four measurements that decide whether each release moves closer: how many probe questions a model still answers correctly after compaction, how long the pause takes, how many tokens the writer spends, and how many host lines remain changed.
 
-What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a two-checkpoint session; 43 context-memory regressions and 429 host security and compatibility regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
+What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a nine-checkpoint Astra stress sequence; 54 context-memory regressions and 429 host security and compatibility regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
 
 The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store. This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading, which is why it is a distribution rather than a drop-in extension.
 
@@ -50,6 +50,8 @@ The [architecture](docs/context-memory/architecture.md) explains the host bounda
 
 The [changelog](CHANGELOG.md) separates released versions from changes on `main` that have not been released. The build instructions below check out the latest release tag and do not include those unreleased changes.
 
+v0.2.2 recovery hardening preserves original in-progress user requests independently of the writer, rejects handovers without a continuation step, and blocks requests when a committed recovery note has been removed or changed. It also refuses damaged checkpoints on reopen. These changes have synthetic regression coverage and one passing live Astra sequence after a budget failure and correction. The 10k stress run exposed substantial compaction pauses and retrieval overhead. See [architecture](docs/context-memory/architecture.md#continuation-protections) for capacity and provider-adapter limits and [validation](docs/context-memory/validation.md#astra-10k-live-check-2026-09-12-utc) for the results and their limits.
+
 ## Build from source
 
 Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent sessions currently support macOS and Linux.
@@ -57,7 +59,7 @@ Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent session
 ```sh
 git clone https://github.com/youxi-huang/pi-context-compaction.git
 cd pi-context-compaction
-git checkout v0.2.1
+git checkout v0.2.2
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
 node scripts/stamp-context-memory.mjs

@@ -57,3 +57,7 @@ To reproduce the count, check out upstream `v0.85.1` next to this repository and
 ## Build fingerprint
 
 `scripts/stamp-context-memory.mjs` hashes the upstream commit, the host files and every `.ts` file in the extension directory into a build string of the form `0.85.1-context-memory.<project version>+src.<hash>`. The string is shown by `/compaction-status` and recorded in every compaction event, so a report can be tied to the exact source that produced it. Any new host change must be added to the file list in that script.
+
+## Test dependency maintenance
+
+v0.2.2 updates Vitest and its matching coverage packages from 4.1.9 to 4.1.11 for GHSA-82fw-gwwq-j7x9. The ten workspace manifests and root workspace lock move together. Generated production shrinkwrap and installer locks are checked with the existing generators; this development-only patch does not change the seven compaction host files or production dependency versions.

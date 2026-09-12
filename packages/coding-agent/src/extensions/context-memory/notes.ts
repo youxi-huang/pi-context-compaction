@@ -53,6 +53,8 @@ export interface MemoryCheckpoint {
 	writerModel: string;
 	chunkCount: number;
 	build: string;
+	/** Original user entries pinned by the controller when releasing an unfinished tool turn. */
+	continuation?: string[];
 }
 
 export function sourceText(entry: SessionEntry): string {
@@ -90,9 +92,28 @@ export function sourceRole(entry: SessionEntry): string {
 	return entry.type === "message" ? entry.message.role : entry.type;
 }
 
+/** Original requests and steering since the last completed response; checkpoints do not finish a turn. */
+export function inProgressRequests(branch: readonly SessionEntry[]): SessionEntry[] {
+	let lastCompleted = -1;
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "stop") {
+			lastCompleted = index;
+			break;
+		}
+	}
+	return branch.slice(lastCompleted + 1).filter((entry) => entry.type === "message" && entry.message.role === "user");
+}
+
+export function renderContinuation(requests: readonly SessionEntry[]): string {
+	return `\n\n## In-progress user requests\nThis checkpoint was taken between tool batches, before the current turn completed. Continue the unfinished work from its recorded progress; do not restart completed steps or treat this internal handover as a new task. The following original user messages are in chronological order, not new submissions. Later user messages override earlier ones. Consult context_history for earlier constraints or evidence missing from the note.\n${requests.map((entry) => JSON.stringify({ entryId: entry.id, request: sourceText(entry) })).join("\n")}`;
+}
+
 export function validateNote(value: unknown, sources: readonly SessionEntry[], maxTokens = 6000): MemoryNote {
 	if (!Check(noteSchema, value)) throw new Error("CONTEXT_NOTE_INVALID: writer must return the complete note schema");
-	if (textTokens(JSON.stringify(value)) > maxTokens) throw new Error("CONTEXT_NOTE_BUDGET: note exceeds its budget");
+	const estimatedTokens = textTokens(JSON.stringify(value));
+	if (estimatedTokens > maxTokens)
+		throw new Error(`CONTEXT_NOTE_BUDGET: note uses ${estimatedTokens} estimated tokens; limit is ${maxTokens}`);
 	const byId = new Map(sources.map((entry) => [entry.id, entry]));
 	for (const section of noteSections) {
 		for (const item of value[section]) {
@@ -122,8 +143,23 @@ export function latestMemory(
 		)
 			throw new Error("CONTEXT_NOTE_VERSION: unsupported or malformed memory checkpoint");
 		const end = branch.findIndex((item) => item.id === data.coveredThrough);
-		if (end < 0 || end >= i || hashEntries(branch.slice(0, end + 1)) !== data.sourceHash) return undefined;
-		validateNote(data.note, branch.slice(0, i));
+		if (end < 0 || end >= i || hashEntries(branch.slice(0, end + 1)) !== data.sourceHash)
+			throw new Error("CONTEXT_SOURCE_CHANGED: the stored checkpoint no longer matches its original evidence");
+		const note = validateNote(data.note, branch.slice(0, i));
+		if (!entry.summary.startsWith(renderNote(note)))
+			throw new Error("CONTEXT_NOTE_INVALID: the restored summary does not match the validated note");
+		if (data.continuation !== undefined) {
+			const requests = inProgressRequests(branch.slice(0, end + 1));
+			if (
+				!requests.length ||
+				JSON.stringify(data.continuation) !== JSON.stringify(requests.map((request) => request.id)) ||
+				!entry.summary.endsWith(renderContinuation(requests)) ||
+				!note.nextSteps.some((step) => step.text.trim())
+			)
+				throw new Error(
+					"CONTEXT_CONTINUATION_MISSING: the checkpoint lost its active requests or continuation step",
+				);
+		}
 		return { entry, memory: data as unknown as MemoryCheckpoint };
 	}
 	return undefined;

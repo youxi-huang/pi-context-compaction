@@ -16,6 +16,7 @@ import { dirname, join } from "node:path";
 import type { FileEntry, SessionEntry } from "../../core/session-manager.ts";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, hashEntries, isRecord } from "./identity.ts";
 import { canonicalSessionPath, SessionLease } from "./lease.ts";
+import { latestMemory } from "./notes.ts";
 
 function stamp(file: string): string | undefined {
 	if (!existsSync(file)) return undefined;
@@ -39,6 +40,9 @@ export function assertReadableBranch(branch: readonly SessionEntry[]): void {
 			"CONTEXT_MIGRATION_REQUIRED: this branch contains an opaque checkpoint; migrate a verified copy before resuming",
 		);
 	}
+	// The summary is model-visible even when no writer runs. Refuse damaged memory checkpoints on
+	// reopen and in fallback mode rather than treating them as if no checkpoint existed.
+	latestMemory(branch);
 }
 
 export function assertCandidate(entry: SessionEntry, sessionId: string, branch: readonly SessionEntry[]): void {
@@ -55,6 +59,7 @@ export function assertCandidate(entry: SessionEntry, sessionId: string, branch: 
 	) {
 		throw new Error("CONTEXT_SOURCE_CHANGED: checkpoint no longer matches its source branch");
 	}
+	latestMemory([...branch, entry]);
 }
 
 /** Disk mechanics only. The owner publishes its in-memory tree after these calls succeed. */

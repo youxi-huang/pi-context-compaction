@@ -72,6 +72,8 @@ export interface CompactionEvent extends EventBase {
 	writerEffort?: ThinkingLevel | "off";
 	/** Estimated tokens of the host-assembled priorCheckpoints section; `noteTokens` measures the note alone. */
 	lineageTokens?: number;
+	/** Host-pinned original user requests for an in-task handover, separate from writer note and lineage. */
+	continuationTokens?: number;
 	checkpointId?: string;
 }
 
@@ -128,6 +130,7 @@ export const PROJECT_CODES: ReadonlySet<string> = new Set([
 	"CONTEXT_CAPACITY",
 	"CONTEXT_COMPACTOR_CONFLICT",
 	"CONTEXT_CONFIG",
+	"CONTEXT_CONTINUATION_MISSING",
 	"CONTEXT_EXTERNAL_WRITE",
 	"CONTEXT_INPUT_TOO_LARGE",
 	"CONTEXT_LOCK_CHANGED",
@@ -148,6 +151,7 @@ export const PROJECT_CODES: ReadonlySet<string> = new Set([
 	"CONTEXT_NOTE_SCOPE",
 	"CONTEXT_NOTE_VERSION",
 	"CONTEXT_PAYLOAD_TOO_LARGE",
+	"CONTEXT_RECOVERY_MISSING",
 	"CONTEXT_RECOVERY_TOO_LARGE",
 	"CONTEXT_RESIDENT_NOT_INITIALIZED",
 	"CONTEXT_RESIDENT_REQUIRED",

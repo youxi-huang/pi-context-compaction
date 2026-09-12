@@ -3,11 +3,14 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { type Api, type AssistantMessage, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import type { ExtensionFactory } from "../src/core/extensions/types.ts";
+import { prepareCompaction } from "../src/core/compaction/compaction.ts";
+import type { ExtensionFactory, SessionBeforeCompactResult } from "../src/core/extensions/types.ts";
+import { convertToLlm } from "../src/core/messages.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -324,6 +327,9 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		const initial = freezeHistory(store);
 		const page = queryHistory(initial, { operation: "read", entryId: first }, 800);
 		expect(page.cursor).toBeTruthy();
+		expect(() => queryHistory(initial, { operation: "read", cursor: page.cursor }, 800)).toThrow(
+			"repeat the original operation, query, entryId and grantId",
+		);
 		const child = store.appendMessage(reply("a tool interaction appended while reading"));
 		const next = queryHistory(freezeHistory(store), { operation: "read", entryId: first, cursor: page.cursor }, 800);
 		expect(next.entries[0].offset).toBe(page.entries[0].text.length);
@@ -419,6 +425,46 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		}
 	});
 
+	it.each(["missing", "stale"])("a %s recovery note cannot reach the model after a checkpoint", async (mode) => {
+		const store = manager();
+		const original = seed(store);
+		const { session, runtime, requests, agentDir } = await sdk(store, {
+			extensions: [
+				(pi) =>
+					pi.on("context", (event) => ({
+						messages: event.messages.flatMap<AgentMessage>((message) =>
+							message.role !== "compactionSummary"
+								? [message]
+								: mode === "missing"
+									? []
+									: [{ ...message, summary: "An older task was already complete." }],
+						),
+					})),
+			],
+		});
+		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		await session.prompt("Continue the current task, not an older one.");
+		expect(requests()).toBe(0);
+		expect(events(agentDir)).toContainEqual(
+			expect.objectContaining({ event: "guard", code: "CONTEXT_RECOVERY_MISSING" }),
+		);
+	});
+
+	it("the final payload must still carry the committed recovery note", async () => {
+		const store = manager();
+		const original = seed(store);
+		const { session, runtime } = await sdk(store);
+		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		await expect(
+			session.extensionRunner.emitBeforeProviderRequest({ messages: convertToLlm([...session.messages]) }),
+		).resolves.toBeDefined();
+		await expect(
+			session.extensionRunner.emitBeforeProviderRequest({ messages: [{ role: "user", content: "Continue." }] }),
+		).rejects.toThrow("CONTEXT_RECOVERY_MISSING");
+	});
+
 	it("two checkpoints retain raw-source coverage and latest decisions across reopen", async () => {
 		const store = manager();
 		const original = seed(store);
@@ -448,6 +494,36 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			"9000",
 		);
 	});
+
+	it.each(["source", "summary"])(
+		"a checkpoint with damaged %s is refused on reopen without rewriting history",
+		async (damage) => {
+			const store = manager();
+			const original = seed(store);
+			const { session, runtime } = await sdk(store);
+			vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+			await session.compact();
+			const file = store.getSessionFile()!;
+			session.dispose();
+			const entries = loadEntriesFromFile(file);
+			if (damage === "source") {
+				const source = entries.find((entry) => entry.type === "message" && entry.id === original);
+				if (source?.type !== "message" || source.message.role !== "user")
+					throw new Error("Missing synthetic source");
+				source.message.content = "A different, outdated task.";
+			} else {
+				const checkpoint = entries.find((entry) => entry.type === "compaction");
+				if (checkpoint?.type !== "compaction") throw new Error("Missing synthetic checkpoint");
+				checkpoint.summary = "No task is active. Ask the user what to do.";
+			}
+			const damaged = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+			fs.writeFileSync(file, damaged);
+			expect(() => SessionManager.open(file)).toThrow(
+				damage === "source" ? "CONTEXT_SOURCE_CHANGED" : "CONTEXT_NOTE_INVALID",
+			);
+			expect(fs.readFileSync(file, "utf8")).toBe(damaged);
+		},
+	);
 
 	it("a failed automatic compact blocks the following provider request and does not retry the writer", async () => {
 		const store = manager(false);
@@ -733,6 +809,36 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(originalParts.join("")).toBe(content);
 		expect(result.usage?.input).toBe(writer.mock.calls.length * usage.input);
 	});
+
+	it.each(["session", "memory-test/memory-writer"])(
+		"a 10k threshold gives %s the byte budget and rejects excess without truncation or a paid retry",
+		async (writerModel) => {
+			const store = manager();
+			const original = seed(store);
+			const { session, runtime, agentDir } = await sdk(store, { writerModel, compactAt: 10_000 });
+			// Unicode makes the byte-based allowance differ from character count or provider token usage.
+			const oversized = note(original, "界".repeat(1600));
+			const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(oversized)));
+			await expect(session.compact()).rejects.toThrow(
+				/CONTEXT_NOTE_BUDGET: note uses \d+ estimated tokens; limit is 1500/,
+			);
+			const [, context] = writer.mock.calls[0];
+			const prompt = JSON.stringify(context);
+			expect(prompt).toContain("4500 UTF-8 bytes");
+			expect(prompt).toContain("at most 3375 bytes");
+			expect(latestMemory(store.getBranch())).toBeUndefined();
+			await expect(session.extensionRunner.emitBeforeProviderRequest({})).rejects.toThrow("CONTEXT_BLOCKED");
+			expect(writer).toHaveBeenCalledTimes(1);
+			expect(events(agentDir).filter((event) => event.event === "compaction")).toEqual([
+				expect.objectContaining({
+					outcome: "failed",
+					errorCode: "CONTEXT_NOTE_BUDGET",
+					writerCalls: 1,
+					usageReports: 1,
+				}),
+			]);
+		},
+	);
 
 	it("the session writer reuses the current provider prefix and leaves only the note in context", async () => {
 		const store = manager();
@@ -1133,9 +1239,9 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		const writer = vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
 			const user = store.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user");
 			if (!user) throw new Error("Expected original user ruling");
-			return reply(
-				JSON.stringify(note(user.id, "Finish the ledger audit. Only the requested output may be written.")),
-			);
+			const handover = note(user.id, "Ledger inspected; the remaining audit is unfinished.");
+			handover.nextSteps = [{ text: "Complete the remaining reads and report the audit.", sources: [user.id] }];
+			return reply(JSON.stringify(handover));
 		});
 		await session.prompt(
 			"Inspect the ledger three times and finish the audit. Only the requested output may be written.",
@@ -1145,7 +1251,13 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		expect(session.getLastAssistantText()).toBe("Audit complete.");
 		const checkpoints = store.getBranch().filter((entry) => entry.type === "compaction");
 		expect(checkpoints).toHaveLength(2);
-		for (const checkpoint of checkpoints) expect(checkpoint.firstKeptEntryId).toBe(CONTEXT_KEEP_NONE);
+		for (const checkpoint of checkpoints) {
+			expect(checkpoint.firstKeptEntryId).toBe(CONTEXT_KEEP_NONE);
+			// The writer omitted this exact constraint; the controller must carry the original request itself.
+			expect(checkpoint.summary).toContain(
+				"Inspect the ledger three times and finish the audit. Only the requested output may be written.",
+			);
+		}
 		const compactions = events(agentDir).filter((event) => event.event === "compaction");
 		expect(compactions).toHaveLength(2);
 		for (const event of compactions)
@@ -1155,6 +1267,164 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			"assistant",
 		]);
 	});
+
+	it("an in-task handover with valid citations but no next step fails before replacing context", async () => {
+		const store = manager();
+		const path = join(root, "ledger.txt");
+		fs.writeFileSync(path, "deployment evidence ".repeat(2000));
+		const { session, runtime, requests, agentDir } = await sdk(store, {
+			writerModel: "session",
+			compactAt: 0.05,
+			mainReplies: [
+				{
+					...reply(),
+					content: [{ type: "toolCall", id: "read-before-empty-note", name: "read", arguments: { path } }],
+					stopReason: "toolUse",
+				},
+				reply("What would you like me to do?"),
+			],
+		});
+		const writer = vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
+			const user = store.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user")!;
+			return reply(JSON.stringify(note(user.id, "Ready.")));
+		});
+		await session.prompt("Read the ledger, then complete the audit without asking me to restate it.");
+		expect(requests()).toBe(1);
+		expect(writer).toHaveBeenCalledTimes(1);
+		expect(latestMemory(store.getBranch())).toBeUndefined();
+		expect(events(agentDir)).toContainEqual(
+			expect.objectContaining({
+				event: "compaction",
+				outcome: "failed",
+				errorCode: "CONTEXT_CONTINUATION_MISSING",
+				usageReports: 1,
+			}),
+		);
+	});
+
+	it.each(["text", "image", "oversized"])(
+		"automatic handover preserves active requests and steering, or retains/refuses them (%s)",
+		async (kind) => {
+			const store = manager();
+			const original = seed(store);
+			const request =
+				kind === "oversized"
+					? "Keep every original restriction. ".repeat(1000)
+					: "Audit the ledger. Do not modify the source files.";
+			const active = store.appendMessage({
+				role: "user",
+				content:
+					kind === "image"
+						? [
+								{ type: "text", text: request },
+								{ type: "image", data: "c3ludGhldGlj", mimeType: "image/png" },
+							]
+						: request,
+				timestamp: 10,
+			});
+			const batch = (id: string) => {
+				store.appendMessage({
+					...reply(),
+					content: [{ type: "toolCall", id, name: "read", arguments: { path: "ledger.txt" } }],
+					stopReason: "toolUse",
+				});
+				store.appendMessage({
+					role: "toolResult",
+					toolCallId: id,
+					toolName: "read",
+					content: [{ type: "text", text: "ledger evidence" }],
+					isError: false,
+					timestamp: 11,
+				});
+			};
+			batch("first-batch");
+			const correction = "Correction: report only the final mismatch count; retain the original write restriction.";
+			const steering = store.appendMessage({ role: "user", content: correction, timestamp: 12 });
+			batch("second-batch");
+			const { session, runtime, settings } = await sdk(store, {
+				writerModel: "session",
+				compactAt: kind === "oversized" ? 0.05 : undefined,
+			});
+			const handover = note(original, "Earlier unrelated work was completed.");
+			handover.nextSteps = [{ text: "Finish the ledger audit and report its result.", sources: [active] }];
+			const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(handover)));
+			const before = fs.readFileSync(store.getSessionFile()!, "utf8");
+			const branch = store.getBranch();
+			const attempt = session.extensionRunner.emit({
+				type: "session_before_compact",
+				branchEntries: branch,
+				preparation: prepareCompaction(branch, settings.getCompactionSettings())!,
+				reason: "threshold",
+				willRetry: false,
+				signal: new AbortController().signal,
+			});
+			if (kind === "oversized") {
+				await expect(attempt).rejects.toThrow("CONTEXT_RECOVERY_TOO_LARGE");
+				expect(writer).not.toHaveBeenCalled();
+				expect(fs.readFileSync(store.getSessionFile()!, "utf8")).toBe(before);
+				return;
+			}
+			const candidate = ((await attempt) as SessionBeforeCompactResult).compaction!;
+			if (kind === "image") {
+				expect(candidate.firstKeptEntryId).toBe(active);
+			} else {
+				expect(candidate.firstKeptEntryId).toBe(CONTEXT_KEEP_NONE);
+				expect(candidate.summary).toContain(JSON.stringify({ entryId: active, request }));
+				expect(candidate.summary).toContain(JSON.stringify({ entryId: steering, request: correction }));
+				expect(candidate.summary.indexOf(active)).toBeLessThan(candidate.summary.lastIndexOf(steering));
+				// A valid note alone cannot be published if the controller's original request section is lost.
+				expect(() =>
+					store.appendCompaction(
+						candidate.summary.split("\n\n## In-progress user requests")[0],
+						candidate.firstKeptEntryId,
+						candidate.tokensBefore,
+						candidate.details,
+					),
+				).toThrow("CONTEXT_CONTINUATION_MISSING");
+				expect(fs.readFileSync(store.getSessionFile()!, "utf8")).toBe(before);
+			}
+			store.appendCompaction(
+				candidate.summary,
+				candidate.firstKeptEntryId,
+				candidate.tokensBefore,
+				candidate.details,
+				true,
+				candidate.usage,
+			);
+			const file = store.getSessionFile()!;
+			session.dispose();
+			const reopened = SessionManager.open(file);
+			managers.push(reopened);
+			const restored = reopened.buildSessionContext().messages;
+			if (kind === "image")
+				expect(restored).toContainEqual(
+					expect.objectContaining({
+						role: "user",
+						content: expect.arrayContaining([{ type: "image", data: "c3ludGhldGlj", mimeType: "image/png" }]),
+					}),
+				);
+			else
+				expect(restored).toContainEqual(
+					expect.objectContaining({ role: "compactionSummary", summary: candidate.summary }),
+				);
+			const resumed = await sdk(reopened);
+			await expect(resumed.session.extensionRunner.emitContext([...restored])).resolves.toBeDefined();
+			await expect(
+				resumed.session.extensionRunner.emitBeforeProviderRequest({ messages: convertToLlm(restored) }),
+			).resolves.toBeDefined();
+			reopened.appendMessage({
+				role: "user",
+				content: "Latest instruction: stop the old audit and explain the changes only.",
+				timestamp: 20,
+			});
+			const withNewInput = reopened.buildSessionContext().messages;
+			const modelContext = await resumed.session.extensionRunner.emitContext(withNewInput);
+			expect(modelContext.at(-1)).toMatchObject({
+				role: "user",
+				content: "Latest instruction: stop the old audit and explain the changes only.",
+			});
+		},
+	);
 
 	it("a failed in-task automatic handover blocks the next model request without another writer attempt", async () => {
 		const store = manager();

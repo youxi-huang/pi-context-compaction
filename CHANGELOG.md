@@ -6,6 +6,26 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.2.2] — 2026-09-12
+
+### Fixed
+
+- Automatic in-task handovers now pin the complete original user requests and steering from the unfinished turn in the checkpoint, independently of the writer's note. The writer must supply a nonblank next step, including final reporting when tool work is complete. Missing continuation fails before commit. Oversized requests are refused without truncation; image-bearing active requests retain their original turn rather than becoming text placeholders. Completed-turn and manual compaction policies are unchanged.
+- Request guards verify that exactly one current checkpoint summary survives context handlers and that its text remains in the final provider payload. Missing or changed recovery content raises `CONTEXT_RECOVERY_MISSING` before inference. Extensions or provider adapters that intentionally rewrite checkpoint text must preserve it to remain compatible; the guard does not silently reinject or rewrite their output.
+- Checkpoint publication and reopening validate the note against its source hash and rendered summary. New in-task checkpoints also validate pinned request IDs, original text and a continuation step. Damaged checkpoints are refused without rewriting the original history, including in disabled mode. Existing valid checkpoints remain readable; older checkpoints do not retroactively gain pinned requests. Compaction events count host-pinned text separately as `continuationTokens`.
+- Both writers now receive the exact UTF-8 byte limit used by note validation and a smaller target with room for estimation error. Instructions favor deduplicated facts and retrieval anchors over bulky recoverable inventories. Oversized notes still fail without truncation, a hidden retry or a substitute writer; the error now reports estimated size and limit. History pagination guidance explicitly requires the original query parameters alongside the cursor.
+
+### Maintenance
+
+- Added eleven synthetic recovery and budget regressions and strengthened the repeated automatic-handover and history-pagination tests. These checks establish preservation and request blocking, not model understanding, long-running semantic accuracy or superiority to native Pi compaction. See the validation record for separate live Astra checks.
+- Recorded the live Astra 10k sequence: nine automatic handovers, two completed audits and a successful session-reopening probe after correcting a real note-budget failure. The record includes pause and retrieval costs and does not claim a native-Pi comparison.
+
+### Security
+
+- Update Vitest and its matching coverage packages from 4.1.9 to 4.1.11 for [GHSA-82fw-gwwq-j7x9](https://github.com/vitest-dev/vitest/security/advisories/GHSA-82fw-gwwq-j7x9), a development-server file-read issue. This incorporates the security update proposed in [Dependabot PR #16](https://github.com/youxi-huang/pi-context-compaction/pull/16) with aligned coverage peers and a synchronized workspace lockfile; the generated production locks remain governed by their repository generators.
+
+Based on Pi v0.85.1. [Changes since v0.2.1][v0.2.2 changes]. Distributed under the MIT license; still marked pre-release.
+
 ## [v0.2.1] — 2026-09-09
 
 Reliability fixes on the same Pi v0.85.1 baseline. Automatic handovers now continue long tool tasks at low thresholds; existing session files require no migration.
@@ -103,7 +123,9 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.1...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...main
+[v0.2.2]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.2
+[v0.2.2 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.1...v0.2.2
 [v0.2.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.1
 [v0.2.1 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.0...v0.2.1
 [v0.2.0]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.0

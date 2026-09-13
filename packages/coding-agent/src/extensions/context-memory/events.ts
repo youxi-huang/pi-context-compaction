@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ThinkingLevel, Usage } from "@earendil-works/pi-ai";
+import type { NoteBudget } from "./config.ts";
 import { isRecord } from "./identity.ts";
 
 /**
@@ -31,6 +32,14 @@ export interface UsageSummary {
 	reasoning?: number;
 	totalTokens: number;
 	cost: number;
+}
+
+/** Per-call accounting, including failed calls. Missing usage means unknown cost. No content. */
+export interface WriterCallRecord {
+	phase: "generate" | "repair";
+	ms?: number;
+	usage?: UsageSummary;
+	noteBytes?: number;
 }
 
 interface EventBase {
@@ -62,6 +71,13 @@ export interface CompactionEvent extends EventBase {
 	threshold?: number;
 	noteTokens?: number;
 	noteBudget?: number;
+	/** Frozen tier/fixed policy; noteBudget remains the hard limit for older report consumers. */
+	budgetPolicy?: NoteBudget;
+	/** Serialized JSON measurement, unlike the rendered noteTokens field. */
+	noteJsonBytes?: number;
+	elasticUsed?: boolean;
+	repairUsed?: boolean;
+	writerCallDetails?: WriterCallRecord[];
 	/** Original message entries the writer had not covered before this compaction. */
 	sourceEntries?: number;
 	keptMessages?: number;
@@ -148,6 +164,7 @@ export const PROJECT_CODES: ReadonlySet<string> = new Set([
 	"CONTEXT_NOTE_FROZEN",
 	"CONTEXT_NOTE_INVALID",
 	"CONTEXT_NOTE_QUOTE",
+	"CONTEXT_NOTE_REPAIR_LOSS",
 	"CONTEXT_NOTE_SCOPE",
 	"CONTEXT_NOTE_VERSION",
 	"CONTEXT_PAYLOAD_TOO_LARGE",

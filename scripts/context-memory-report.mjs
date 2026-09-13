@@ -102,8 +102,8 @@ function summarize(events) {
 	const tokensAfter = committed.reduce((total, event) => total + (event.tokensAfter ?? 0), 0);
 	const noteTokens = committed.map((event) => event.noteTokens).filter(Number.isFinite);
 	const noteBudgetShare = committed
-		.filter((event) => event.noteTokens && event.noteBudget)
-		.map((event) => event.noteTokens / event.noteBudget);
+		.filter((event) => Number.isFinite(event.noteJsonBytes) && event.noteBudget > 0)
+		.map((event) => event.noteJsonBytes / (event.noteBudget * 3));
 	const history = events.filter((event) => event.event === "history");
 	const sessionsWithCheckpoint = new Set(committed.map((event) => event.session));
 	const retrievalsAfterCheckpoint = history.filter((event) => {
@@ -130,7 +130,20 @@ function summarize(events) {
 		},
 		writerAttempts: {
 			all: writerAttempts(compactions),
+			byPhase: Object.fromEntries(["generate", "repair"].map((phase) => {
+				const calls = compactions.flatMap((event) => event.writerCallDetails ?? []).filter((call) => call.phase === phase);
+				return [phase, { ...writerAttempts(calls.map((call) => ({ usage: call.usage, writerCalls: 1, usageReports: call.usage ? 1 : 0 }))), ms: distribution(calls.map((call) => call.ms).filter(Number.isFinite)), noteBytes: distribution(calls.map((call) => call.noteBytes).filter(Number.isFinite)) }];
+			})),
+			attemptsWithoutPhaseDetails: compactions.filter((event) => event.writerCallDetails === undefined).length,
 			byOutcome: Object.fromEntries(["committed", "failed", "aborted"].map((outcome) => [outcome, writerAttempts(compactions.filter((event) => event.outcome === outcome))])),
+		},
+		budgets: {
+			byMode: tally(compactions, (event) => event.budgetPolicy?.mode ?? "unknown"),
+			byTier: tally(compactions, (event) => event.budgetPolicy?.tier ?? "unknown"),
+			elasticCommitted: committed.filter((event) => event.elasticUsed === true).length,
+			repairAttempts: compactions.filter((event) => event.repairUsed === true).length,
+			repairedCompactionsCommitted: committed.filter((event) => event.repairUsed === true).length,
+			unknownRepairAttempts: compactions.filter((event) => event.repairUsed === undefined).length,
 		},
 		tokens: {
 			before: tokensBefore,
@@ -139,6 +152,9 @@ function summarize(events) {
 			afterToBeforeRatio: tokensBefore ? Number((tokensAfter / tokensBefore).toFixed(3)) : undefined,
 			writerCost: Number(committed.reduce((total, event) => total + (event.usage?.cost ?? 0), 0).toFixed(4)),
 			noteTokens: distribution(noteTokens),
+			noteJsonBytes: distribution(committed.map((event) => event.noteJsonBytes).filter(Number.isFinite)),
+			noteBudgetMeasured: noteBudgetShare.length,
+			noteBudgetUnknown: committed.length - noteBudgetShare.length,
 			noteBudgetShare: noteBudgetShare.length
 				? Number((noteBudgetShare.reduce((a, b) => a + b, 0) / noteBudgetShare.length).toFixed(2))
 				: undefined,
@@ -203,7 +219,8 @@ function printText(summary, options) {
 	const all = summary.writerAttempts.all;
 	console.log(`All attempts: known writer tokens ${all.tokens}; known writer cost ${all.cost}; calls without usage ${all.callsWithoutUsage}; attempts without call counts ${all.attemptsWithoutCallCounts}`);
 	console.log(`Writer overhead ratio: ${tokens.writerOverheadRatio ?? "n/a"}; after/before ratio: ${tokens.afterToBeforeRatio ?? "n/a"}`);
-	console.log(`${formatDistribution("Note tokens", tokens.noteTokens)}; mean share of note budget: ${tokens.noteBudgetShare ?? "n/a"}`);
+	console.log(`${formatDistribution("Rendered note tokens", tokens.noteTokens)}; mean JSON share of hard budget: ${tokens.noteBudgetShare ?? "n/a"} (${tokens.noteBudgetUnknown} unknown)`);
+	console.log(`Budget modes: ${formatCounts(summary.budgets.byMode)}; tiers: ${formatCounts(summary.budgets.byTier)}; elastic commits: ${summary.budgets.elasticCommitted}; size-repaired commits/attempts: ${summary.budgets.repairedCompactionsCommitted}/${summary.budgets.repairAttempts}`);
 	console.log("");
 	console.log(`Guard trips: ${formatCounts(summary.guards)}`);
 	console.log(`History calls: ${history.calls} (${formatCounts(history.byOperation)}); errors: ${formatCounts(history.errors)}; empty results: ${history.emptyResults}`);

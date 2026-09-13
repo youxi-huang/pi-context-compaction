@@ -6,12 +6,12 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { estimateTokens, findCutPoint, getAgentDir, ModelRuntime, SessionManager, sessionEntryToContextMessages } from "../packages/coding-agent/dist/index.js";
 import { CONTEXT_MEMORY_BUILD } from "../packages/coding-agent/dist/extensions/context-memory/build.js";
-import { readMemoryConfig } from "../packages/coding-agent/dist/extensions/context-memory/config.js";
+import { memoryBudget, readMemoryConfig, selectNoteBudget, storedNoteLimit } from "../packages/coding-agent/dist/extensions/context-memory/config.js";
 import { CONTEXT_MEMORY_KIND, hashEntries } from "../packages/coding-agent/dist/extensions/context-memory/identity.js";
 import { SessionLease } from "../packages/coding-agent/dist/extensions/context-memory/lease.js";
-import { renderNote, validateNote } from "../packages/coding-agent/dist/extensions/context-memory/notes.js";
+import { compactedSourceTokens, renderNote, validateNote } from "../packages/coding-agent/dist/extensions/context-memory/notes.js";
 import { SessionStorage } from "../packages/coding-agent/dist/extensions/context-memory/storage.js";
-import { writeMemory } from "../packages/coding-agent/dist/extensions/context-memory/writer.js";
+import { resolveWriterModel, writeMemory } from "../packages/coding-agent/dist/extensions/context-memory/writer.js";
 
 const { values } = parseArgs({ options: {
 	source: { type: "string" }, leaf: { type: "string" }, candidate: { type: "string" }, output: { type: "string" },
@@ -85,12 +85,14 @@ try {
 		const abort = new AbortController();
 		const onInterrupt = () => abort.abort();
 		process.once("SIGINT", onInterrupt);
+		const cut = findCutPoint(material.raw, 0, material.raw.length, 20_000).firstKeptEntryIndex;
+		const policy = selectNoteBudget(config, memoryBudget(resolveWriterModel(config, runtime), config).threshold, compactedSourceTokens(material.raw.slice(0, cut)));
 		let result;
-		try { result = await writeMemory({ config, runtime, increments: [], uncovered: material.raw, branch: material.raw, noteTokens: 6000, signal: abort.signal }); }
+		try { result = await writeMemory({ config, runtime, increments: [], uncovered: material.raw, branch: material.raw, noteTokens: policy.hardTokens, baseNoteTokens: policy.baseTokens, signal: abort.signal }); }
 		finally { process.removeListener("SIGINT", onInterrupt); }
 		lease.assert();
 		if (readBranch(source, values.leaf).sourceHash !== material.sourceHash) throw new Error("Source changed while preparing; candidate discarded");
-		const record = { version: 1, source, sourceSha256: material.sourceHash, sourceLeaf: material.leaf, writerModel: config.writerModel, note: result.note, usage: result.usage, chunkCount: result.chunkCount, build: CONTEXT_MEMORY_BUILD };
+		const record = { version: 1, source, sourceSha256: material.sourceHash, sourceLeaf: material.leaf, writerModel: config.writerModel, note: result.note, usage: result.usage, chunkCount: result.chunkCount, build: CONTEXT_MEMORY_BUILD, noteBudget: policy };
 		mkdirSync(dirname(destination), { recursive: true });
 		writeFileSync(destination, `${JSON.stringify(record, null, 2)}\n`, { flag: "wx", mode: 0o600 });
 		writeFileSync(`${destination}.md`, `# Migration candidate for review\n\nOriginal SHA256: ${material.sourceHash}\nBranch: ${material.leaf}\n\nCheck current user rulings, failed attempts and their causes, and at least one early tool result against the original before committing.\n\n${renderNote(result.note)}\n`, { flag: "wx", mode: 0o600 });
@@ -98,7 +100,7 @@ try {
 	} else {
 		if (!values.reviewed || !values.output || candidate.version !== 1) throw new Error("Commit requires --reviewed and a new output path");
 		if (candidate.sourceSha256 !== material.sourceHash || candidate.sourceLeaf !== material.leaf) throw new Error("Source changed since review; prepare and review again");
-		validateNote(candidate.note, material.raw);
+		validateNote(candidate.note, material.raw, storedNoteLimit(candidate.noteBudget));
 		const destination = resolve(values.output);
 		if (existsSync(destination)) throw new Error("Output already exists; originals and previous copies are never overwritten");
 		const header = { ...material.header, id: randomUUID(), version: 3, timestamp: new Date().toISOString(), parentSession: source };
@@ -108,6 +110,7 @@ try {
 			kind: CONTEXT_MEMORY_KIND, version: 1, note: candidate.note, coveredThrough: memory.getLeafId(), sourceHash: hashEntries(material.raw),
 			snapshot: { sessionId: header.id, leafId: memory.getLeafId(), lastCheckpointId: null }, writerModel: candidate.writerModel,
 			chunkCount: candidate.chunkCount, build: candidate.build,
+			...(candidate.noteBudget === undefined ? {} : { noteBudget: candidate.noteBudget }),
 			migration: { sourceSha256: material.sourceHash, sourceLeafId: material.leaf, reviewedAt: new Date().toISOString() },
 		};
 		const tokensBefore = material.raw.flatMap(sessionEntryToContextMessages).reduce((sum, message) => sum + estimateTokens(message), 0);

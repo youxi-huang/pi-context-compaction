@@ -6,6 +6,24 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.2.3] — 2026-09-13
+
+### Added
+
+- Default per-compaction note budgets now use released-source size tiers, from 3,000/4,000 base/hard estimated tokens for up to 80k of readable source to 6,000/8,000 above 400k. A floor based on the preceding note's actual size prevents abrupt shrinkage without inheriting a lifetime high-water tier. Small-window and trigger caps still apply; automatic trigger and tool-turn policies do not change. Explicit `noteTokens` retains fixed hard-limit semantics.
+- An otherwise valid note exceeding its frozen hard limit can receive one bounded, short same-writer size repair across the entire compaction. The default `noteRepair: true` permits this extra paid call; `false` keeps one-pass behavior. Exact quotations, source/supersedes anchors and occupied sections must survive. Other validation failures, transport errors and cancellation do not trigger repair; no model substitution or mechanical truncation is introduced.
+
+### Fixed
+
+- The writer's internal handover instruction now explicitly applies only to its JSON-writing response: it neither cancels the original task nor changes user authority, and must not be recorded as a user ruling or gap. Live note inspection found the earlier “stop the task” wording being carried into recovery notes as a new restriction.
+- Checkpoint publication, reopening and reviewed-copy migration share stored-budget validation instead of silently imposing a separate 6,000-token limit after generation. New checkpoints carry bounded policy metadata; older checkpoints remain readable without rewriting. Notes over 6,000 require v0.2.3 or newer and cannot be resumed with an older binary. Generation preferences do not retroactively invalidate stored evidence; final model capacity guards still apply.
+- Budget occupancy now compares serialized JSON bytes with the corresponding byte limit, not rendered note tokens with a JSON budget. Old events without the required measurements remain unknown instead of receiving inferred ratios.
+
+### Maintenance
+
+- Compaction status and local events expose frozen budget decisions, elastic acceptance and per-call generation/repair durations, sizes and usage. Failed and cancelled calls retain known costs; logs still contain no note or session text.
+- Add focused boundary, repair, persistence, cold-reopen and compatibility regressions. v0.2.3 is a maintainer-approved exception to the normal minor-release policy for new strategies; the roadmap records the brought-forward scope explicitly. No new host patch or dependency is required.
+
 ## [v0.2.2] — 2026-09-12
 
 ### Fixed
@@ -123,7 +141,9 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.3...main
+[v0.2.3]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3
+[v0.2.3 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...v0.2.3
 [v0.2.2]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.2
 [v0.2.2 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.1...v0.2.2
 [v0.2.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.1

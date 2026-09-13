@@ -18,7 +18,7 @@ for (const [file, args] of checks) {
 	if (result.error) throw result.error;
 	if (result.status !== 0) process.exit(result.status ?? 1);
 }
-const result = spawnSync(process.execPath, [resolve(root, "node_modules/vitest/dist/cli.js"), "--run", "test/context-memory.test.ts"], {
+const result = spawnSync(process.execPath, [resolve(root, "node_modules/vitest/dist/cli.js"), "--run", "test/context-memory.test.ts", "test/context-memory-budget.test.ts"], {
 	cwd: resolve(root, "packages/coding-agent"), stdio: "inherit", env: { ...process.env, PI_OFFLINE: "1" },
 });
 if (result.error) throw result.error;

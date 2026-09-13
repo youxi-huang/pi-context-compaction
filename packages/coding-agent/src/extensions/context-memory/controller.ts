@@ -17,7 +17,7 @@ import {
 } from "../../core/session-manager.ts";
 import type { CompactionSettings } from "../../core/settings-manager.ts";
 import { CONTEXT_MEMORY_BUILD } from "./build.ts";
-import { type MemoryConfig, memoryBudget, SESSION_WRITER, textTokens } from "./config.ts";
+import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "./config.ts";
 import {
 	type CompactionEvent,
 	type CompactionOutcome,
@@ -29,11 +29,13 @@ import {
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "./identity.ts";
 import {
 	checkpointLineage,
+	compactedSourceTokens,
 	hashEntries,
 	inProgressRequests,
 	latestMemory,
 	type MemoryCheckpoint,
 	type MemoryNote,
+	noteBytes,
 	noteIncrements,
 	renderContinuation,
 	renderNote,
@@ -67,6 +69,11 @@ interface PendingCompaction {
 			| "threshold"
 			| "noteTokens"
 			| "noteBudget"
+			| "budgetPolicy"
+			| "noteJsonBytes"
+			| "elasticUsed"
+			| "repairUsed"
+			| "writerCallDetails"
 			| "sourceEntries"
 			| "keptMessages"
 			| "increments"
@@ -185,6 +192,7 @@ export class MemoryController {
 	private failure?: string;
 	private blockReported = false;
 	private pending?: PendingCompaction;
+	private lastCompaction?: { session: string; outcome: CompactionOutcome; fields: PendingCompaction["fields"] };
 	private lastModel?: Model<Api>;
 	private activeTools: () => Tool[] = () => [];
 
@@ -219,6 +227,12 @@ export class MemoryController {
 			checkpointId: checkpoint?.entry.id,
 			noteIncrements: noteIncrements(branch, checkpoint?.entry.id).length,
 			budget: this.lastModel ? memoryBudget(this.lastModel, this.host.config) : undefined,
+			noteBudgetMode: this.host.config.noteTokens === undefined ? "tiered" : "fixed",
+			noteRepair: this.host.config.noteRepair,
+			checkpointBudget: checkpoint?.memory.noteBudget,
+			currentAttempt: this.pending?.fields,
+			lastCompaction:
+				this.lastCompaction?.session === this.host.session.getSessionId() ? this.lastCompaction : undefined,
 			eventLog: this.host.events.file
 				? { enabled: true, file: this.host.events.file, lastError: this.host.events.lastError }
 				: { enabled: false },
@@ -252,6 +266,12 @@ export class MemoryController {
 		// stack (a competing compactor, a storage check); host refusals such as "nothing to compact" and
 		// attempts already counted as guard events are not compaction failures.
 		if (!pending && (!PROJECT_CODES.has(code ?? "") || code === "CONTEXT_BLOCKED" || code === "CONTEXT_BUSY")) return;
+		if (pending)
+			this.lastCompaction = {
+				session: this.host.session.getSessionId(),
+				outcome,
+				fields: structuredClone(pending.fields),
+			};
 		this.host.events.record({
 			event: "compaction",
 			session: this.host.session.getSessionId(),
@@ -467,9 +487,28 @@ export class MemoryController {
 			const previous = latestMemory(branch);
 			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
 			const increments = noteIncrements(branch, previous?.entry.id);
+			const activeIds = new Set(this.host.session.buildContextEntries().map((entry) => entry.id));
+			const released = branch
+				.slice(0, cut)
+				.filter(
+					(entry) =>
+						activeIds.has(entry.id) &&
+						!(
+							entry.type === "message" &&
+							entry.message.role === "bashExecution" &&
+							entry.message.excludeFromContext
+						),
+				);
+			const policy = selectNoteBudget(
+				this.host.config,
+				budget.threshold,
+				compactedSourceTokens(released),
+				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
+			);
 			Object.assign(pending.fields, {
 				threshold: budget.threshold,
-				noteBudget: budget.noteTokens,
+				noteBudget: policy.hardTokens,
+				budgetPolicy: policy,
 				sourceEntries: branch.slice(after + 1).filter((entry) => entry.type === "message").length,
 				keptMessages: kept.length,
 				increments: increments.length,
@@ -485,7 +524,8 @@ export class MemoryController {
 				increments,
 				uncovered: branch.slice(after + 1),
 				branch,
-				noteTokens: budget.noteTokens,
+				noteTokens: policy.hardTokens,
+				baseNoteTokens: policy.baseTokens,
 				signal: event.signal,
 				customInstructions: event.customInstructions,
 				activeRequests: releaseToolTurn ? activeRequests : undefined,
@@ -494,6 +534,8 @@ export class MemoryController {
 					Object.assign(pending.fields, {
 						writerCalls: progress.writerCalls,
 						usageReports: progress.usageReports,
+						repairUsed: progress.repairUsed,
+						writerCallDetails: progress.writerCallDetails,
 						writerEffort: progress.writerEffort,
 						...(progress.usage ? { usage: summarizeUsage(progress.usage) } : {}),
 					});
@@ -513,6 +555,8 @@ export class MemoryController {
 			// Earlier checkpoints are listed by the host so a later phase stays locatable even if the writer dropped it.
 			// The list has no reserved budget: it shrinks before the checkpoint is refused for size.
 			const noteTokens = textTokens(renderNote(written.note));
+			pending.fields.noteJsonBytes = noteBytes(written.note);
+			pending.fields.elasticUsed = pending.fields.noteJsonBytes > policy.baseTokens * 3;
 			const fixedAfter =
 				textTokens(ctx.getSystemPrompt()) +
 				continuationTokens +
@@ -542,6 +586,7 @@ export class MemoryController {
 					writerModel: written.writerModel,
 					chunkCount: written.chunkCount,
 					build: CONTEXT_MEMORY_BUILD,
+					noteBudget: policy,
 					...(releaseToolTurn ? { continuation: activeRequests.map((entry) => entry.id) } : {}),
 				},
 			};

@@ -142,6 +142,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			filter?: boolean;
 			selectedModel?: Model<Api>;
 			writerModel?: string;
+			noteRepair?: boolean;
 			keepRecentTokens?: number;
 			compactAt?: number;
 			mainReplies?: AssistantMessage[];
@@ -156,6 +157,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 				enabled: options.enabled ?? true,
 				...(options.eventLog === undefined ? {} : { eventLog: options.eventLog }),
 				writerModel: options.writerModel ?? "memory-test/memory-writer",
+				...(options.noteRepair === undefined ? {} : { noteRepair: options.noteRepair }),
 				// Distinct from the default session thinking level (medium) so the two sources stay distinguishable.
 				writerEffort: "low",
 				...(options.keepRecentTokens === undefined ? {} : { keepRecentTokens: options.keepRecentTokens }),
@@ -811,11 +813,11 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	});
 
 	it.each(["session", "memory-test/memory-writer"])(
-		"a 10k threshold gives %s the byte budget and rejects excess without truncation or a paid retry",
+		"a 10k threshold gives %s the byte budget and rejects excess when repair is disabled",
 		async (writerModel) => {
 			const store = manager();
 			const original = seed(store);
-			const { session, runtime, agentDir } = await sdk(store, { writerModel, compactAt: 10_000 });
+			const { session, runtime, agentDir } = await sdk(store, { writerModel, compactAt: 10_000, noteRepair: false });
 			// Unicode makes the byte-based allowance differ from character count or provider token usage.
 			const oversized = note(original, "界".repeat(1600));
 			const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(oversized)));

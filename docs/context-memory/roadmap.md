@@ -4,7 +4,7 @@ This document states where the project is going and how each step will be judged
 
 ## Version policy
 
-Patch releases (0.x.y) carry adaptation and corrections to already promised behavior: ports to new Pi releases, interface changes, dependency and security updates, CI fixes, and defects in compaction, persistence or accounting. New compaction strategies and capabilities belong in minor releases.
+Patch releases (0.x.y) carry adaptation and corrections to already promised behavior: ports to new Pi releases, interface changes, dependency and security updates, CI fixes, and defects in compaction, persistence or accounting. New compaction strategies and capabilities normally belong in minor releases. v0.2.3 is an explicitly maintainer-approved exception: it brings forward tiered note allowances and one bounded same-writer size repair, alongside budget compatibility and accounting fixes. These are documented behavior additions, not relabeled as bug fixes.
 
 Minor releases (0.x.0) each answer one question about the project. A minor release ships when its acceptance criterion is met, not when a date arrives.
 
@@ -33,7 +33,7 @@ Scheduling needs a separate evaluation in a later 0.x release. **Hard compaction
 
 **0.5.0, note quality.** Note structure is revised from evaluation failures rather than from intuition, and history retrieval gains a typed index over decisions, file changes and errors so a model pages less. Accepted when recovery accuracy rises and average retrieval calls fall.
 
-**0.6.0, footprint.** Note size and writer budget adapt to task length, and serialized checkpoint size joins the evaluation report. Accepted when token overhead falls while recovery accuracy holds.
+**0.6.0, footprint.** v0.2.3 brings forward source-size tiers, limited budget elasticity and serialized-note measurement to address daily failures. This milestone remains the evidence-based refinement of those initial parameters and writer overhead, not a second introduction of the same features. Accepted when token overhead falls while recovery accuracy holds.
 
 **0.7.0 to 0.9.0, thinner host.** Each change to the Pi host is classified as one that could become an upstream hook, one that could move into the extension, or one that must remain. Each release removes one class and proposes the corresponding hooks upstream. The only measurement for these releases is host footprint.
 

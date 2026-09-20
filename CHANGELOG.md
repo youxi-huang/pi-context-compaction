@@ -6,10 +6,24 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.2.4] — 2026-09-20
+
+### Changed
+
+- Port the v0.2.3 compaction behavior to Pi v0.86.0 in the v0.2.4 compatibility release. Preserve transcript-backed system instructions and tool additions/removals across compaction and reopening; reuse that transcript for the session writer without adding a duplicate legacy header.
+- Preserve Pi v0.86.0 handler snapshot/unsubscribe semantics while running ordinary compaction observers before the resident and propagating failures.
+
+### Security
+
+- Remove overlapping whitespace matching from Cerebras bodyless-error detection so malformed provider errors do not trigger quadratic regular-expression work.
+- Prevent malformed persisted tool-slot indices from selecting inherited array properties during task abort. Add regressions for hostile property names, invalid indices and ordinary numeric slots.
+
 ### Maintenance
 
+- Adopt the upstream cut-point correction, removing the dedicated compaction.ts host patch. Retain existing security hardening and Vitest 4.1.11, including the new durable workspace. Pin the v0.86.0 source archive and model data.
+- Preserve existing release tags and assets. Custom providers must support the v0.86.0 transcript interface before they are used with this release; third-party provider code is not bundled or changed here.
 - Reorganize the README around source-linked compaction, an illustrated recovery example and the limits of current evidence. Clarify that native Pi retains original session history, distinguish reference validation from semantic recovery, and show the default session writer before optional configuration.
-- Add two illustrative flow diagrams and move the full configuration and event-log reference to `docs/context-memory/configuration.md`. No runtime behavior, build identity or release tag changes.
+- Add two illustrative flow diagrams and move the full configuration and event-log reference to `docs/context-memory/configuration.md`. Those documentation changes do not alter runtime behavior.
 
 ## [v0.2.3] — 2026-09-13
 
@@ -146,7 +160,7 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.3...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...main
 [v0.2.3]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3
 [v0.2.3 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...v0.2.3
 [v0.2.2]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.2
@@ -158,3 +172,5 @@ Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/co
 [v0.1.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.1
 [v0.1.1 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.1.0-alpha.1...v0.1.1
 [v0.1.0-alpha.1]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.1.0-alpha.1
+
+[v0.2.4]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.3...v0.2.4

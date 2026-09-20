@@ -1,6 +1,6 @@
 # Agent instructions for this repository
 
-This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v0.85.1` (commit `d981de1229ef899957bbe968bc8dcda02a21f477`) and adds a context-compaction extension plus a small number of host changes. It is not the Pi monorepo and it is not a Pi package. Upstream release, publishing, labeling and changelog rules do not apply here.
+This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v0.86.0` (commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc`) and adds a context-compaction extension plus a small number of host changes. It is not the Pi monorepo and it is not a Pi package. Upstream release, publishing, labeling and changelog rules do not apply here.
 
 The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UPSTREAM_AGENTS.md). Their code-quality rules for TypeScript still hold in this repository: no `any`, top-level imports only, erasable TypeScript syntax only, no hardcoded key checks. Their commands, release process and issue conventions do not apply. Where this file and [CONTRIBUTING.md](CONTRIBUTING.md) say something different from the upstream file, this file wins.
 
@@ -12,7 +12,7 @@ The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UP
 | `packages/coding-agent/test/context-memory.test.ts` and `test/fixtures/context-memory-*` | The focused regressions for the runtime. |
 | `scripts/context-memory-*.mjs`, `scripts/stamp-context-memory.mjs`, `scripts/security-regression-check.mjs` | Build stamping, model data, checks, migration and the event-log report. |
 | `docs/context-memory/` | Architecture, validation record, roadmap and the upstream delta. |
-| Seven host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
+| Six host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
 | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `.github/` | Project documentation and CI. |
 
 Everything else is unchanged upstream Pi code, imported as a snapshot without upstream history. Do not refactor, reformat or "clean up" upstream files. A task that seems to need a change outside the locations above is a host change and follows the rule below.

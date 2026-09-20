@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { isContextOverflow, isRecoverableLength } from "../src/utils/overflow.ts";
 
-function createErrorMessage(errorMessage: string): AssistantMessage {
+function createErrorMessage(errorMessage: string, provider = "ollama"): AssistantMessage {
 	return {
 		role: "assistant",
 		content: [],
 		api: "openai-completions",
-		provider: "ollama",
+		provider,
 		model: "qwen3.5:35b",
 		usage: {
 			input: 0,
@@ -80,11 +80,31 @@ describe("isContextOverflow", () => {
 		expect(isContextOverflow(message, 32768)).toBe(false);
 	});
 
+	it("only treats bodyless 400 and 413 errors as overflow for Cerebras", () => {
+		// Regression for #9482.
+		for (const errorMessage of ["400 status code (no body)", "413 status code (no body)"]) {
+			expect(isContextOverflow(createErrorMessage(errorMessage, "cerebras"), 131072)).toBe(true);
+			expect(isContextOverflow(createErrorMessage(errorMessage, "opencode-go"), 1000000)).toBe(false);
+		}
+	});
+
 	it("does not treat Bedrock throttling 'Too many tokens' as overflow", () => {
 		// Bedrock returns this for HTTP 429 rate limiting, NOT context overflow.
 		// formatBedrockError uses a human-readable prefix for ThrottlingException.
 		const message = createErrorMessage("Throttling error: Too many tokens, please wait before trying again.");
 		expect(isContextOverflow(message, 200000)).toBe(false);
+	});
+
+	it("handles long bodyless-status whitespace without ambiguous backtracking", () => {
+		const padding = "\t".repeat(100_000);
+		for (const status of ["400", "413"]) {
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}invalid`, "cerebras"))).toBe(false);
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}(no body)`, "cerebras"))).toBe(true);
+			expect(isContextOverflow(createErrorMessage(`${status} status code${padding}(no body)`, "cerebras"))).toBe(
+				true,
+			);
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}(no body)`, "openai"))).toBe(false);
+		}
 	});
 
 	it("does not treat Bedrock service unavailable as overflow", () => {

@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type Api, type AssistantMessage, createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	createAssistantMessageEventStream,
+	getCurrentSystemPrompt,
+	getCurrentTools,
+	type Model,
+	normalizeContext,
+} from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
@@ -379,7 +387,11 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	it("the resident survives ordinary filtering and reload, and the enable flag stays latched until restart", async () => {
 		const { session, agentDir } = await sdk(manager(false), {
 			filter: true,
-			extensions: [(pi) => pi.on("session_start", () => {})],
+			extensions: [
+				(pi) => {
+					pi.on("session_start", () => {});
+				},
+			],
 		});
 		expect(session.extensionRunner.getExtensionPaths()).toEqual(["<builtin:context-memory>"]);
 		expect(session.getActiveToolNames()).toContain("context_history");
@@ -398,7 +410,11 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			return undefined;
 		});
 		const { session, runtime } = await sdk(store, {
-			extensions: [(pi) => pi.on("session_before_compact", observer)],
+			extensions: [
+				(pi) => {
+					pi.on("session_before_compact", observer);
+				},
+			],
 		});
 		vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
 			order.push("writer");
@@ -418,7 +434,11 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 			const store = manager();
 			seed(store);
 			const { session, runtime } = await sdk(store, {
-				extensions: [(pi) => pi.on("session_before_compact", () => competing as never)],
+				extensions: [
+					(pi) => {
+						pi.on("session_before_compact", () => competing as never);
+					},
+				],
 			});
 			const writer = vi.spyOn(runtime, "completeSimple");
 			await expect(session.compact()).rejects.toThrow("CONTEXT_COMPACTOR_CONFLICT");
@@ -432,7 +452,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		const original = seed(store);
 		const { session, runtime, requests, agentDir } = await sdk(store, {
 			extensions: [
-				(pi) =>
+				(pi) => {
 					pi.on("context", (event) => ({
 						messages: event.messages.flatMap<AgentMessage>((message) =>
 							message.role !== "compactionSummary"
@@ -441,7 +461,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 									? []
 									: [{ ...message, summary: "An older task was already complete." }],
 						),
-					})),
+					}));
+				},
 			],
 		});
 		vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
@@ -898,6 +919,83 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		});
 	});
 
+	it("transcript prompt and tool changes survive keep-none compaction and reopen without a duplicate writer header", async () => {
+		const store = manager();
+		const oldTool = { name: "old_tool", description: "Retired tool", parameters: { type: "object" } };
+		const newTool = { name: "new_tool", description: "Current tool", parameters: { type: "object" } };
+		store.appendMessage({
+			role: "system",
+			content: "Persistent base instruction.",
+			toolsAdded: [oldTool],
+			timestamp: 0,
+		});
+		const original = seed(store);
+		store.appendMessage({
+			role: "system",
+			content: "",
+			sections: { policy: "Never alter source files." },
+			toolsRemoved: [{ name: oldTool.name }],
+			toolsAdded: [newTool],
+			timestamp: 5,
+		});
+		store.appendMessage({ role: "user", content: "Continue with that policy.", timestamp: 6 });
+		store.appendMessage(reply());
+		const before = store.buildSessionContext().messages;
+		const expectedPrompt = getCurrentSystemPrompt(before);
+		const { session, runtime } = await sdk(store, { writerModel: "session" });
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		const context = writer.mock.calls[0][1];
+		expect(context.systemPrompt).toBeUndefined();
+		expect(context.tools).toBeUndefined();
+		expect(context.messages.slice(0, -1)).toEqual(convertToLlm(before));
+		const transcript = normalizeContext(context);
+		expect(getCurrentSystemPrompt(transcript.messages)).toBe(expectedPrompt);
+		expect(getCurrentTools(transcript.messages)).toEqual([newTool]);
+		expect(latestMemory(store.getBranch())?.entry.firstKeptEntryId).toBe(CONTEXT_KEEP_NONE);
+		const file = store.getSessionFile()!;
+		session.dispose();
+		const reopened = SessionManager.open(file);
+		managers.push(reopened);
+		const restored = reopened.buildSessionContext().messages;
+		expect(restored.map((message) => message.role)).toEqual(["system", "compactionSummary"]);
+		expect(getCurrentSystemPrompt(restored)).toBe(expectedPrompt);
+		expect(getCurrentTools(restored)).toEqual([newTool]);
+		expect(queryHistory(freezeHistory(reopened), { operation: "read", entryId: original }).entries[0].text).toContain(
+			"4317",
+		);
+	});
+
+	it("compaction dispatch snapshots observers while preserving resident-last order", async () => {
+		const store = manager();
+		const original = seed(store);
+		const order: string[] = [];
+		const { session, runtime } = await sdk(store, {
+			extensions: [
+				(pi) => {
+					let unsubscribe = () => {};
+					pi.on("session_before_compact", () => {
+						order.push("first");
+						unsubscribe();
+					});
+					unsubscribe = pi.on("session_before_compact", () => {
+						order.push("second");
+					});
+				},
+			],
+		});
+		vi.spyOn(runtime, "completeSimple").mockImplementation(async () => {
+			order.push("writer");
+			return reply(JSON.stringify(note(original)));
+		});
+		await session.compact();
+		expect(order).toEqual(["first", "second", "writer"]);
+		seed(store);
+		order.length = 0;
+		await session.compact();
+		expect(order).toEqual(["first", "writer"]);
+	});
+
 	it("reasoning effort reaches the writer only when the model declares reasoning support", async () => {
 		const store = manager(false);
 		const original = seed(store);
@@ -1265,6 +1363,7 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		for (const event of compactions)
 			expect(event).toMatchObject({ reason: "threshold", outcome: "committed", keptMessages: 0 });
 		expect(store.buildSessionContext().messages.map((message) => message.role)).toEqual([
+			"system",
 			"compactionSummary",
 			"assistant",
 		]);

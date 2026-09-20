@@ -1,12 +1,13 @@
 # Pi Context Compaction
 
+
 **Compact the context, not the evidence.**
 
 Source-linked context compaction for [Pi](https://github.com/earendil-works/pi). Each checkpoint carries a structured handover note with references to original session records. Source references and verbatim quotations are checked before commit. After compaction, the agent can use `context_history` to search and read earlier records on the current session branch.
 
 A compaction note should carry the task forward and provide an index back to the original transcript.
 
-**Status:** experimental source build based on Pi v0.85.1; latest release [v0.2.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
+**Status:** experimental source build based on Pi v0.86.0; latest release [v0.2.4](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.4) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
 
 [Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Build and run](#build-and-run) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
 
@@ -36,14 +37,14 @@ These checks establish reference consistency, not semantic completeness or guara
 
 The scope is **task continuity across compaction**. History access follows the current session branch and explicit parent-history grants. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
 
-See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the seven host files this distribution adapts.
+See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the six host files this distribution adapts.
 
 ## Evidence and limits
 
 | Evidence | What it supports |
 | --- | --- |
-| **90 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
-| **429 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
+| **92 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
+| **456 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery comparison against native Pi** | Not yet measured. Replayable fixtures and probe questions are planned for 0.3.0. |
 
@@ -58,7 +59,7 @@ Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent session
 ```sh
 git clone https://github.com/youxi-huang/pi-context-compaction.git
 cd pi-context-compaction
-git checkout v0.2.3
+git checkout v0.2.4
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
 node scripts/stamp-context-memory.mjs
@@ -80,15 +81,17 @@ The **current session model writes the note by default**, so no second model con
 
 ## Status and compatibility
 
-This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.85.1** (`d981de12`), imported as a clean snapshot. The extension and its required host changes ship together; ordinary extension packaging is the [1.0 goal](docs/context-memory/roadmap.md), not a current install option. The root `package.json` carries upstream workspace metadata and is not this project's version.
+This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.86.0** (`ecac0a9c`), imported as a clean snapshot. The extension and its required host changes ship together; ordinary extension packaging is the [1.0 goal](docs/context-memory/roadmap.md), not a current install option. The root `package.json` carries upstream workspace metadata and is not this project's version.
 
-The latest tagged release, **v0.2.3**, adds tiered note budgets and bounded same-writer size repair. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
+The latest tagged release, **v0.2.4**, ports the existing compaction behavior to Pi v0.86.0, preserving transcript prompt/tool changes and adopting the upstream cut-point fix. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
 
 Notes, tool results and history can contain sensitive information. They remain in local session files, but relevant source content is sent to the writer during compaction and to the selected model when retrieved. History grants restrict this API; they are not an operating-system sandbox for agents with shell access.
 
 Opaque checkpoints from older provider-specific compactors require a reviewed migration copy before resuming. Run `node scripts/context-memory-migrate.mjs --help` for the workflow. The script has no live session, so it needs a fixed `provider/model` writer in `pi-context-memory.json` for the run; with `"session"` it stops before any work. It cannot recover missing evidence or decrypt remote checkpoints.
 
-v0.2.3 reads existing valid checkpoints without rewriting them. New checkpoints carry a bounded budget decision so publication and reopening agree even above 6,000 estimated tokens; lowering generation settings does not invalidate stored notes. **Older binaries cannot read new notes above their 6,000-token limit.** Keep those sessions on v0.2.3 or newer; a binary rollback is not a session-format downgrade. A changed model still must fit the final recovery payload.
+v0.2.4 reads existing valid checkpoints without rewriting them and preserves Pi v0.86.0 transcript prompt/tool state through compaction and reopening. Custom providers must support Pi v0.86.0 normalized transcript inputs; update provider extensions before using them with this release. A provider still reading legacy `context.systemPrompt` or `context.tools` may silently omit instructions or tools.
+
+The v0.2.3 note-budget behavior remains unchanged. New checkpoints carry a bounded budget decision so publication and reopening agree even above 6,000 estimated tokens; lowering generation settings does not invalidate stored notes. **Older binaries cannot read new notes above their 6,000-token limit.** Keep those sessions on v0.2.3 or newer; a binary rollback is not a session-format downgrade. A changed model still must fit the final recovery payload.
 
 This release contains the host and compaction modules. Locally adapted BTW, subagent and provider packages are not bundled. Integrators can use the exported `contextMemory` API; unmodified third-party packages should not be assumed compatible. Windows persistence, long-running semantic quality and repeated incremental-note comparisons are not validated.
 

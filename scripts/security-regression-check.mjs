@@ -7,11 +7,11 @@ const vitest = resolve(root, "node_modules/vitest/dist/cli.js");
 const checks = [
 	["packages/ai", [vitest, "--run",
 		"test/security-boundaries.test.ts", "test/assistant-message-frame.test.ts",
-		"test/openrouter-oauth.test.ts", "test/openai-completions-prompt-cache.test.ts"]],
+		"test/openrouter-oauth.test.ts", "test/openai-completions-prompt-cache.test.ts", "test/overflow.test.ts"]],
 	["packages/coding-agent", [vitest, "--run",
 		"test/security-inputs.test.ts", "test/package-manager-security.test.ts",
 		"test/package-manager.test.ts", "test/package-manager-ssh.test.ts", "test/prompt-templates.test.ts"]],
-	["packages/agent", [vitest, "--run", "test/harness/skills.test.ts"]],
+	["packages/agent", [vitest, "--run", "test/harness/skills.test.ts", "test/harness/pico3/tool-abort-security.test.ts"]],
 	["packages/tui", ["--test", "test/latex.test.ts"]],
 ];
 

@@ -170,7 +170,8 @@ export const tool: CoreKind<ToolInput, ToolCheckpoint, ToolTaskResult, never, { 
 				model: [toMessage(call, synthetic("tool aborted", "aborted"), rt.now())],
 				data: { diagnostics: [{ severity: "error", message: "aborted", code: "aborted" }] },
 			});
-			const slot = tx.sticky(current.conversationId).turn.tools[task.input.index];
+			// A malformed persisted index must not select an inherited array property.
+			const slot = tx.sticky(current.conversationId).turn.tools.find((_, index) => index === task.input.index);
 			if (slot !== undefined) {
 				slot.status = "aborted";
 				slot.entry = entry;

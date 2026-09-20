@@ -2,7 +2,9 @@
 
 ## v0.2.4: Pi v0.86.0 compatibility, 2026-09-20 UTC
 
-The v0.2.4 build preserves v0.2.3 compaction behavior on upstream `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc`. A clean dependency installation, complete offline build, static/type/dependency/entry/generated-lock checks, 92 context regressions and 430 host security/compatibility regressions pass. The security groups contain 78, 235, 6 and 111 checks.
+The v0.2.4 build preserves v0.2.3 compaction behavior on upstream `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc`. A clean dependency installation, complete offline build, static/type/dependency/entry/generated-lock checks, 92 context regressions and 456 host security/compatibility regressions pass. The security groups contain 97, 235, 13 and 111 checks.
+
+The security suite additionally covers long malformed Cerebras status messages and hostile persisted tool-slot indices; these checks are synthetic and do not execute provider calls.
 
 The two additional context regressions verify transcript prompt/tool-state replay through keep-none compaction and reopening, including removal of a tool and absence of a duplicate writer header, and handler snapshot/unsubscribe semantics with the resident running last. The existing natural tool-loop test now expects the upstream system-state message alongside the checkpoint. Existing persistence and history-grant cases remain passing.
 

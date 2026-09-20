@@ -95,6 +95,18 @@ describe("isContextOverflow", () => {
 		expect(isContextOverflow(message, 200000)).toBe(false);
 	});
 
+	it("handles long bodyless-status whitespace without ambiguous backtracking", () => {
+		const padding = "\t".repeat(100_000);
+		for (const status of ["400", "413"]) {
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}invalid`, "cerebras"))).toBe(false);
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}(no body)`, "cerebras"))).toBe(true);
+			expect(isContextOverflow(createErrorMessage(`${status} status code${padding}(no body)`, "cerebras"))).toBe(
+				true,
+			);
+			expect(isContextOverflow(createErrorMessage(`${status}${padding}(no body)`, "openai"))).toBe(false);
+		}
+	});
+
 	it("does not treat Bedrock service unavailable as overflow", () => {
 		const message = createErrorMessage("Service unavailable: The service is temporarily unavailable.");
 		expect(isContextOverflow(message, 200000)).toBe(false);

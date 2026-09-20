@@ -8,6 +8,8 @@ const upstream = "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc";
 const source = "packages/coding-agent/src";
 const extension = `${source}/extensions/context-memory`;
 const files = [
+	"packages/agent/src/harness/pico3/kinds/tool.ts",
+	"packages/ai/src/utils/overflow.ts",
 	`${source}/core/agent-session-runtime.ts`,
 	`${source}/core/agent-session.ts`,
 	`${source}/core/extensions/runner.ts`,

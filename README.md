@@ -44,7 +44,7 @@ See the [architecture](docs/context-memory/architecture.md) for persistence, con
 | Evidence | What it supports |
 | --- | --- |
 | **92 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
-| **430 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
+| **456 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery comparison against native Pi** | Not yet measured. Replayable fixtures and probe questions are planned for 0.3.0. |
 

@@ -13,6 +13,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - Port the v0.2.3 compaction behavior to Pi v0.86.0 in the v0.2.4 compatibility release. Preserve transcript-backed system instructions and tool additions/removals across compaction and reopening; reuse that transcript for the session writer without adding a duplicate legacy header.
 - Preserve Pi v0.86.0 handler snapshot/unsubscribe semantics while running ordinary compaction observers before the resident and propagating failures.
 
+### Security
+
+- Remove overlapping whitespace matching from Cerebras bodyless-error detection so malformed provider errors do not trigger quadratic regular-expression work.
+- Prevent malformed persisted tool-slot indices from selecting inherited array properties during task abort. Add regressions for hostile property names, invalid indices and ordinary numeric slots.
+
 ### Maintenance
 
 - Adopt the upstream cut-point correction, removing the dedicated compaction.ts host patch. Retain existing security hardening and Vitest 4.1.11, including the new durable workspace. Pin the v0.86.0 source archive and model data.

@@ -1,58 +1,57 @@
 # Pi Context Compaction
 
-Context compaction for [Pi](https://github.com/earendil-works/pi) that keeps the original transcript as the source of truth: notes cite the records they came from, and the model can read those records back after compaction.
+**Compact the context, not the evidence.**
 
-| | |
+Source-linked context compaction for [Pi](https://github.com/earendil-works/pi). Each checkpoint carries a structured handover note with references to original session records. Source references and verbatim quotations are checked before commit. After compaction, the agent can use `context_history` to search and read earlier records on the current session branch.
+
+A compaction note should carry the task forward and provide an index back to the original transcript.
+
+**Status:** experimental source build based on Pi v0.85.1; latest release [v0.2.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
+
+[Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Build and run](#build-and-run) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
+
+![Mechanism overview: original messages produce a checked checkpoint for active context; the original session records remain in JSONL, and context_history searches or reads them when the agent needs a detail. Reference checks do not prove semantic completeness.](docs/context-memory/assets/source-linked-compaction.png)
+
+## Recovery example
+
+After several compactions, knowing the latest port is not enough to explain how it was chosen. An earlier failure and a later user ruling are different pieces of evidence.
+
+> Which port originally failed, and what did the user approve later?
+
+The example below follows the values in the [documented provider scenario](docs/context-memory/validation.md#real-provider-scenario): port **9000** was rejected after `EADDRINUSE`, **4317** was the earlier approved replacement, and **4318** with timeout **9500** came from a later user ruling. With `context_history`, the agent can retrieve the original diagnostic and the later instruction, keeping the two events distinct and citing their source entries.
+
+![Illustrative recovery sequence: port 9000 fails with EADDRINUSE; 4317 is approved; a later user ruling changes the port to 4318 and timeout to 9500. After multiple checkpoints, context_history retrieves the diagnostic and the later ruling separately.](docs/context-memory/assets/recovery-example.png)
+
+*Illustrative diagrams, not run captures or benchmark results. The [validation record](docs/context-memory/validation.md) describes the actual runs and their limits.*
+
+## How it works
+
+Pi's native compaction retains session history on disk and rebuilds the model's active context from a summary and retained recent messages. This project adds source-linked handover notes, reference checks and a branch-scoped history tool to the continuation workflow.
+
+1. **Write a handover.** The current session model writes the note by default; a fixed writer is optional. The note records task state, next steps and references to original entries.
+2. **Check before committing.** Source references must belong to the selected branch, and quotations must occur verbatim in their cited records. Changed sources, invalid notes and failed writes prevent checkpoint publication. Failed compaction blocks further requests until explicit retry or new input; no other writer is silently substituted.
+3. **Continue and check details.** The agent resumes from the handover and can search or read original records through `context_history`. Earlier-checkpoint anchors help locate phases that the newest note no longer describes.
+
+These checks establish reference consistency, not semantic completeness or guaranteed model adherence. Original records can remain retrievable even when a note omits a detail; the agent still has to find and interpret the relevant evidence.
+
+The scope is **task continuity across compaction**. History access follows the current session branch and explicit parent-history grants. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
+
+See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the seven host files this distribution adapts.
+
+## Evidence and limits
+
+| Evidence | What it supports |
 | --- | --- |
-| **Project type** | Experimental Pi distribution, built from source. Not a Pi package. It cannot be added to an unmodified Pi installation with `pi install`. |
-| **Upstream baseline** | Pi `v0.85.1`, commit `d981de12`, imported as a clean snapshot. |
-| **What is new** | One extension directory, seven adapted host files, project scripts, tests and docs. See [upstream delta](docs/context-memory/upstream-delta.md). |
-| **Latest release** | `v0.2.3`, marked pre-release. The root `package.json` carries upstream workspace metadata and is not this project's version. |
-| **Ordinary extension packaging** | Planned for 1.0, when the host changes are thin enough to submit upstream. See the [roadmap](docs/context-memory/roadmap.md). |
+| **90 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
+| **429 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
+| **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
+| **Recovery comparison against native Pi** | Not yet measured. Replayable fixtures and probe questions are planned for 0.3.0. |
 
-## The problem, and where this is going
+The nine-checkpoint run used a 10k compaction trigger, not a 10k model window. Its compaction pause was **40.1 seconds at the median**, with pauses totaling **57.7% of elapsed time** and **25 history calls** across the run. This exposes real pause and retrieval costs; it is not a failure-rate estimate, a lossless-memory result or evidence that this method outperforms native Pi. The sequence was recorded during v0.2.2 development; v0.2.3 has separate budget and recovery checks.
 
-A long coding session outlives its context window. When Pi compacts, everything that fell out of the window survives only as a summary, and the summary keeps what the summarizer judged important at that moment. A decision from the first hour, a constraint the user stated once, the tool output that showed why an approach failed: each is either in the summary or gone, and the model that continues cannot tell which. So it guesses, or it asks again, and the user finds out later which one it did.
+The [validation record](docs/context-memory/validation.md) separates offline regressions, real-provider runs, failures and unmeasured cases. The [roadmap](docs/context-memory/roadmap.md) tracks recovery accuracy, compaction pause, token overhead and host footprint. Multi-day quality, near-window behavior and systematic provider comparisons remain unmeasured.
 
-This project changes what a compaction leaves behind.
-
-```
-Pi's native compaction
-
-  original messages  ->  summary  ->  the summary is all that remains
-
-This project
-
-  original JSONL  ->  note citing entry IDs  ->  compacted context
-        ^                                              |
-        |                context_history               |
-        +----------------------------------------------+
-```
-
-At compaction, the writer produces a structured note from the original session records. Every quotation in the note is checked verbatim against the record it cites, and every cited record must be on the current branch; a note that fails these checks is refused rather than committed. The original JSONL stays on disk as the history store. After compaction the model can search the branch and read the exact earlier message through `context_history`, including the entry IDs behind a decision. The note is an index over the transcript, not a replacement for it. After a second checkpoint the note also lists the most recent earlier checkpoints on the branch, each with a readable anchor entry and its opening state lines, so a phase the newest note no longer describes still has a search anchor.
-
-The end state this is built toward is a session that runs for days, compacts many times, and never asks the user to repeat something already said. You come back the next morning, ask why the schema was changed, and the model reads yesterday's decision back from the record by entry ID instead of guessing from a summary. A model that checks the record when it is unsure instead of reconstructing it from a summary. A compaction that costs a few seconds and a small share of the window, so it stops being an event anyone notices. And a host patch thin enough that all of this ships as an ordinary Pi extension. The [roadmap](docs/context-memory/roadmap.md) states the four measurements that decide whether each release moves closer: how many probe questions a model still answers correctly after compaction, how long the pause takes, how many tokens the writer spends, and how many host lines remain changed.
-
-What holds today is narrower than that, and the [validation record](docs/context-memory/validation.md) says exactly how much. The design has run end to end with real providers, including a nine-checkpoint Astra stress sequence; 90 context-memory regressions and 429 host security and compatibility regressions run in CI on every change; failure states are explicit and a failed compaction blocks the next request rather than substituting a weaker summary. Recovery quality has not yet been measured against Pi's native compaction. That comparison, on replayable sessions with probe questions, is the 0.3.0 milestone and is the number that will say whether the design earns its cost.
-
-The scope is preserving task continuity when model context is compacted. History access follows the current session branch and explicit parent-history grants; this project does not provide a general cross-session memory or user-preference store. This repository includes the host changes needed for persistent writer leases, commit ordering and resident extension loading, which is why it is a distribution rather than a drop-in extension.
-
-## What it provides
-
-- A resident context extension that survives ordinary extension filtering and reload.
-- Disk-before-memory checkpoint publication, cooperative writer leases and explicit failure states.
-- Notes with validated source references and exact quotations; the original JSONL remains the history store.
-- Branch-scoped search and paginated reads, with revocable parent-history grants for child-session hosts.
-- A configurable fixed writer, bounded source chunks and accumulated writer usage.
-- A restart-latched fallback switch and explicit-copy migration for complete original histories.
-
-The [architecture](docs/context-memory/architecture.md) explains the host boundary and failure behavior. [Validation](docs/context-memory/validation.md) states what has actually been checked and what remains unproven. The [roadmap](docs/context-memory/roadmap.md) states the version policy, the four measurements and the planned minor releases.
-
-The [changelog](CHANGELOG.md) separates released versions from changes on `main` that have not been released. The build instructions below check out the latest release tag and do not include those unreleased changes.
-
-v0.2.3 adds tiered note budgets, bounded same-writer size repair and consistent checkpoint budget validation. It also distinguishes internal handover control from user authority and corrects budget-occupancy accounting. Existing v0.2.2 recovery hardening preserves original in-progress user requests independently of the writer, rejects handovers without a continuation step, and blocks requests when a committed recovery note has been removed or changed. It also refuses damaged checkpoints on reopen. These changes have synthetic regression coverage and one passing live Astra sequence after a budget failure and correction. The 10k stress run exposed substantial compaction pauses and retrieval overhead. See [architecture](docs/context-memory/architecture.md#continuation-protections) for capacity and provider-adapter limits and [validation](docs/context-memory/validation.md#astra-10k-live-check-2026-09-12-utc) for the results and their limits.
-
-## Build from source
+## Build and run
 
 Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent sessions currently support macOS and Linux.
 
@@ -67,61 +66,23 @@ npm run build:offline
 node scripts/context-memory-check.mjs
 ```
 
-The model-data helper downloads the pinned upstream source release, checks its SHA256 and extracts only the public model catalog required for the offline build. It does not read Pi configuration or call a model.
+The model-data helper downloads the pinned upstream source release, checks its SHA256 and extracts the public model catalog for the offline build. It does not read Pi configuration or call a model. The focused check runs static checks and context-memory regressions without provider calls, browser smoke checks or the full upstream suite.
 
-The focused check runs static checks and context-memory regressions. It does not run provider calls, browser smoke checks or the full upstream suite.
-
-## Configure and run
-
-By default the current session model writes the handover note itself: the request is the session's own provider context plus one closing instruction, so no second model, no extra authentication and no cold read of the history are needed. The request repeats the prefix Pi itself would send, so a provider's prompt cache can serve it, unless another extension rewrites the context on each request. After the checkpoint, model context holds the system prompt and the note only; the original messages stay in the session file and on screen and can be retrieved with `context_history`.
-
-To change any of this, create `pi-context-memory.json` in your Pi agent directory (normally `~/.pi/agent/`). Every key is optional; the values below are the defaults:
-
-```json
-{
-  "enabled": true,
-  "writerModel": "session",
-  "writerEffort": "medium",
-  "keepRecentTokens": 0,
-  "noteRepair": true,
-  "eventLog": true
-}
-```
-
-- `writerModel`: `"session"`, or a `provider/model` string such as `"openai-codex/gpt-6-astra"` to use a fixed writer that reads the raw records in chunks. A fixed writer that is missing from the model catalog or whose provider has no configured authentication is reported at session start (as a notification in the terminal UI, on stderr otherwise) and in `/compaction-status`; compaction then fails until the configuration names a reachable model or `"session"`. There is no silent model substitution in either direction.
-- `writerEffort`: reasoning effort for a fixed writer; passed only to models that declare reasoning support. The `session` writer ignores it and reasons at the session's current thinking level, the way Pi's own summarizer does, so a session running at `high` writes its note at `high` and a session with thinking off writes without reasoning.
-- `keepRecentTokens`: estimated original tokens kept in context after a checkpoint. `0` keeps nothing once the current turn is complete, or when an automatic in-task handover covers a completed tool batch. Manual compaction of an unfinished turn and overflow retries keep their user message and tool rounds. A positive value keeps whole recent turns up to that estimate, capped at half the compaction threshold.
-- `noteTokens`: optional **fixed hard limit** for the serialized JSON note (minimum `500`), capped at 15% of the trigger and the storage maximum of `8000`. Explicit settings retain fixed-budget semantics. When omitted, the default is tiered: released-source estimates of up to 80k, 200k, 400k and above select base/hard allowances of 3000/4000, 4000/5000, 5000/6000 and 6000/8000. The previous note's actual size supplies a bounded anti-shrink floor; smaller windows take precedence. These are UTF-8 byte-based estimates, not provider token counts. See [budget rules](docs/context-memory/architecture.md#tiered-note-budgets-and-bounded-repair-v023).
-- `noteRepair`: default `true`. Only an otherwise valid note exceeding its frozen hard limit gets at most one short, same-model size-repair call across the whole compaction. It adds paid usage and latency when needed. Set `false` for strict one-pass behavior. No model substitution, mechanical truncation or retry of other failure classes is introduced.
-- `compactAt`: optional. Automatic compaction point as an integer token count (above 1) or a share of the context window (at or below 1). A value too small for the selected model fails with `CONTEXT_CAPACITY` when that model is selected. Without it the point is `min(model cap, 0.8 × window, window − output reserve)`. This is a trigger at an available compaction boundary; final request guards separately enforce `window − output reserve` so a low trigger does not cause premature input rejection.
-
-Manual `/compact` works on any session that holds at least one complete turn, including short conversations.
-
-Authenticate providers through Pi's normal login or API-key configuration. This repository supplies no credentials.
-
-Start with a fresh session:
+Authenticate through Pi's normal login or API-key configuration, then start a fresh session:
 
 ```sh
 node packages/coding-agent/dist/bundle/cli.js --no-extensions
 ```
 
-`--no-extensions` disables ordinary extension discovery. The compaction extension is built into this host. Add trusted provider extensions explicitly with `-e` if your model needs one. The SDK is available from `packages/coding-agent/dist/index.js` after building.
+`--no-extensions` disables ordinary extension discovery; the compaction extension is built into this host. Add trusted provider extensions explicitly with `-e` if your model needs one. This repository supplies no credentials and does not replace a global Pi installation or migrate old sessions automatically.
 
-Use `/compaction-status` to inspect the build, writer, checkpoint, budget mode, repair setting, active/last attempt and request state. `budget.noteTokens` is the stable pending-candidate allowance, not a prediction of the next cut-dependent writer budget; `checkpointBudget` and attempt `budgetPolicy` are actual frozen decisions. Set `enabled` to `false` and restart Pi to use default Pi compaction. `/reload` does not change this setting. Storage protections and the opaque-checkpoint migration guard remain active in fallback mode.
+The **current session model writes the note by default**, so no second model configuration is required. Use `/compact` to compact manually and `/compaction-status` to inspect the writer, checkpoint, budget and request state. Full configuration, fixed-writer setup, event reporting and compactor compatibility are in [Configuration and operation](docs/context-memory/configuration.md).
 
-### Event log
+## Status and compatibility
 
-Each compaction attempt, request guard, history retrieval and note candidate appends one line to `context-memory-events.jsonl` in the agent directory. Lines carry outcome, error class, durations, token counts, sizes and identifiers only. No message text, note content, quotes, queries, file paths or free-form error messages are written. Every session has a fixed quota per event kind, so a failure loop cannot grow the file. When the file reaches 8 MB it is renamed to `.1`, replacing the previous generation, so the log occupies at most about 16 MB. Set `"eventLog": false` in `pi-context-memory.json` to turn it off; `"enabled": false` also turns it off. Summarize the log with:
+This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.85.1** (`d981de12`), imported as a clean snapshot. The extension and its required host changes ship together; ordinary extension packaging is the [1.0 goal](docs/context-memory/roadmap.md), not a current install option. The root `package.json` carries upstream workspace metadata and is not this project's version.
 
-```sh
-node scripts/context-memory-report.mjs
-```
-
-The existing `tokens` fields describe committed compactions. JSON byte measurements and hard-budget occupancy are separate from rendered note, lineage and continuation sizes; old logs lacking these measurements are reported as unknown. Per-call generation/repair accounting and elastic usage make fallback cost visible. `writerAttempts.all` and `writerAttempts.byOutcome` also include known usage from failed and aborted attempts. Calls without returned usage, and attempts without call metadata in older logs, are counted explicitly; their missing cost is not evidence of zero cost.
-
-Other extensions may observe `session_before_compact` as long as their handlers return `undefined`; they run before the writer. An extension that returns a compaction or a cancellation from that event competes with this feature, and the compaction fails with `CONTEXT_COMPACTOR_CONFLICT` before the writer is called. Disable such compactors before use. This project does not overwrite a global Pi installation or migrate old sessions automatically.
-
-## Data and compatibility
+The latest tagged release, **v0.2.3**, adds tiered note budgets and bounded same-writer size repair. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
 
 Notes, tool results and history can contain sensitive information. They remain in local session files, but relevant source content is sent to the writer during compaction and to the selected model when retrieved. History grants restrict this API; they are not an operating-system sandbox for agents with shell access.
 

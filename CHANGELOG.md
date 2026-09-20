@@ -6,6 +6,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- Reorganize the README around source-linked compaction, an illustrated recovery example and the limits of current evidence. Clarify that native Pi retains original session history, distinguish reference validation from semantic recovery, and show the default session writer before optional configuration.
+- Add two illustrative flow diagrams and move the full configuration and event-log reference to `docs/context-memory/configuration.md`. No runtime behavior, build identity or release tag changes.
+
 ## [v0.2.3] — 2026-09-13
 
 ### Added

@@ -41,7 +41,9 @@ Scheduling needs a separate evaluation in a later 0.x release. **Hard compaction
 
 ## External baseline
 
-Each evaluation report includes, where it can be run, the same probe set against the provider's native compaction. The project exists because it recovers tasks better than that baseline. If a release loses to the baseline on recovery accuracy, that release's notes will say so and open the question of whether the project should continue.
+The first recovery comparison is against Pi's native compaction on the same pinned Pi baseline, task model and replayable probe set. Reports must state compaction settings, retained-context budgets and allowed retrieval tools so the comparison can be interpreted. Provider-native compaction, where available, is an additional external baseline and is reported separately.
+
+Whether source-linked compaction recovers tasks well enough to justify its pause, token and retrieval costs is still an open question. Reports will publish the trade-offs, including results that favor a baseline. Those results determine which parts of the project remain worth maintaining.
 
 ## After 1.0
 

@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- Replace the two generated README diagrams with hand-authored SVG sources and their renders, and add a third figure covering the commit gate: the three checks that precede checkpoint publication and the blocking failure path. Each figure ships a dark-mode counterpart, selected through `prefers-color-scheme`. Name the commit gate in "How it works" and state that original records stay in the session JSONL. Documentation only; no runtime behavior changes.
+
 ## [v0.2.4] — 2026-09-20
 
 ### Changed

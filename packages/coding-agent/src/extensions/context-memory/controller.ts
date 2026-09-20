@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model, Tool } from "@earendil-works/pi-ai";
+import { type Api, getInitialSystemMessage, type Model, type Tool } from "@earendil-works/pi-ai";
 import type { CompactionResult } from "../../core/compaction/compaction.ts";
 import { estimateTokens } from "../../core/compaction/index.ts";
 import type {
@@ -346,7 +346,8 @@ export class MemoryController {
 		this.guarded(() => {
 			assertToolPairs(result);
 			const estimate =
-				result.reduce((total, message) => total + estimateTokens(message), 0) + textTokens(ctx.getSystemPrompt());
+				result.reduce((total, message) => total + estimateTokens(message), 0) +
+				(getInitialSystemMessage(result) ? 0 : textTokens(ctx.getSystemPrompt()));
 			if (estimate > budget.inputLimit)
 				throw new Error(
 					"CONTEXT_INPUT_TOO_LARGE: request exceeds the input allowance; compact explicitly or split this input",
@@ -369,6 +370,9 @@ export class MemoryController {
 		}
 		const converted = convertToLlm(withPendingNotes(messages, increments, noteTokens));
 		assertToolPairs(converted);
+		// Pi 0.86 persists prompt/tool changes in the transcript. Re-adding the current
+		// prompt as a legacy header would duplicate instructions and revive removed tools.
+		if (getInitialSystemMessage(converted)) return { messages: converted };
 		return { systemPrompt: ctx.getSystemPrompt(), messages: converted, tools: this.activeTools() };
 	}
 

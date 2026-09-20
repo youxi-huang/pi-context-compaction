@@ -74,9 +74,9 @@ export function sumMemoryUsage(usages: readonly Usage[]): Usage {
 
 /** The provider request the session model would receive next; reused verbatim so the prompt cache stays warm. */
 export interface SessionPrefix {
-	systemPrompt: string;
+	systemPrompt?: string;
 	messages: readonly Message[];
-	tools: readonly Tool[];
+	tools?: readonly Tool[];
 }
 
 export interface WriteMemoryOptions {
@@ -434,9 +434,9 @@ async function writeWithSession(
 		throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
 	// Same estimator Pi uses for context accounting, so images count at their flat estimate, not as base64 text.
 	const fixedTokens =
-		textTokens(prefix.systemPrompt) +
+		textTokens(prefix.systemPrompt ?? "") +
 		prefix.messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
-		textTokens(JSON.stringify(prefix.tools)) +
+		textTokens(JSON.stringify(prefix.tools ?? [])) +
 		maxTokens;
 	let instruction: string | undefined;
 	for (const head of [80, 40, 0]) {
@@ -454,7 +454,7 @@ async function writeWithSession(
 		{
 			systemPrompt: prefix.systemPrompt,
 			messages: [...prefix.messages, { role: "user", content: instruction, timestamp: Date.now() }],
-			tools: [...prefix.tools],
+			...(prefix.tools ? { tools: [...prefix.tools] } : {}),
 		},
 		{
 			...(effort === "off" ? {} : { reasoning: effort }),

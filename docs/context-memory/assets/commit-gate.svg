@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="690" viewBox="0 0 660 690" role="img" aria-labelledby="fig2title fig2desc">
+  <title id="fig2title">The commit gate</title>
+  <desc id="fig2desc">A draft handover note enters a commit gate with three checks: every source reference must belong to the selected session branch, every quotation must occur verbatim in the record it cites, and the note must be valid and the write must succeed. If all three pass, the checkpoint is published and the session continues. If any check fails, through a changed source, an invalid note or a failed write, the checkpoint is not published, further requests are blocked until an explicit retry or new user input, and no other writer is silently substituted.</desc>
+
+  <defs>
+    <marker id="arrow" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#8C857A"/>
+    </marker>
+    <marker id="arrow-accent" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="9" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#8C5A3C"/>
+    </marker>
+  </defs>
+
+  <rect width="660" height="690" fill="#FAFAF8"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, &quot;Liberation Sans&quot;, sans-serif" letter-spacing="0.01em">
+
+    <!-- header -->
+    <text x="40" y="36" font-size="17" font-weight="600" fill="#2E2620">The commit gate</text>
+    <text x="40" y="58" font-size="11.5" fill="#6B6259">A checkpoint is published only if all three checks pass.</text>
+
+    <!-- connectors -->
+    <line x1="330" y1="142" x2="330" y2="178" stroke="#8C857A" stroke-width="0.9" marker-end="url(#arrow)"/>
+    <line x1="330" y1="368" x2="330" y2="402" stroke="#8C857A" stroke-width="0.9" marker-end="url(#arrow)"/>
+    <path d="M 264,434 L 180,434 L 180,498" fill="none" stroke="#8C857A" stroke-width="0.9" marker-end="url(#arrow)"/>
+    <path d="M 396,434 L 480,434 L 480,498" fill="none" stroke="#8C5A3C" stroke-width="1" marker-end="url(#arrow-accent)"/>
+
+    <!-- draft note -->
+    <rect x="180" y="88" width="300" height="54" rx="3" fill="#F4F1EA" stroke="#8C857A" stroke-width="1"/>
+    <text x="330" y="112" font-size="13" font-weight="600" fill="#2E2620" text-anchor="middle">Draft handover note</text>
+    <text x="330" y="130" font-size="11" fill="#6B6259" text-anchor="middle">a candidate, not yet published</text>
+
+    <!-- gate region -->
+    <rect x="40" y="180" width="580" height="188" rx="4" fill="none" stroke="#8C857A" stroke-width="1"/>
+    <rect x="64" y="172" width="94" height="15" fill="#FAFAF8"/>
+    <text x="111" y="184" font-size="10.5" font-weight="600" letter-spacing="0.09em" fill="#6B6259" text-anchor="middle">COMMIT GATE</text>
+
+    <circle cx="74" cy="212" r="9.5" fill="#FFFFFF" stroke="#8C857A" stroke-width="0.9"/>
+    <text x="74" y="216" font-size="10" font-weight="600" fill="#2E2620" text-anchor="middle">a</text>
+    <text x="96" y="210" font-size="12.5" font-weight="600" fill="#2E2620">Source references</text>
+    <text x="96" y="228" font-size="11" fill="#6B6259">every reference must belong to the selected session branch</text>
+
+    <circle cx="74" cy="268" r="9.5" fill="#FFFFFF" stroke="#8C857A" stroke-width="0.9"/>
+    <text x="74" y="272" font-size="10" font-weight="600" fill="#2E2620" text-anchor="middle">b</text>
+    <text x="96" y="266" font-size="12.5" font-weight="600" fill="#2E2620">Quotations</text>
+    <text x="96" y="284" font-size="11" fill="#6B6259">every quotation must occur verbatim in the record it cites</text>
+
+    <circle cx="74" cy="324" r="9.5" fill="#FFFFFF" stroke="#8C857A" stroke-width="0.9"/>
+    <text x="74" y="328" font-size="10" font-weight="600" fill="#2E2620" text-anchor="middle">c</text>
+    <text x="96" y="322" font-size="12.5" font-weight="600" fill="#2E2620">Note and write</text>
+    <text x="96" y="340" font-size="11" fill="#6B6259">the note must be valid and the write must succeed</text>
+
+    <!-- decision -->
+    <polygon points="330,404 396,434 330,464 264,434" fill="#FFFFFF" stroke="#8C857A" stroke-width="1"/>
+    <text x="330" y="438" font-size="11" fill="#2E2620" text-anchor="middle">all three pass?</text>
+
+    <text x="222" y="426" font-size="11" font-weight="600" fill="#2E2620" text-anchor="middle">pass</text>
+    <text x="438" y="426" font-size="11" font-weight="600" fill="#8C5A3C" text-anchor="middle">fail</text>
+
+    <text x="494" y="452" font-size="10.5" fill="#6B6259">changed source,</text>
+    <text x="494" y="468" font-size="10.5" fill="#6B6259">invalid note,</text>
+    <text x="494" y="484" font-size="10.5" fill="#6B6259">failed write</text>
+
+    <!-- pass outcome -->
+    <rect x="40" y="500" width="280" height="116" rx="3" fill="#FFFFFF" stroke="#8C857A" stroke-width="1"/>
+    <text x="60" y="526" font-size="13" font-weight="600" fill="#2E2620">Checkpoint published</text>
+    <line x1="56" y1="539" x2="304" y2="539" stroke="#C9C4BB" stroke-width="0.75"/>
+    <text x="60" y="562" font-size="11.5" fill="#2E2620">The session continues.</text>
+    <text x="60" y="584" font-size="11.5" fill="#6B6259">The note becomes the checkpoint</text>
+    <text x="60" y="602" font-size="11.5" fill="#6B6259">the active context resumes from.</text>
+
+    <!-- fail outcome -->
+    <rect x="340" y="500" width="280" height="116" rx="3" fill="#EFE7DA" stroke="#8C5A3C" stroke-width="1"/>
+    <text x="360" y="526" font-size="13" font-weight="600" fill="#2E2620">Checkpoint not published</text>
+    <line x1="356" y1="539" x2="604" y2="539" stroke="#C9C4BB" stroke-width="0.75"/>
+    <text x="360" y="562" font-size="11.5" fill="#6B6259">Further requests are blocked until</text>
+    <text x="360" y="580" font-size="11.5" fill="#6B6259">an explicit retry or new user input.</text>
+    <text x="360" y="602" font-size="11.5" fill="#2E2620">No other writer is silently substituted.</text>
+
+    <!-- footnote -->
+    <line x1="40" y1="648" x2="620" y2="648" stroke="#C9C4BB" stroke-width="0.75"/>
+    <text x="40" y="668" font-size="11" fill="#6B6259">The checks are structural: they establish reference consistency, not semantic completeness.</text>
+  </g>
+</svg>

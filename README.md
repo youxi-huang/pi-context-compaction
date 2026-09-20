@@ -11,7 +11,10 @@ A compaction note should carry the task forward and provide an index back to the
 
 [Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Build and run](#build-and-run) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
 
-![Mechanism overview: original messages produce a checked checkpoint for active context; the original session records remain in JSONL, and context_history searches or reads them when the agent needs a detail. Reference checks do not prove semantic completeness.](docs/context-memory/assets/source-linked-compaction.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/source-linked-compaction-dark.png">
+  <img alt="Two layers. Above: the active context after compaction, where a handover note recording task state, next steps and references to original entries is published as the checkpoint the active context resumes from. Below: the session JSONL on disk, where every original entry is retained in order, with two entries shaded to show the ones the note cites and the agent re-reads. An arrow up from the record shows that the session model writes the note at compaction, a fixed writer being optional. A pair of arrows shows context_history searching or reading the original records on the current session branch and returning original text with its source entry ID. Reference checks establish reference consistency, not semantic completeness." src="docs/context-memory/assets/source-linked-compaction.png">
+</picture>
 
 ## Recovery example
 
@@ -21,7 +24,10 @@ After several compactions, knowing the latest port is not enough to explain how 
 
 The example below follows the values in the [documented provider scenario](docs/context-memory/validation.md#real-provider-scenario): port **9000** was rejected after `EADDRINUSE`, **4317** was the earlier approved replacement, and **4318** with timeout **9500** came from a later user ruling. With `context_history`, the agent can retrieve the original diagnostic and the later instruction, keeping the two events distinct and citing their source entries.
 
-![Illustrative recovery sequence: port 9000 fails with EADDRINUSE; 4317 is approved; a later user ruling changes the port to 4318 and timeout to 9500. After multiple checkpoints, context_history retrieves the diagnostic and the later ruling separately.](docs/context-memory/assets/recovery-example.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/recovery-example-dark.png">
+  <img alt="An illustrative timeline, not a run capture. Port 9000 is rejected after EADDRINUSE; port 4317 is the earlier approved replacement, later superseded; a later user ruling sets port 4318 with timeout 9500; several compactions follow. The agent is then asked which port originally failed and what the user approved later. Two context_history retrievals reach back to two different points on the timeline, the original diagnostic and the later user ruling, and the answer carries both: original failure port 9000 with EADDRINUSE, current ruling port 4318 with timeout 9500, each read back from the entry it cites." src="docs/context-memory/assets/recovery-example.png">
+</picture>
 
 *Illustrative diagrams, not run captures or benchmark results. The [validation record](docs/context-memory/validation.md) describes the actual runs and their limits.*
 
@@ -30,8 +36,13 @@ The example below follows the values in the [documented provider scenario](docs/
 Pi's native compaction retains session history on disk and rebuilds the model's active context from a summary and retained recent messages. This project adds source-linked handover notes, reference checks and a branch-scoped history tool to the continuation workflow.
 
 1. **Write a handover.** The current session model writes the note by default; a fixed writer is optional. The note records task state, next steps and references to original entries.
-2. **Check before committing.** Source references must belong to the selected branch, and quotations must occur verbatim in their cited records. Changed sources, invalid notes and failed writes prevent checkpoint publication. Failed compaction blocks further requests until explicit retry or new input; no other writer is silently substituted.
-3. **Continue and check details.** The agent resumes from the handover and can search or read original records through `context_history`. Earlier-checkpoint anchors help locate phases that the newest note no longer describes.
+2. **Check before committing.** Three checks run at this commit gate: source references must belong to the selected branch, quotations must occur verbatim in their cited records, and the note must be valid and the write must succeed. Changed sources, invalid notes and failed writes prevent checkpoint publication. Failed compaction blocks further requests until explicit retry or new input; no other writer is silently substituted.
+3. **Continue and check details.** The agent resumes from the handover and can search or read original records through `context_history`; those records stay in the session JSONL on disk, and a checkpoint indexes them rather than replacing them. Earlier-checkpoint anchors help locate phases that the newest note no longer describes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/commit-gate-dark.png">
+  <img alt="A draft handover note enters a commit gate with three checks: every source reference must belong to the selected session branch, every quotation must occur verbatim in the record it cites, and the note must be valid and the write must succeed. If all three pass, the checkpoint is published and the session continues. If any check fails, whether a changed source, an invalid note or a failed write, the checkpoint is not published, further requests are blocked until an explicit retry or new user input, and no other writer is silently substituted." src="docs/context-memory/assets/commit-gate.png">
+</picture>
 
 These checks establish reference consistency, not semantic completeness or guaranteed model adherence. Original records can remain retrievable even when a note omits a detail; the agent still has to find and interpret the relevant evidence.
 

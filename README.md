@@ -48,6 +48,8 @@ These checks establish reference consistency, not semantic completeness or guara
 
 The scope is **task continuity across compaction**. History access follows the current session branch and explicit parent-history grants. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
 
+The planned direction keeps the session record as the durable source of truth and treats notes and indexes as derived projections: increments prepared while the task runs, instruction-authority checks and typed retrieval are planned steps on the [roadmap](docs/context-memory/roadmap.md), and every candidate still passes the same commit gate.
+
 See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the six host files this distribution adapts.
 
 ## Evidence and limits
@@ -92,7 +94,7 @@ The **current session model writes the note by default**, so no second model con
 
 ## Status and compatibility
 
-This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.86.0** (`ecac0a9c`), imported as a clean snapshot. The extension and its required host changes ship together; ordinary extension packaging is the [1.0 goal](docs/context-memory/roadmap.md), not a current install option. The root `package.json` carries upstream workspace metadata and is not this project's version.
+This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.86.0** (`ecac0a9c`), imported as a clean snapshot. The extension and its required host changes ship together; a publicly installable stock-Pi extension is a [planned pre-1.0 delivery](docs/context-memory/roadmap.md), followed by the mature compatibility and recovery contract at 1.0. That package is not yet implemented. The root `package.json` carries upstream workspace metadata and is not this project's version.
 
 The latest tagged release, **v0.2.4**, ports the existing compaction behavior to Pi v0.86.0, preserving transcript prompt/tool changes and adopting the upstream cut-point fix. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
 
@@ -112,6 +114,6 @@ The project was initially named Pi Context Memory. Existing `context-memory` sou
 
 MIT. Pi retains its original license and copyright. New context-memory code is covered by the same license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The design was inspired in part by OpenAI's public description of notes across context windows and retrieval of earlier task messages. Codex assisted development. This project is independently maintained and is not an official OpenAI or Pi release. No OpenAI context-management implementation has been copied. See [OpenAI's description](https://learn.chatgpt.com/docs/models).
+The design was inspired in part by OpenAI's public description of notes across context windows and retrieval of earlier task messages. The planned incremental and retrieval work also draws on public community work on agent context management, including incremental compaction, reversible context reduction and provider-native compaction state. Codex assisted development. This project is independently maintained and is not an official OpenAI or Pi release. No OpenAI context-management implementation has been copied. See [OpenAI's description](https://learn.chatgpt.com/docs/models).
 
 The original Pi README is retained as [UPSTREAM_README.md](UPSTREAM_README.md). Its release and support instructions apply to upstream Pi, not this experimental distribution.

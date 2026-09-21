@@ -24,7 +24,7 @@ Pi's extension API runs handlers on events. For most of what this project does, 
 4. Pi v0.86.0 now fixes the former zero-keep-budget cut-point issue upstream; this distribution no longer changes that file.
 5. A retained tool turn can span older checkpoints. The session manager must omit those old compaction entries when assembling the kept prefix, or their full summaries reappear alongside the newest summary. A `context` event alone cannot fix SDK context assembly and compaction preparation, which also consume the session manager's output.
 
-The long-term direction, stated in the [roadmap](roadmap.md), is to shrink this list: each host change is classified as a candidate upstream hook, a candidate to move into the extension, or one that must stay, and releases 0.7.0 through 0.9.0 remove one class each. Host footprint, counted in lines changed against upstream, is one of the project's four measurements.
+The [roadmap](roadmap.md) commits to a public stock-Pi extension before 1.0, with implementation starting in the 0.3 period. Reviewing these dependencies against public APIs in a pinned upstream release is the first step toward that delivery, followed by migration, verification and packaging. The preview must work without host patches for its declared workflows; broader compatibility and maturity work can follow before 1.0. This list describes the current implementation, not proof that every choice must remain a host patch or an obligation to reproduce every resident-build guarantee in the first preview. Scope differences must be explicit. Host footprint, counted in lines changed against upstream, is one of the project's four measurements.
 
 ## The six host files
 

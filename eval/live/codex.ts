@@ -151,11 +151,18 @@ export function codexTransport(options: CodexOptions): Transport {
 					ledger.sent(reservation!);
 					sent = true;
 					if (latest) latest.sent = true;
-					const response = await (options.fetch ?? globalThis.fetch)(url, {
-						...init,
-						redirect: "error",
-						signal: own.signal,
-					});
+					let response: Response;
+					try {
+						response = await (options.fetch ?? globalThis.fetch)(url, {
+							...init,
+							redirect: "error",
+							signal: own.signal,
+						});
+					} catch (error) {
+						diagnostics!.transportFailure(error);
+						ledger.halt("EVAL_PROVIDER_TRANSPORT_FAILURE");
+						throw new Error("EVAL_PROVIDER_TRANSPORT_FAILURE");
+					}
 					status = response.status;
 					await diagnostics!.response(response);
 					ledger.event({ type: "http-response", scope: request.scope, diagnostics: diagnostics!.snapshot() });
@@ -213,6 +220,7 @@ export function codexTransport(options: CodexOptions): Transport {
 				).result();
 				const measured = rawMeasurement(terminalResponse);
 				latest = { ...measured, sent, capMode: ledger.capMode, inputProxy, reservedInput: reservation?.input ?? 0 };
+				if (status === undefined && diagnostics.transportError) ledger.stop("EVAL_PROVIDER_TRANSPORT_FAILURE");
 				if (reservation) ledger.settle(reservation, measured.input, measured.output);
 				else ledger.stop("EVAL_REQUEST_NOT_ADMITTED");
 				if (

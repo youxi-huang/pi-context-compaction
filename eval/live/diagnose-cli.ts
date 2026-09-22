@@ -1,8 +1,10 @@
 import { diagnoseOnce } from "./diagnose.ts";
+import { recordStartupEnvironment } from "./environment.ts";
 
+recordStartupEnvironment();
 const [priorPlan, approvalReference] = process.argv.slice(2);
 if (!priorPlan || !approvalReference)
-	throw new Error("Usage: diagnose-cli.ts absolute-prior-plan.json authorization-reference");
+	throw new Error("Usage: diagnose-cli.ts absolute-prior-plan-or-diagnostic.json authorization-reference");
 const result = await diagnoseOnce(priorPlan, approvalReference);
 console.log(
 	JSON.stringify({

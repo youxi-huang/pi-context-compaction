@@ -1,4 +1,4 @@
-/** Response-only diagnostics; secrets stay in the redactor closure, never in its snapshot. */
+/** Diagnostic redaction; secrets stay in the closure, never in its snapshot. */
 export function redactor(secrets: readonly string[]): (value: unknown) => string {
 	const variants = [
 		...new Set(secrets.filter(Boolean).flatMap((s) => [s, encodeURIComponent(s), Buffer.from(s).toString("base64")])),
@@ -27,6 +27,7 @@ export function redactor(secrets: readonly string[]): (value: unknown) => string
 				/((?:authorization|proxy-authorization|access_token|refresh_token|id_token|api[_-]?key|cookie|set-cookie|password|chatgpt-account-id)\s*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,}]+)/gi,
 				'$1"[REDACTED]"',
 			)
+			.replace(/(https?:\/\/)[^\s/@]+(?::[^\s/@]*)?@/gi, "$1[REDACTED]@")
 			.replace(/\bBearer\s+[^\s,"'}]+/gi, "Bearer [REDACTED]")
 			.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, "[REDACTED_JWT]")
 			.replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_KEY]");
@@ -55,10 +56,45 @@ export function redactor(secrets: readonly string[]): (value: unknown) => string
 function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
+export interface ErrorChain {
+	name: string | null;
+	message: string | null;
+	code: string | number | null;
+	errno: string | number | null;
+	stackFirstLine: string | null;
+	cause: ErrorChain | null;
+	errors?: ErrorChain[];
+	circular?: boolean;
+}
+/** Include non-enumerable Error fields and AggregateError branches, never arbitrary properties. */
+export function transportErrorChain(error: unknown, scrub = redactor([])): ErrorChain {
+	const seen = new Set<unknown>();
+	const visit = (value: unknown): ErrorChain => {
+		const object = record(value);
+		const text = (field: unknown) =>
+			field === undefined || field === null ? null : scrub(String(field)).slice(0, 16384);
+		const scalar = (field: unknown) => (typeof field === "number" ? field : text(field));
+		const result: ErrorChain = {
+			name: text(object.name),
+			message: text(object.message ?? (typeof value === "string" ? value : null)),
+			code: scalar(object.code),
+			errno: scalar(object.errno),
+			stackFirstLine: text(typeof object.stack === "string" ? object.stack.split("\n")[0] : null),
+			cause: null,
+		};
+		if (seen.has(value)) return { ...result, circular: true };
+		if (value && typeof value === "object") seen.add(value);
+		if (object.cause !== undefined && object.cause !== null) result.cause = visit(object.cause);
+		if (Array.isArray(object.errors)) result.errors = object.errors.map(visit);
+		return result;
+	};
+	return visit(error);
+}
 export class ResponseDiagnostics {
 	private frame: string[] = [];
 	private frameSize = 0;
 	readonly scrub: (value: unknown) => string;
+	transportError: ErrorChain | null = null;
 	httpStatus: number | null = null;
 	contentType: string | null = null;
 	errorBody: string | null = null;
@@ -68,6 +104,9 @@ export class ResponseDiagnostics {
 	usageCandidates: { eventType: string; path: string; value: unknown }[] = [];
 	constructor(secrets: readonly string[]) {
 		this.scrub = redactor(secrets);
+	}
+	transportFailure(error: unknown) {
+		this.transportError = transportErrorChain(error, this.scrub);
 	}
 	line(text: string) {
 		if (text.startsWith("data:")) {
@@ -149,6 +188,7 @@ export class ResponseDiagnostics {
 	}
 	snapshot() {
 		return {
+			transportError: this.transportError,
 			httpStatus: this.httpStatus,
 			contentType: this.contentType,
 			errorBody: this.errorBody,

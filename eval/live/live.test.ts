@@ -218,6 +218,35 @@ describe("subscription transport: real serializer, fake network", () => {
 		expect(quota.reservedOutput).toBe(8192);
 		expect(quota.knownOutput).toBe(0);
 	});
+	it("classifies a pre-Response fetch rejection as transport failure and retains unknown reservations", async () => {
+		const ledger = new Ledger(),
+			quota = big(ledger);
+		let calls = 0;
+		const transport = codexTransport({
+			mode: "scripted",
+			ledger,
+			groups: () => [quota],
+			access: () => fakeCredential,
+			fetch: async () => {
+				calls++;
+				throw new TypeError(`fetch failed ${fakeCredential}`, {
+					cause: Object.assign(new Error("connect denied"), { code: "EPERM", errno: -1 }),
+				});
+			},
+		});
+		await expect(transport.complete(request())).rejects.toThrow("EVAL_PROVIDER_TRANSPORT_FAILURE");
+		expect(calls).toBe(1);
+		expect(ledger.fatal).toBe("EVAL_PROVIDER_TRANSPORT_FAILURE");
+		expect(quota.reservedOutput).toBe(8192);
+		expect(transport.measurement?.()).toMatchObject({
+			input: null,
+			output: null,
+			diagnostics: { httpStatus: null, transportError: { name: "TypeError", cause: { code: "EPERM", errno: -1 } } },
+		});
+		expect(JSON.stringify(transport.measurement?.())).not.toContain(fakeCredential);
+		await expect(transport.complete(request())).rejects.toThrow("EVAL_PROVIDER_TRANSPORT_FAILURE");
+		expect(calls).toBe(1);
+	});
 	it("never retries HTTP failures or persists credential echoes", async () => {
 		const ledger = new Ledger(),
 			quota = big(ledger);

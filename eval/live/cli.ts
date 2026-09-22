@@ -1,7 +1,9 @@
 import { codexAccess } from "./codex.ts";
 import { assertExecutionMode } from "./contract.ts";
+import { recordStartupEnvironment } from "./environment.ts";
 import { runLivePlan } from "./plan.ts";
 
+recordStartupEnvironment();
 const [command, outputDirectory, approvalReference, rawJudgeConcurrency] = process.argv.slice(2);
 assertExecutionMode("live");
 if (command !== "execute" || !outputDirectory || !approvalReference)

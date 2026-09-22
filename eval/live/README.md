@@ -131,3 +131,20 @@ data, to detect usage that the accounting parser may have missed. This observati
 does not itself change accounting or permit continuation. A successful diagnostic
 ends for evidence review just as a failed one does. A plan restart requires the
 specific authorized condition and must carry forward every earlier attempt.
+
+A second, separately authorized diagnostic accepts the first diagnostic JSON as
+its predecessor (attempt 2, cumulative requests 2). It inherits both attempts'
+reservations and the original deadline, and uses a separate exclusive claim.
+Before attempt 3 it performs one DNS lookup and one TCP connection to the backend
+host on port 443, with no credentials, TLS or HTTP payload. Failed self-checks
+stop before provider dispatch; passing checks allow exactly one writer request,
+then stop for review regardless of its outcome. This is not a general resume CLI.
+
+Both live CLIs emit a startup environment record containing known network-guard
+names and booleans plus names of present proxy variables. Values are never logged;
+unknown fetch wrappers cannot be exhaustively detected. No guard is disabled.
+Pre-Response fetch rejections persist redacted name, message, code, errno, first
+stack line, cause chain and AggregateError branches. These failures are classified
+as `EVAL_PROVIDER_TRANSPORT_FAILURE`; missing actual usage remains unknown and
+its full reservation stays held. This classification does not prove the remote
+server received or executed the request.

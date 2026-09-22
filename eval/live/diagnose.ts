@@ -5,6 +5,7 @@ import { assertFrozenInputs, runnerFingerprint } from "../runner/frozen.ts";
 import type { CallRecord, RunResult, TransportRequest } from "../runner/types.ts";
 import { codexAccess, codexTransport, lunaModel } from "./codex.ts";
 import { assertExecutionMode, BUDGET_VERSION, combinedLimits } from "./contract.ts";
+import { environmentSnapshot, networkSelfCheck } from "./environment.ts";
 import { Ledger, type Quota } from "./ledger.ts";
 
 export function seedQuota(quota: Quota, prior: ReturnType<Quota["snapshot"]>): void {
@@ -24,15 +25,23 @@ export function seedQuota(quota: Quota, prior: ReturnType<Quota["snapshot"]>): v
 export async function diagnoseOnce(priorPlanFile: string, approvalReference: string) {
 	assertExecutionMode("live");
 	assertFrozenInputs();
-	const priorFile = resolve(priorPlanFile),
-		prior = JSON.parse(readFileSync(priorFile, "utf8"));
-	const globalPrior = prior.ledger.groups.find((g: { name: string }) => g.name === "global") as ReturnType<
-		Quota["snapshot"]
-	>;
+	const predecessorFile = resolve(priorPlanFile),
+		predecessor = JSON.parse(readFileSync(predecessorFile, "utf8"));
+	const followup = predecessor.status === "diagnostic-stopped-for-evidence";
+	if (
+		followup &&
+		(predecessor.attempt !== 2 || predecessor.cumulativeRequests !== 2 || predecessor.automaticRetryCount !== 0)
+	)
+		throw new Error("EVAL_DIAGNOSTIC_PRIOR_STATE_REQUIRED");
+	const priorFile = followup ? resolve(predecessor.priorPlan) : predecessorFile;
+	const prior = followup ? JSON.parse(readFileSync(priorFile, "utf8")) : predecessor;
+	const globalPrior = predecessor.ledger.groups.find(
+		(g: { name: string }) => g.name === (followup ? "global-cumulative" : "global"),
+	) as ReturnType<Quota["snapshot"]>;
 	if (
 		prior.status !== "incomplete-budget-or-provider" ||
-		prior.ledger.fatal !== "EVAL_USAGE_UNAVAILABLE" ||
-		globalPrior.sent !== 1 ||
+		!globalPrior ||
+		globalPrior.sent !== (followup ? 2 : 1) ||
 		!approvalReference.trim()
 	)
 		throw new Error("EVAL_DIAGNOSTIC_PRIOR_STATE_REQUIRED");
@@ -53,15 +62,21 @@ export async function diagnoseOnce(priorPlanFile: string, approvalReference: str
 	const elapsed = Date.now() - Date.parse(originalStart),
 		limits = combinedLimits();
 	for (const field of ["calls", "input", "output", "milliseconds"] as const)
-		if (globalPrior.limits[field] !== limits[field]) throw new Error("EVAL_DIAGNOSTIC_BUDGET_DRIFT");
+		if ((followup ? predecessor.originalLimits : globalPrior.limits)[field] !== limits[field])
+			throw new Error("EVAL_DIAGNOSTIC_BUDGET_DRIFT");
 	if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed >= limits.milliseconds)
 		throw new Error("EVAL_DIAGNOSTIC_GLOBAL_DEADLINE");
-	const directory = join(dirname(priorFile), "bounded-diagnostic");
+	const directory = join(dirname(priorFile), followup ? "bounded-diagnostic-2" : "bounded-diagnostic");
 	mkdirSync(directory, { recursive: true });
 	// This authorization allows one request only, even if this CLI is accidentally invoked twice.
 	writeFileSync(
 		join(directory, "one-request-claim.json"),
-		JSON.stringify({ approvalReference, priorPlan: priorFile, createdAt: new Date().toISOString() }) + "\n",
+		JSON.stringify({
+			approvalReference,
+			predecessor: predecessorFile,
+			priorPlan: priorFile,
+			createdAt: new Date().toISOString(),
+		}) + "\n",
 		{ flag: "wx", mode: 0o600 },
 	);
 	const ledger = new Ledger((event) =>
@@ -83,6 +98,41 @@ export async function diagnoseOnce(priorPlanFile: string, approvalReference: str
 		prior: globalPrior,
 		approvalReference,
 	});
+	const environment = environmentSnapshot();
+	const guarded =
+		environment.guards["deny-network"] || environment.guards.PI_OFFLINE || environment.guards["named-fetch-guard"];
+	const networkCheck = followup && !guarded ? await networkSelfCheck() : undefined;
+	if (followup) {
+		writeFileSync(
+			join(directory, "network-selfcheck.json"),
+			JSON.stringify({ environment, guarded, networkCheck, providerRequests: 0 }, null, 2) + "\n",
+		);
+		if (guarded || !networkCheck?.ok) {
+			const output = {
+				status: "diagnostic-stopped-before-provider",
+				error: guarded ? "EVAL_NETWORK_GUARD_PRESENT" : "EVAL_NETWORK_SELFCHECK_FAILED",
+				budgetVersion: BUDGET_VERSION,
+				approvalReference,
+				predecessor: predecessorFile,
+				priorPlan: priorFile,
+				originalStart,
+				originalLimits: limits,
+				elapsedBeforeDiagnosticMs: elapsed,
+				runnerSourceHash: runnerFingerprint(),
+				slot: "F1/project/r1/F1-cp1 writer",
+				attempt: 3,
+				environment,
+				networkCheck,
+				ledger: ledger.snapshot(),
+				diagnosticRequests: 0,
+				cumulativeRequests: global.sent,
+				automaticRetryCount: 0,
+				branchDecision: "network precheck failed; stop without provider request",
+			};
+			writeFileSync(join(directory, "diagnostic.json"), JSON.stringify(output, null, 2) + "\n");
+			return { directory, ...output };
+		}
+	}
 	const transport = codexTransport({ mode: "live", ledger, groups: () => [global, diagnostic], access: codexAccess });
 	const request: TransportRequest = {
 		purpose: "writer",
@@ -111,7 +161,10 @@ export async function diagnoseOnce(priorPlanFile: string, approvalReference: str
 		elapsedBeforeDiagnosticMs: elapsed,
 		runnerSourceHash: runnerFingerprint(),
 		slot: "F1/project/r1/F1-cp1 writer",
-		attempt: 2,
+		attempt: followup ? 3 : 2,
+		environment,
+		networkCheck,
+		predecessor: predecessorFile,
 		requestContextSha256: createHash("sha256").update(JSON.stringify(source.context)).digest("hex"),
 		error,
 		stopReason,

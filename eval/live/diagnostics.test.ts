@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { seedQuota } from "./diagnose.ts";
-import { ResponseDiagnostics, redactor } from "./diagnostics.ts";
+import { ResponseDiagnostics, redactor, transportErrorChain } from "./diagnostics.ts";
+import { environmentSnapshot, networkSelfCheck } from "./environment.ts";
 import { Ledger } from "./ledger.ts";
 
 describe("bounded response diagnostics", () => {
@@ -89,5 +90,87 @@ describe("bounded response diagnostics", () => {
 		expect(q.reservedOutput).toBe(16000);
 		expect(() => ledger.settle(r, null, null)).toThrow("EVAL_USAGE_UNAVAILABLE");
 		expect(q.reservedOutput).toBe(16000);
+	});
+});
+
+describe("transport and environment diagnostics", () => {
+	it("records nested and aggregate exception chains without credential echoes", () => {
+		const cause = Object.assign(new Error("connect denied https://name:secret@proxy.test"), {
+			code: "EPERM",
+			errno: -1,
+		});
+		const error = new TypeError("fetch failed private-access", { cause: new AggregateError([cause], "all failed") });
+		const chain = transportErrorChain(error, redactor(["private-access"]));
+		expect(chain.name).toBe("TypeError");
+		expect(chain.cause?.errors?.[0]).toMatchObject({ code: "EPERM", errno: -1 });
+		expect(chain.stackFirstLine).toContain("TypeError");
+		expect(JSON.stringify(chain)).not.toContain("private-access");
+		expect(JSON.stringify(chain)).not.toContain("name:secret");
+		Object.assign(cause, { cause });
+		expect(transportErrorChain(cause).cause?.circular).toBe(true);
+	});
+	it("records only guard booleans and proxy variable names", () => {
+		const snapshot = environmentSnapshot(
+			{ PI_OFFLINE: "1", NODE_OPTIONS: "--import=/private/deny-network.mjs", HTTPS_PROXY: "secret-proxy-url" },
+			[],
+			async function denied() {
+				throw new Error("EVAL_NETWORK_FORBIDDEN");
+			},
+		);
+		expect(snapshot.guards).toMatchObject({ "deny-network": true, PI_OFFLINE: true, "named-fetch-guard": true });
+		expect(snapshot.proxyEnvironmentVariables).toEqual(["HTTPS_PROXY"]);
+		expect(JSON.stringify(snapshot)).not.toContain("secret-proxy-url");
+		expect(JSON.stringify(snapshot)).not.toContain("/private/");
+	});
+	it("performs exactly one DNS and TCP probe without HTTP", async () => {
+		const calls: unknown[] = [];
+		const result = await networkSelfCheck({
+			lookup: async (host) => {
+				calls.push(host);
+				return [
+					{ address: "192.0.2.1", family: 4 },
+					{ address: "192.0.2.2", family: 4 },
+				];
+			},
+			connect: async (...args) => {
+				calls.push(args);
+			},
+		});
+		expect(result.ok).toBe(true);
+		expect(calls).toEqual(["chatgpt.com", ["192.0.2.1", 4, 443]]);
+		expect(result.providerRequests).toBe(0);
+	});
+	it("stops on DNS or TCP failure without retries", async () => {
+		let tcpCalls = 0;
+		const connect = async () => {
+			tcpCalls++;
+			throw Object.assign(new Error("connect denied"), { code: "EPERM" });
+		};
+		const dnsFailure = await networkSelfCheck({
+			lookup: async () => {
+				throw Object.assign(new Error("DNS failed"), { code: "ENOTFOUND" });
+			},
+			connect,
+		});
+		expect(dnsFailure.ok).toBe(false);
+		expect(tcpCalls).toBe(0);
+		const tcpFailure = await networkSelfCheck({ lookup: async () => [{ address: "192.0.2.1", family: 4 }], connect });
+		expect(tcpFailure.ok).toBe(false);
+		expect(tcpCalls).toBe(1);
+		expect(JSON.stringify(tcpFailure)).toContain("EPERM");
+	});
+	it("retains both prior unknown reservations when admitting the third attempt", () => {
+		const ledger = new Ledger(),
+			q = ledger.group("global", { calls: 1692, input: 39288000, output: 4490880, milliseconds: 1000 });
+		seedQuota(q, {
+			...q.snapshot(),
+			calls: 2,
+			sent: 2,
+			inputProxy: 69312,
+			reservedInput: 108064,
+			reservedOutput: 16000,
+		});
+		ledger.sent(ledger.admit([q], 34656, 8000, 160000));
+		expect(q.snapshot()).toMatchObject({ calls: 3, sent: 3, reservedInput: 162096, reservedOutput: 24000 });
 	});
 });

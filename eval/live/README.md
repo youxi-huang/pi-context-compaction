@@ -75,8 +75,8 @@ parameter was merely ignored; the zero-retry/unknown-usage rule still applies.
 OAuth is read from the existing Pi credential store into memory, without login,
 refresh, key export, configuration changes or logging. Expired/unavailable
 credentials stop. Only the exact Codex responses endpoint can receive requests;
-redirects and additional network calls are refused. Headers and provider error
-text are not persisted. Calls, admission, usage, fallback and terminal states
+redirects and additional network calls are refused. Request headers are not persisted. HTTP status, terminal SSE event types, and
+bounded error bodies are recorded only after credential/Authorization redaction. Calls, admission, usage, fallback and terminal states
 are journaled under the caller's internal artifact directory.
 
 ## Semantic observations
@@ -114,3 +114,20 @@ PI_OFFLINE=0 EVAL_PROVIDER_MODE=live EVAL_MODEL_CALL_BUDGET=1692 \
 
 Normal CI retains `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and
 `EVAL_MODEL_CALL_BUDGET=0`, including when running `eval/live/live.test.ts`.
+
+## One authorized diagnostic after an unknown-usage stop
+
+`diagnose-cli.ts` accepts the exact stopped plan JSON and an explicit diagnostic
+authorization reference. It reuses the recorded first F1/project/r1 writer context
+once, retains the previous unknown input/output reservations and sent-call count,
+and subtracts elapsed time from the original global deadline. It does not allocate
+a new global budget, run probes, or automatically retry. An exclusive claim file
+prevents this one-request authorization from being used twice. Evidence is written
+under the stopped plan, without changing the original failure records.
+
+The response observer records sanitized HTTP status/content type/error body and
+SSE event types. It separately parses complete SSE data frames, including multiline
+data, to detect usage that the accounting parser may have missed. This observation
+does not itself change accounting or permit continuation. A successful diagnostic
+ends for evidence review just as a failed one does. A plan restart requires the
+specific authorized condition and must carry forward every earlier attempt.

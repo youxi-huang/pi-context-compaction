@@ -12,7 +12,7 @@ const env = { ...process.env, STAGE0_ARTIFACT_DIR: output, NODE_OPTIONS: `--impo
 for (const args of [
 	["node_modules/@typescript/native-preview/bin/tsgo.js", "--noEmit", "-p", "eval/tsconfig.json"],
 	["--experimental-strip-types", "eval/generate-fixtures.ts", "--check"],
-	["node_modules/vitest/dist/cli.js", "run", "--config", "packages/coding-agent/vitest.config.ts", "eval/fixture.test.ts", "eval/scorer.test.ts", "eval/report.test.ts", "eval/pi/preflight.test.ts", "eval/pi/structure.test.ts", "eval/stage0/interface-gate.test.ts", "eval/runner/runner.test.ts", "eval/live/live.test.ts"],
+	["node_modules/vitest/dist/cli.js", "run", "--config", "packages/coding-agent/vitest.config.ts", "eval/fixture.test.ts", "eval/scorer.test.ts", "eval/report.test.ts", "eval/pi/preflight.test.ts", "eval/pi/structure.test.ts", "eval/stage0/interface-gate.test.ts", "eval/runner/runner.test.ts", "eval/live/live.test.ts", "eval/live/diagnostics.test.ts"],
 ]) {
 	const result = spawnSync(process.execPath, args, { cwd: root, env, stdio: "inherit" });
 	if (result.error) throw result.error;

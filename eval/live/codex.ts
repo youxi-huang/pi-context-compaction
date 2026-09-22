@@ -5,6 +5,7 @@ import { normalizeContext } from "../../packages/ai/src/utils/transcript.ts";
 import { readStoredCredential } from "../../packages/coding-agent/src/core/auth-storage.ts";
 import type { ProviderMeasurement, Transport, TransportRequest } from "../runner/types.ts";
 import { assertExecutionMode, MODEL_ID } from "./contract.ts";
+import { ResponseDiagnostics } from "./diagnostics.ts";
 import type { Ledger, Quota, Reservation } from "./ledger.ts";
 
 type Fetch = NonNullable<SimpleStreamOptions["fetch"]>;
@@ -42,7 +43,11 @@ export function rawMeasurement(
 	};
 }
 /** Read usage alongside the provider parser, without copying credentials, headers, or full event streams. */
-function observeSse(response: Response, terminal: (value: unknown) => void): Response {
+function observeSse(
+	response: Response,
+	terminal: (value: unknown) => void,
+	diagnostics: ResponseDiagnostics,
+): Response {
 	if (!response.body) return response;
 	const decoder = new TextDecoder();
 	let buffer = "";
@@ -52,6 +57,7 @@ function observeSse(response: Response, terminal: (value: unknown) => void): Res
 		while ((end = buffer.indexOf("\n")) >= 0) {
 			const line = buffer.slice(0, end).trim();
 			buffer = buffer.slice(end + 1);
+			diagnostics.line(line);
 			if (!line.startsWith("data:") || line === "data: [DONE]") continue;
 			let event: Record<string, unknown>;
 			try {
@@ -75,7 +81,7 @@ function observeSse(response: Response, terminal: (value: unknown) => void): Res
 					controller.enqueue(chunk);
 				},
 				flush() {
-					consume(decoder.decode() + "\n");
+					consume(decoder.decode() + "\n\n");
 				},
 			}),
 		),
@@ -116,6 +122,7 @@ export function codexTransport(options: CodexOptions): Transport {
 			)
 				ledger.stop("EVAL_MODEL_CONFIGURATION_DRIFT");
 			let reservation: Reservation | undefined, terminalResponse: unknown, status: number | undefined;
+			let diagnostics: ResponseDiagnostics | undefined;
 			let sent = false,
 				inputProxy = 0,
 				message: AssistantMessage | undefined;
@@ -137,6 +144,7 @@ export function codexTransport(options: CodexOptions): Transport {
 			const timer = setTimeout(abort, timeout);
 			try {
 				const access = options.access(); // Intentionally kept only in this call's memory.
+				diagnostics = new ResponseDiagnostics([access]);
 				const fetch: Fetch = async (url, init) => {
 					if (String(url) !== "https://chatgpt.com/backend-api/codex/responses" || !reservation || sent)
 						ledger.stop("EVAL_UNEXPECTED_PROVIDER_REQUEST");
@@ -149,9 +157,15 @@ export function codexTransport(options: CodexOptions): Transport {
 						signal: own.signal,
 					});
 					status = response.status;
-					return observeSse(response, (value) => {
-						terminalResponse = value;
-					});
+					await diagnostics!.response(response);
+					ledger.event({ type: "http-response", scope: request.scope, diagnostics: diagnostics!.snapshot() });
+					return observeSse(
+						response,
+						(value) => {
+							terminalResponse = value;
+						},
+						diagnostics!,
+					);
 				};
 				message = await streamSimple(
 					request.model as Model<"openai-codex-responses">,
@@ -250,6 +264,11 @@ export function codexTransport(options: CodexOptions): Transport {
 				ledger.event({ type: "request-failed", reason: code, sent, scope: request.scope, measurement: latest });
 				throw new Error(code);
 			} finally {
+				if (diagnostics) {
+					const snapshot = diagnostics.snapshot();
+					if (latest) latest.diagnostics = snapshot;
+					ledger.event({ type: "response-diagnostics", scope: request.scope, diagnostics: snapshot });
+				}
 				clearTimeout(timer);
 				request.signal.removeEventListener("abort", abort);
 				ledger.cancellation.signal.removeEventListener("abort", abort);

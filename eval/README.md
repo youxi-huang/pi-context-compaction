@@ -16,8 +16,9 @@ PI_OFFLINE=1 EVAL_PROVIDER_MODE=scripted EVAL_MODEL_CALL_BUDGET=0 \
 ```
 
 `OUTPUT_DIR` must be an existing absolute scratch directory. This test deletes its
-own temporary subtree. It makes no provider calls. The latest bounded real check
-was executed but rejected by its output limit; see the [validation record](../docs/context-memory/validation.md#03-measurement-bounded-live-validation-2026-09-22-utc).
+own temporary subtree. It makes no provider calls. The final bounded real check
+passed its first checkpoint and continuation, then rejected the second note for
+a source-to-quotation mismatch; see the [validation record](../docs/context-memory/validation.md#03-measurement-bounded-live-validation-2026-09-22-utc).
 The remaining 16 full-plan runs are closed; the complete two-arm baseline is deferred.
 
 The complete offline check remains available for CI or changes that require broad

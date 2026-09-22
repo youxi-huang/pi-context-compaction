@@ -194,3 +194,21 @@ has at most two requests; action, tool-round and output ceilings stay unchanged.
 Prior calls, unknown reservations and the original global deadline are inherited.
 The old 16 unstarted runs are closed, not implicitly resumed. Only the dedicated
 minimal test is needed to check this selection; its temporary artifacts are removed.
+
+The final calibration is an explicit fourth argument, `final-calibration`, to
+`minimal-cli.ts`, with the first minimal result JSON as its predecessor. Contract
+`minimal-daily.2-final` raises only the evaluator's writer provider-output allowance
+to 32,768 tokens including reasoning. Note schema/source/quotation/size validation
+is unchanged, and task probes retain the 8,192 output ceiling. The backend still
+rejects `max_output_tokens`, so this allowance is enforced locally after usage is
+returned; it is not a claimed server-side cap. One prior request leaves at most
+seven new requests. The local ten-minute window resets once under explicit
+authorization; the original global deadline and cumulative ledger do not reset.
+An exclusive predecessor claim prevents this final authorization from being reused.
+
+The recorded final attempt used four requests in 555.505 seconds. One checkpoint
+and continuation passed; the second writer completed within the revised limits,
+but its quotation cited the wrong source entries, so the commit guard rejected
+it. The second continuation did not run. Together both minimal attempts used five
+requests; no further attempt is scheduled. See the validation record for all earlier
+failures and partial native observations. This is not a passing two-arm baseline.

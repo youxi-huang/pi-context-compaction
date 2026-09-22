@@ -2,9 +2,10 @@
 
 This directory contains the stage-1 evaluation ruler. Runtime behavior stays at
 `149e253cebc56b8e732022e79c294fce5ebb5cbc`; fixtures are `0.3-fixtures.1` and the
-scorer is `0.3-scorer.1`. It contains no provider-quality baseline. Stage 2 supplies
-the general runner and probe adapters; live measurement requires its own frozen
-budget and explicit authorization.
+scorer is `0.3-scorer.1`. It contains no provider-quality baseline. The stage-2
+[runner and isolation contract](runner/README.md) now implements execution and
+probe adapters; live measurement still requires its own frozen budget and
+explicit authorization.
 
 Run the complete offline check from the repository root after the normal offline
 build. Set `OUTPUT_DIR` to an absolute directory for local evidence:
@@ -96,8 +97,9 @@ The task environment is a new in-memory state for each execution. Its allowed
 action is to configure staging from the current ruling while preserving the
 completed inventory audit and production ledger. The contract freezes two task
 actions, three tool rounds and 1,024 output tokens per continuation probe.
-Runner enforcement and reset/isolation beyond the stage-0 interface gate belong
-to stage 2; the scorer already refuses traces exceeding these bounds.
+The runner enforces these limits before further requests or task mutations and
+resets each probe's session identity, work directory and tool state. The scorer
+also refuses traces exceeding the frozen bounds.
 
 ## Authority layers and semantic limits
 

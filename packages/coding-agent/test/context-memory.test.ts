@@ -49,6 +49,7 @@ import {
 	latestMemory,
 	lineageSentence,
 	type MemoryNote,
+	noteSections,
 	renderNote,
 	shrinkLineage,
 	validateNote,
@@ -382,6 +383,41 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		const candidate = note(id);
 		candidate.state[0].quote = "Use port 9000";
 		expect(() => validateNote(candidate, store.getBranch())).toThrow("CONTEXT_NOTE_QUOTE");
+	});
+
+	it("supersedes uses the same readable-source boundary as sources in every note section", () => {
+		const store = manager(false);
+		const original = seed(store);
+		const metadata = store.appendThinkingLevelChange("off");
+		const custom = store.appendCustomEntry("test-metadata", {});
+		const empty = store.appendMessage({ role: "user", content: "", timestamp: 4 });
+		const checkpoint = store.appendCompaction("Prior summary", original, 1);
+		const current = seed(store);
+		for (const section of noteSections) {
+			for (const invalid of [metadata, custom, empty, checkpoint, "not-in-branch"]) {
+				const candidate = note(current);
+				candidate[section] = [{ text: "Current ruling", sources: [current], supersedes: [invalid] }];
+				expect(() => validateNote(candidate, store.getBranch())).toThrow("CONTEXT_NOTE_SCOPE");
+				candidate[section] = [{ text: "Current ruling", sources: [invalid] }];
+				expect(() => validateNote(candidate, store.getBranch())).toThrow("CONTEXT_NOTE_SCOPE");
+			}
+			const valid = note(current);
+			valid[section] = [{ text: "Current ruling", sources: [current], supersedes: [original] }];
+			expect(validateNote(valid, store.getBranch())).toEqual(valid);
+		}
+	});
+	it("supersedes rejects future and sibling originals outside the provided prefix", () => {
+		const store = manager(false),
+			original = seed(store),
+			prefix = structuredClone(store.getBranch());
+		const future = seed(store);
+		store.branch(prefix.at(-1)!.id);
+		const sibling = seed(store);
+		for (const invalid of [future, sibling]) {
+			const candidate = note(original);
+			candidate.state[0].supersedes = [invalid];
+			expect(() => validateNote(candidate, prefix)).toThrow("CONTEXT_NOTE_SCOPE");
+		}
 	});
 
 	it("the resident survives ordinary filtering and reload, and the enable flag stays latched until restart", async () => {

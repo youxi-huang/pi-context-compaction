@@ -41,13 +41,13 @@ it("generates JSON and Markdown with separate semantic/structural numbers and ex
 	const built = buildReport(scores, findings);
 	expect(built.report.structural).toMatchObject({
 		total: 4,
-		implementationAccepted: 2,
+		implementationAccepted: 1,
 		benchmarkAccepted: 1,
-		evidenceUnreadable: 1,
+		evidenceUnreadable: 0,
 	});
 	expect(built.report.summary.planned).toBe(scores.length);
 	expect(built.markdown).toContain("not a provider recovery baseline");
-	expect(built.markdown).toContain("implementation accepted 2/4; benchmark accepted 1/4; evidence-unreadable 1");
+	expect(built.markdown).toContain("implementation accepted 1/4; benchmark accepted 1/4; evidence-unreadable 0");
 	json(join(root, "report.json"), built.report);
 	writeFileSync(join(root, "report.md"), built.markdown);
 	const authority = fixture.probes.find((p) => p.oracle.kind === "authority")!;

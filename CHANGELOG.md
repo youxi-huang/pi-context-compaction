@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Fixed
+
+- Require every `supersedes` reference to resolve to readable evidence on the supplied branch, matching the existing `sources` validation. Checkpoints, metadata entries, empty text and out-of-branch IDs are rejected before note commit and when reopening persisted notes. Readable older rulings remain valid without being duplicated in the current fact's `sources`. Previously accepted notes with unreadable `supersedes` references now fail explicitly; no history is deleted or silently repaired.
+
 ### Added
 
 - Add versioned recovery fixtures, probes and deterministic scoring with isolated Pi runners and an explicitly authorized Luna/max subscription transport. Live evaluation preserves failure evidence, cumulative budgets and separately labeled actual/estimated usage; it does not change the compaction runtime.

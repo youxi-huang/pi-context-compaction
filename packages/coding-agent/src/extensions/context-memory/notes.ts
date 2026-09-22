@@ -132,14 +132,18 @@ export function noteBytes(note: MemoryNote): number {
 export function validateNoteContent(value: unknown, sources: readonly SessionEntry[]): MemoryNote {
 	if (!Check(noteSchema, value)) throw new Error("CONTEXT_NOTE_INVALID: writer must return the complete note schema");
 	const byId = new Map(sources.map((entry) => [entry.id, entry]));
+	const readable = (id: string): boolean => {
+		const entry = byId.get(id);
+		return Boolean(entry && sourceText(entry));
+	};
 	for (const section of noteSections) {
 		for (const item of value[section]) {
-			if (item.sources.some((id) => !byId.has(id) || !sourceText(byId.get(id)!)))
+			if (item.sources.some((id) => !readable(id)))
 				throw new Error("CONTEXT_NOTE_SCOPE: a note cites unavailable evidence");
 			if (item.quote && !item.sources.some((id) => sourceText(byId.get(id)!).includes(item.quote!)))
 				throw new Error("CONTEXT_NOTE_QUOTE: a quoted source does not match the original text");
-			if (item.supersedes?.some((id) => !byId.has(id)))
-				throw new Error("CONTEXT_NOTE_SCOPE: superseded source is outside this branch");
+			if (item.supersedes?.some((id) => !readable(id)))
+				throw new Error("CONTEXT_NOTE_SCOPE: a superseded source is unavailable or unreadable");
 		}
 	}
 	return value;

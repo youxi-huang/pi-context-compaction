@@ -8,7 +8,7 @@ export interface StructuralFinding {
 	unreadableIds: string[];
 	error?: string;
 }
-/** The benchmark is intentionally stricter than the pinned validator for supersedes. */
+/** Preserve separate runtime/benchmark verdicts, including historical unreadable-reference findings. */
 export function inspectReferences(
 	candidate: unknown,
 	prefix: readonly SessionEntry[],

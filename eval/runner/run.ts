@@ -46,6 +46,7 @@ export interface RunOptions {
 	maxCalls?: number;
 	timeoutMs?: number;
 	measurementVersion?: typeof MEASUREMENT_VERSION;
+	minimalDaily?: boolean;
 }
 
 /** One run is one independent fixture × arm × replicate chain. No notes are reused between runs. */
@@ -66,6 +67,17 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		throw new Error("EVAL_UNKNOWN_ARM_OR_FIXTURE");
 	assertFrozenInputs();
 	const bundle = loadFrozenFixture(options.fixture);
+	if (
+		options.minimalDaily &&
+		(options.fixture !== "F2" || options.arm !== "project" || options.maxCalls !== 8 || options.timeoutMs !== 600000)
+	)
+		throw new Error("EVAL_MINIMAL_CONTRACT_MISMATCH");
+	const triggers = options.minimalDaily ? bundle.fixture.triggers.slice(0, 2) : bundle.fixture.triggers;
+	const selectedProbes = bundle.fixture.probes.filter(
+		(probe) =>
+			!options.minimalDaily ||
+			(triggers.some((trigger) => trigger.id === probe.checkpoint) && probe.oracle.kind === "continuation"),
+	);
 	const model = options.model ?? defaultModel;
 	const id = `${options.fixture}-${options.arm}-r${options.replicate}-${randomUUID()}`;
 	const directory = resolve(options.outputDirectory, id);
@@ -87,6 +99,10 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		directory,
 		metadata: {
 			runnerVersion: "0.3-runner.2",
+			minimalDaily: options.minimalDaily ?? false,
+			coverage: options.minimalDaily
+				? "F2 first two checkpoints, one combined state/action/permission continuation each; not a full baseline"
+				: "full fixture",
 			runnerSourceHash: runnerFingerprint(),
 			runtimePin: RUNTIME_PIN,
 			fixtureRevision: FIXTURE_REVISION,
@@ -121,7 +137,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		maxCalls: options.maxCalls ?? 500,
 		deadline: performance.now() + (options.timeoutMs ?? 120000),
 		scope: { runId: id, fixture: options.fixture, arm: options.arm, replicate: options.replicate },
-		writerTimeoutMs: options.measurementVersion ? 180000 : 60000,
+		writerTimeoutMs: options.minimalDaily ? 600000 : options.measurementVersion ? 180000 : 60000,
 	};
 	let clean = `${JSON.stringify(bundle.header)}\n`;
 	let previousBoundary = -1;
@@ -144,7 +160,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 				),
 		};
 	};
-	for (const trigger of bundle.fixture.triggers) {
+	for (const trigger of triggers) {
 		if (!chainError && (meter.calls >= meter.maxCalls || performance.now() >= meter.deadline)) {
 			chainError = meter.calls >= meter.maxCalls ? "EVAL_RUN_CALL_LIMIT" : "EVAL_RUN_TIMEOUT";
 			result.status = "failed";
@@ -157,7 +173,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 			requests: [],
 		};
 		result.checkpoints.push(checkpoint);
-		const probes = bundle.fixture.probes
+		const probes = selectedProbes
 			.filter((probe) => probe.checkpoint === trigger.id)
 			.map((probe) => effectiveProbe(probe, options.measurementVersion));
 		meter.scope = { ...meter.scope!, checkpoint: trigger.id, probe: undefined };
@@ -372,6 +388,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 						limits.outputTokens = 8192;
 						limits.timeoutMs = 120000;
 					}
+					if (options.minimalDaily) limits.calls = 2;
 					budget = new ProbeBudget(limits);
 					world = new ProbeWorld(join(probeDirectory, "workspace"), budget, initialFor(probe));
 					taskHost = await createRunnerHost({
@@ -540,10 +557,10 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		};
 	};
 	result.counts = {
-		plannedCheckpoints: bundle.fixture.triggers.length,
+		plannedCheckpoints: triggers.length,
 		compressionAttempts: result.checkpoints.filter((c) => c.status !== "blocked").length,
 		successfulCheckpoints: result.checkpoints.filter((c) => c.status === "committed").length,
-		plannedProbes: bundle.fixture.probes.length,
+		plannedProbes: selectedProbes.length,
 		completedProbes: result.probes.filter((p) => p.status === "completed").length,
 		blockedProbes: result.probes.filter((p) => p.status === "blocked").length,
 		providerCalls: meter.calls,

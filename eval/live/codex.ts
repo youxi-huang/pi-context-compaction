@@ -91,6 +91,7 @@ function observeSse(
 export interface CodexOptions {
 	mode: "scripted" | "live";
 	allowEstimatedUsage?: boolean;
+	writerTimeoutMs?: number;
 	ledger: Ledger;
 	groups: (request: TransportRequest) => Quota[];
 	access: () => string;
@@ -138,7 +139,11 @@ export function codexTransport(options: CodexOptions): Transport {
 			const timeout = Math.max(
 				1,
 				Math.min(
-					request.purpose === "writer" ? 180000 : request.purpose === "task" ? 120000 : 60000,
+					request.purpose === "writer"
+						? (options.writerTimeoutMs ?? 180000)
+						: request.purpose === "task"
+							? 120000
+							: 60000,
 					...groups.map((q) => q.deadline - performance.now()),
 				),
 			);

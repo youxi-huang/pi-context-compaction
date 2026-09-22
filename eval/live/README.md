@@ -179,3 +179,18 @@ hidden reasoning cannot be measured this way. Failed or interrupted responses
 are never converted into success by estimation. All call, time, action and local
 output checks still apply, while token-based limits use the declared estimate.
 Successful streams are never pre-read by diagnostics, even without content-type.
+
+## Minimal daily validation (scope revision)
+
+`minimal-cli.ts predecessor-plan.json output-directory approval-reference` is the
+separately authorized project-only F2 check: first two compactions and one existing
+continuation probe after each. The same continuation oracle jointly checks the
+completed audit state, the approved staging-port action and untouched production.
+No new probe prompts, fixture edits or model judge are introduced. Eight total
+requests and ten minutes cover the whole run, including optional size repairs.
+Writer request timeout is 600 seconds only for this entry point, bounded by the
+remaining run/global deadline; task timeout stays 120 seconds. Each continuation
+has at most two requests; action, tool-round and output ceilings stay unchanged.
+Prior calls, unknown reservations and the original global deadline are inherited.
+The old 16 unstarted runs are closed, not implicitly resumed. Only the dedicated
+minimal test is needed to check this selection; its temporary artifacts are removed.

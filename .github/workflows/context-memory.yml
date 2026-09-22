@@ -18,8 +18,15 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      PI_OFFLINE: '1'
+      EVAL_PROVIDER_MODE: scripted
+      EVAL_MODEL_CALL_BUDGET: '0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # The offline gate compares runtime files with the pinned evaluation commit.
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: '22'
@@ -31,3 +38,7 @@ jobs:
       - run: npm run build:offline
       - run: node scripts/context-memory-check.mjs
       - run: node scripts/security-regression-check.mjs
+      - name: Verify synthetic evaluation (network blocked, zero model budget)
+        env:
+          EVAL_ARTIFACT_DIR: ${{ runner.temp }}/context-eval
+        run: node eval/check.mjs

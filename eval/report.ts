@@ -1,5 +1,6 @@
 import type { StructuralFinding } from "./pi/structural.ts";
 import { summarizeReferences } from "./pi/structural.ts";
+import { EVALUATED_RUNTIME_PIN } from "./runtime.ts";
 import { FIXTURE_VERSION, RUNTIME_PIN, SCORER_VERSION } from "./schema.ts";
 import { type Score, summarize } from "./scorer.ts";
 
@@ -10,7 +11,8 @@ export function buildReport(scores: readonly Score[], findings: readonly Structu
 		metadata: {
 			fixtureVersion: FIXTURE_VERSION,
 			scorerVersion: SCORER_VERSION,
-			runtimePin: RUNTIME_PIN,
+			runtimePin: EVALUATED_RUNTIME_PIN,
+			fixtureRuntimePin: RUNTIME_PIN,
 			mode: "offline-scripted-regression",
 			realModelCalls: 0,
 			semanticQualityMeasurement: false,
@@ -20,7 +22,7 @@ export function buildReport(scores: readonly Score[], findings: readonly Structu
 		structural,
 		scores,
 	};
-	const markdown = `# Offline evaluation regression report\n\nThis is a scripted scoring/structure regression, not a provider recovery baseline.\n\nRuntime: ${RUNTIME_PIN}. Fixtures: ${FIXTURE_VERSION}. Scorer: ${SCORER_VERSION}. Real model calls: 0.\n\n| Class | Planned | Correct deterministic | Incorrect | Abstained | Omitted | Blocked | Semantic reviewed | Deterministic denominator |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${Object.entries(
+	const markdown = `# Offline evaluation regression report\n\nThis is a scripted scoring/structure regression, not a provider recovery baseline.\n\nRuntime: ${EVALUATED_RUNTIME_PIN}. Historical fixture runtime: ${RUNTIME_PIN}. Fixtures: ${FIXTURE_VERSION}. Scorer: ${SCORER_VERSION}. Real model calls: 0.\n\n| Class | Planned | Correct deterministic | Incorrect | Abstained | Omitted | Blocked | Semantic reviewed | Deterministic denominator |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n${Object.entries(
 		summary.categories,
 	)
 		.map(

@@ -24,6 +24,7 @@ import {
 import { assertExecutionMode, effectiveProbe, MEASUREMENT_VERSION } from "../live/contract.ts";
 import { model as defaultModel } from "../pi/offline-host.ts";
 import { inspectReferences } from "../pi/structural.ts";
+import { EVALUATED_RUNTIME_PIN } from "../runtime.ts";
 import { FIXTURE_VERSION, type Probe, RUNTIME_PIN, SCORER_VERSION } from "../schema.ts";
 import { type Observation, score, summarize } from "../scorer.ts";
 import { json } from "../test-utils.ts";
@@ -112,7 +113,8 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 				? "F2 first two checkpoints, one combined state/action/permission continuation each; not a full baseline"
 				: "full fixture",
 			runnerSourceHash: runnerFingerprint(),
-			runtimePin: RUNTIME_PIN,
+			runtimePin: EVALUATED_RUNTIME_PIN,
+			fixtureRuntimePin: RUNTIME_PIN,
 			fixtureRevision: FIXTURE_REVISION,
 			fixtureContentHash: FIXTURE_CONTENT_HASH,
 			fixtureVersion: FIXTURE_VERSION,

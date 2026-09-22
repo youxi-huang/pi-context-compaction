@@ -44,7 +44,7 @@ import {
 	sourceText,
 } from "../../packages/coding-agent/src/extensions/context-memory/notes.ts";
 
-const PIN = "149e253cebc56b8e732022e79c294fce5ebb5cbc";
+import { EVALUATED_RUNTIME_PIN as PIN } from "../runtime.ts";
 const FUTURE = "FUTURE_SUFFIX_CANARY";
 const GOLD = "EVALUATOR_GOLD_CANARY";
 const model: Model<Api> = {

@@ -50,7 +50,7 @@ describe("structure group 1: reference boundary and two verdicts", () => {
 			).toBe(false);
 		}
 	});
-	it("pins the four supersedes counterexamples without fixing or silently accepting the runtime gap", () => {
+	it("updates the four supersedes counterexamples after the readable-source validator fix", () => {
 		const root = artifactDirectory("stage1-reference-");
 		const store = SessionManager.create(root, root);
 		try {
@@ -70,30 +70,44 @@ describe("structure group 1: reference boundary and two verdicts", () => {
 			];
 			expect(findings.map((f) => f.classification)).toEqual([
 				"hard-failure",
-				"evidence-unreadable",
+				"hard-failure",
 				"hard-failure",
 				"accepted",
 			]);
 			expect(summarizeReferences(findings)).toEqual({
 				total: 4,
-				implementationAccepted: 2,
-				implementationRejected: 2,
+				implementationAccepted: 1,
+				implementationRejected: 3,
 				benchmarkAccepted: 1,
 				benchmarkRejected: 3,
-				evidenceUnreadable: 1,
+				evidenceUnreadable: 0,
 			});
-			injectCheckpoint(store, supersedes(checkpoint));
 			const file = store.getSessionFile()!;
+			const before = readFileSync(file, "utf8");
+			expect(() => injectCheckpoint(store, supersedes(checkpoint))).toThrow("CONTEXT_NOTE_SCOPE");
+			expect(readFileSync(file, "utf8")).toBe(before);
+			injectCheckpoint(store, supersedes(original));
 			store.close();
 			const reopened = SessionManager.open(file, root);
 			try {
-				expect(latestMemory(reopened.getBranch())?.memory.note.state[0].supersedes).toEqual([checkpoint]);
-				expect(() => queryHistory(freezeHistory(reopened), { operation: "read", entryId: checkpoint })).toThrow(
-					"HISTORY_SCOPE_DENIED",
-				);
+				expect(latestMemory(reopened.getBranch())?.memory.note.state[0].supersedes).toEqual([original]);
+				expect(
+					queryHistory(freezeHistory(reopened), { operation: "read", entryId: original }).entries[0].text,
+				).toContain("4317");
 			} finally {
 				reopened.close();
 			}
+			// Model a previously accepted persisted note; tighter validation must also apply on reopen.
+			const lines = readFileSync(file, "utf8")
+				.trim()
+				.split("\n")
+				.map((line) => JSON.parse(line));
+			const saved = lines.at(-1)!;
+			saved.details.note.state[0].supersedes = [checkpoint];
+			saved.summary = renderNote(saved.details.note);
+			writeFileSync(file, lines.map((line) => JSON.stringify(line)).join("\n") + "\n");
+			expect(() => SessionManager.open(file, root)).toThrow("CONTEXT_NOTE_SCOPE");
+
 			json(join(root, "verdicts.json"), {
 				findings,
 				counts: summarizeReferences(findings),

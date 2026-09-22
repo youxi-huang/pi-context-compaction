@@ -1,8 +1,10 @@
 # Recovery evaluation contract
 
-This directory contains the stage-1 evaluation ruler. Runtime behavior stays at
-`149e253cebc56b8e732022e79c294fce5ebb5cbc`; fixtures are `0.3-fixtures.1` and the
-scorer is `0.3-scorer.1`. It contains no provider-quality baseline. The stage-2
+This directory contains the evaluation ruler. Historical fixtures and provider
+results were recorded at `149e253cebc56b8e732022e79c294fce5ebb5cbc`; fixtures remain
+`0.3-fixtures.1` and the scorer remains `0.3-scorer.1`. The current evaluated runtime
+is pinned separately in [runtime.ts](runtime.ts), after the supersedes readability
+fix. New reports identify both pins; historical results are not relabeled. It contains no provider-quality baseline. The stage-2
 [runner and isolation contract](runner/README.md) now implements execution and
 probe adapters. The [subscription runner](live/README.md) adds an explicitly
 authorized live path under `0.3-measurement.2`; CI remains offline.
@@ -153,16 +155,20 @@ are labeled LLM semantic review, never human or deterministic judgments.
 Three groups are checked: note references, committed checkpoint restoration, and
 host-produced `priorCheckpoints`. The reference checker preserves two verdicts:
 
-| Condition | Frozen implementation | Benchmark |
+| Condition | Historical implementation | Current implementation / benchmark |
 | --- | --- | --- |
-| Future/sibling source, mismatched quote, checkpoint in `sources` | Rejected | Hard failure |
-| Readable originals and valid reference structure | Accepted | Accepted; semantic support remains a separate question |
-| Checkpoint in `supersedes` | Accepted | Rejected as `evidence-unreadable` |
+| Future/sibling source, mismatched quote, checkpoint in `sources` | Rejected | Rejected / hard failure |
+| Readable originals and valid reference structure | Accepted | Accepted; semantic support remains separate |
+| Checkpoint in `supersedes` | Accepted, benchmark evidence-unreadable | Rejected / hard failure |
 
-The last row is a pinned implementation gap. It is counted and does not stop the
-run or become a silent pass. Gold supersedes links only to readable originals.
-The four CI counterexamples assert the current behavior; a later validator fix
-requires an explicit update. The evaluation changes no runtime behavior.
+The supersedes validator fix explicitly updates the four CI counterexamples:
+three hard failures and one accepted readable-original case. It also checks that
+invalid supersedes cannot be committed and that persisted invalid notes are
+rejected on reopen. Both reference fields now use the same branch/readability
+predicate; a superseded original need not be repeated in the new fact's sources.
+Historical unreadable-reference findings remain evidence of the old runtime.
+Frozen source/scorer files and preparation outputs are preserved; only current
+runtime metadata advances in the new preflight reports.
 
 Recovery checks exercise actual persistence, source hash, covered-through,
 cut, reopen and provider input. Lineage tests cover host ownership, readable

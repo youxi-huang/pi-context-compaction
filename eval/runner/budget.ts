@@ -50,6 +50,7 @@ export interface RunMeter {
 	deadline: number;
 	scope?: RequestScope;
 	writerTimeoutMs?: number;
+	writerOutputTokens?: number;
 }
 export async function measuredRequest(input: {
 	transport: Transport;
@@ -68,8 +69,10 @@ export async function measuredRequest(input: {
 	if (input.signal?.aborted) throw new Error("EVAL_REQUEST_ABORTED");
 	if (input.meter.calls >= input.meter.maxCalls) throw new Error("EVAL_RUN_CALL_LIMIT");
 	if (performance.now() >= input.meter.deadline) throw new Error("EVAL_RUN_TIMEOUT");
-	const remaining = input.budget?.reserveOutput() ?? input.maxTokens;
-	const maxTokens = Math.min(input.maxTokens, remaining);
+	const providerLimit =
+		input.purpose === "writer" ? (input.meter.writerOutputTokens ?? input.maxTokens) : input.maxTokens;
+	const remaining = input.budget?.reserveOutput() ?? providerLimit;
+	const maxTokens = Math.min(providerLimit, remaining);
 	const controller = new AbortController();
 	const deadline = Math.min(
 		input.meter.deadline - performance.now(),

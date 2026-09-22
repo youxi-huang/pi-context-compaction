@@ -5,14 +5,18 @@ import { codexAccess, codexTransport, lunaModel } from "./codex.ts";
 import { assertExecutionMode, BUDGET_VERSION, MEASUREMENT_VERSION, schedule } from "./contract.ts";
 import { recordStartupEnvironment } from "./environment.ts";
 import { Ledger } from "./ledger.ts";
-import { claimRestart, inheritRestart, loadRestart } from "./restart.ts";
+import { claimRestart, inheritRestart, loadMinimalCalibration, loadRestart } from "./restart.ts";
 
 recordStartupEnvironment();
 assertExecutionMode("live");
-const [predecessor, directory, approvalReference] = process.argv.slice(2);
+const [predecessor, directory, approvalReference, revision] = process.argv.slice(2);
 if (!predecessor || !directory || !isAbsolute(directory) || !approvalReference)
 	throw new Error("EVAL_MINIMAL_ARGUMENTS_REQUIRED");
-const prior = loadRestart(predecessor, true);
+if (revision !== undefined && revision !== "final-calibration") throw new Error("EVAL_MINIMAL_REVISION_INVALID");
+const finalCalibration = revision === "final-calibration";
+const prior = finalCalibration ? loadMinimalCalibration(predecessor) : loadRestart(predecessor, true);
+const priorMinimalRequests = prior.priorMinimalRequests;
+const remainingRequests = 8 - priorMinimalRequests;
 claimRestart(prior, approvalReference);
 mkdirSync(directory, { recursive: true });
 writeFileSync(join(directory, "owner.json"), JSON.stringify({ approvalReference, at: new Date().toISOString() }), {
@@ -25,9 +29,9 @@ const global = ledger.group("global", prior.globalLimits),
 	baseline = ledger.group("baseline", prior.baselineLimits);
 inheritRestart(ledger, global, baseline, prior);
 const slot = schedule().find((s) => s.fixture === "F2" && s.arm === "project")!;
-const local = ledger.group("minimal-daily", { ...slot.limits, calls: 8, milliseconds: 600000 });
+const local = ledger.group("minimal-daily", { ...slot.limits, calls: remainingRequests, milliseconds: 600000 });
 const contract = {
-	version: "minimal-daily.1",
+	version: finalCalibration ? "minimal-daily.2-final" : "minimal-daily.1",
 	budgetVersion: BUDGET_VERSION,
 	approvalReference,
 	model: "openai-codex/gpt-5.6-luna",
@@ -38,6 +42,12 @@ const contract = {
 	checks:
 		"One existing continuation probe per checkpoint: audit state retained, approved staging action executed, production untouched; local assertions, no judge.",
 	maxRequests: 8,
+	priorMinimalRequests,
+	remainingRequests,
+	writerProviderOutputTokens: finalCalibration ? 32768 : null,
+	noteCommitAllowanceChanged: false,
+	minimalTimeWindowResetOnce: finalCalibration,
+	finalAttempt: finalCalibration,
 	maxWallMs: 600000,
 	writerRequestTimeoutMs: 600000,
 	taskRequestTimeoutMs: 120000,
@@ -72,7 +82,8 @@ try {
 		transport,
 		model: lunaModel(),
 		thinkingLevel: "max",
-		maxCalls: 8,
+		maxCalls: remainingRequests,
+		writerOutputTokens: finalCalibration ? 32768 : undefined,
 		timeoutMs: 600000,
 		measurementVersion: MEASUREMENT_VERSION,
 		minimalDaily: true,

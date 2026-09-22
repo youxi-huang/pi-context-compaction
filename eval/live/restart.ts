@@ -71,6 +71,7 @@ export function loadRestart(predecessorFile: string, continueRemaining = false) 
 			? prior.runs!.map((run) => JSON.parse(readFileSync(run.report, "utf8")) as RunResult)
 			: [],
 		continueRemaining,
+		priorMinimalRequests: 0,
 		originalLimits: globalLimits,
 		elapsedBeforeRestartMs: elapsed,
 		quota,
@@ -88,7 +89,7 @@ export function claimRestart(state: ReturnType<typeof loadRestart>, approvalRefe
 }
 export function inheritRestart(ledger: Ledger, global: Quota, baseline: Quota, state: ReturnType<typeof loadRestart>) {
 	seedQuota(global, state.quota);
-	// In this authorized continuation all earlier requests were baseline writers.
+	// All inherited requests belong to the baseline; no judge requests have run.
 	seedQuota(baseline, state.quota);
 	ledger.fallback("explicitly-authorized-replay-after-parameter-rejection");
 	ledger.event({
@@ -100,4 +101,37 @@ export function inheritRestart(ledger: Ledger, global: Quota, baseline: Quota, s
 		prior: state.quota,
 		unknownUsageReservationsRetained: true,
 	});
+}
+
+/** The single final calibration inherits the first minimal attempt; it cannot be replayed again. */
+export function loadMinimalCalibration(predecessorFile: string) {
+	const bytes = readFileSync(predecessorFile);
+	const result = JSON.parse(bytes.toString("utf8")) as {
+		status: string;
+		newRequests: number;
+		cumulativeRequests: number;
+		contract: { version: string; predecessor: string; maxRequests: number; priorRequests: number };
+		ledger: { groups: ReturnType<Quota["snapshot"]>[] };
+	};
+	if (
+		result.status !== "failed" ||
+		result.contract.version !== "minimal-daily.1" ||
+		result.contract.maxRequests !== 8 ||
+		result.newRequests !== 1
+	)
+		throw new Error("EVAL_FINAL_CALIBRATION_PREDECESSOR_MISMATCH");
+	const prior = loadRestart(result.contract.predecessor, true);
+	const quota = result.ledger.groups.find((q) => q.name === "global");
+	if (!quota || quota.sent !== prior.quota.sent + result.newRequests || quota.sent !== result.cumulativeRequests)
+		throw new Error("EVAL_FINAL_CALIBRATION_LEDGER_MISMATCH");
+	seedQuota(new Ledger().group("validation", prior.originalLimits), quota);
+	return {
+		...prior,
+		predecessorFile,
+		predecessorSha256: createHash("sha256").update(bytes).digest("hex"),
+		priorPlan: predecessorFile,
+		quota,
+		retainedRuns: [],
+		priorMinimalRequests: result.newRequests,
+	};
 }

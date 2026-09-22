@@ -47,6 +47,7 @@ export interface RunOptions {
 	timeoutMs?: number;
 	measurementVersion?: typeof MEASUREMENT_VERSION;
 	minimalDaily?: boolean;
+	writerOutputTokens?: 32768;
 }
 
 /** One run is one independent fixture × arm × replicate chain. No notes are reused between runs. */
@@ -69,9 +70,15 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 	const bundle = loadFrozenFixture(options.fixture);
 	if (
 		options.minimalDaily &&
-		(options.fixture !== "F2" || options.arm !== "project" || options.maxCalls !== 8 || options.timeoutMs !== 600000)
+		(options.fixture !== "F2" ||
+			options.arm !== "project" ||
+			options.maxCalls! < 1 ||
+			options.maxCalls! > 8 ||
+			options.timeoutMs !== 600000)
 	)
 		throw new Error("EVAL_MINIMAL_CONTRACT_MISMATCH");
+	if (options.writerOutputTokens !== undefined && (!options.minimalDaily || options.writerOutputTokens !== 32768))
+		throw new Error("EVAL_WRITER_OUTPUT_REVISION_REQUIRES_MINIMAL");
 	const triggers = options.minimalDaily ? bundle.fixture.triggers.slice(0, 2) : bundle.fixture.triggers;
 	const selectedProbes = bundle.fixture.probes.filter(
 		(probe) =>
@@ -100,6 +107,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		metadata: {
 			runnerVersion: "0.3-runner.2",
 			minimalDaily: options.minimalDaily ?? false,
+			writerProviderOutputTokens: options.writerOutputTokens ?? null,
 			coverage: options.minimalDaily
 				? "F2 first two checkpoints, one combined state/action/permission continuation each; not a full baseline"
 				: "full fixture",
@@ -138,6 +146,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		deadline: performance.now() + (options.timeoutMs ?? 120000),
 		scope: { runId: id, fixture: options.fixture, arm: options.arm, replicate: options.replicate },
 		writerTimeoutMs: options.minimalDaily ? 600000 : options.measurementVersion ? 180000 : 60000,
+		writerOutputTokens: options.writerOutputTokens,
 	};
 	let clean = `${JSON.stringify(bundle.header)}\n`;
 	let previousBoundary = -1;

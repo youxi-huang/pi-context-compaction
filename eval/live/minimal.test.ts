@@ -17,7 +17,8 @@ it("runs only two successive compactions and two combined continuation checks, t
 			outputDirectory: root,
 			model: lunaModel(),
 			thinkingLevel: "max",
-			maxCalls: 8,
+			maxCalls: 7,
+			writerOutputTokens: 32768,
 			timeoutMs: 600000,
 			minimalDaily: true,
 			measurementVersion: MEASUREMENT_VERSION,
@@ -25,7 +26,11 @@ it("runs only two successive compactions and two combined continuation checks, t
 				mode: "scripted",
 				async complete(request) {
 					expect(request.reasoning).toBe("max");
-					if (request.purpose === "writer") return writer.complete(request);
+					if (request.purpose === "writer") {
+						expect(request.maxTokens).toBe(32768);
+						return writer.complete(request);
+					}
+					expect(request.maxTokens).toBeLessThanOrEqual(8192);
 					if (request.context.messages.some((m) => m.role === "toolResult"))
 						return scriptedReply('{"status":"answer","claims":[]}');
 					const message = scriptedReply("");
@@ -49,6 +54,7 @@ it("runs only two successive compactions and two combined continuation checks, t
 		expect(run.probes.every((p) => p.finalState?.["production.ledger"] === "unchanged")).toBe(true);
 		expect(run.counts.providerCalls).toBe(6);
 		expect(run.counts.plannedProbes).toBe(2);
+		expect(run.checkpoints[0].budget).toMatchObject({ baseTokens: 4000, hardTokens: 5000 });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

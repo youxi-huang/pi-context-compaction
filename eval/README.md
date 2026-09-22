@@ -7,8 +7,24 @@ scorer is `0.3-scorer.1`. It contains no provider-quality baseline. The stage-2
 probe adapters. The [subscription runner](live/README.md) adds an explicitly
 authorized live path under `0.3-measurement.2`; CI remains offline.
 
-Run the complete offline check from the repository root after the normal offline
-build. Set `OUTPUT_DIR` to an absolute directory for local evidence:
+For routine work on the reduced daily validation, run only its targeted check:
+
+```sh
+PI_OFFLINE=1 EVAL_PROVIDER_MODE=scripted EVAL_MODEL_CALL_BUDGET=0 \
+  EVAL_ARTIFACT_DIR="$OUTPUT_DIR" NODE_OPTIONS='--import=./eval/deny-network.mjs' \
+  node node_modules/vitest/dist/cli.js run --config packages/coding-agent/vitest.config.ts eval/live/minimal.test.ts
+```
+
+`OUTPUT_DIR` must be an existing absolute scratch directory. This test deletes its
+own temporary subtree. It makes no provider calls. The latest bounded real check
+was executed but rejected by its output limit; see the [validation record](../docs/context-memory/validation.md#03-measurement-bounded-live-validation-2026-09-22-utc).
+The remaining 16 full-plan runs are closed; the complete two-arm baseline is deferred.
+
+The complete offline check remains available for CI or changes that require broad
+coverage, after the normal offline build. It creates substantial regenerable
+artifacts and does not automatically clean them; use a dedicated scratch directory
+and retain summaries or failure evidence rather than every repeated full session.
+Set `OUTPUT_DIR` to an absolute directory for local evidence:
 
 ```sh
 PI_OFFLINE=1 EVAL_PROVIDER_MODE=scripted EVAL_MODEL_CALL_BUDGET=0 \

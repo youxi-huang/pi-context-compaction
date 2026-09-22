@@ -22,6 +22,7 @@ import {
 	noteBytes,
 	sourceText,
 } from "../../packages/coding-agent/src/extensions/context-memory/notes.ts";
+import { EVALUATED_RUNTIME_PIN } from "../runtime.ts";
 import { FIXTURE_VERSION, RUNTIME_PIN } from "../schema.ts";
 import { artifactDirectory, evalRoot, json, loadFixture } from "../test-utils.ts";
 import { model, note, offlineHost } from "./offline-host.ts";
@@ -202,7 +203,7 @@ describe("fixture trigger preflight and real checkpoint recovery", () => {
 			);
 			const report = {
 				fixtureVersion: FIXTURE_VERSION,
-				runtimePin: RUNTIME_PIN,
+				runtimePin: EVALUATED_RUNTIME_PIN,
 				providerMode: "scripted",
 				realModelCalls: 0,
 				model,
@@ -224,7 +225,9 @@ describe("fixture trigger preflight and real checkpoint recovery", () => {
 			if (process.env.EVAL_WRITE_PREFLIGHT === "1") json(join(evalRoot, "fixtures/preflight.json"), report);
 			else {
 				const frozen = JSON.parse(readFileSync(join(evalRoot, "fixtures/preflight.json"), "utf8"));
-				expect(report).toEqual(frozen);
+				// Runtime metadata advances explicitly; source preparation and all fixture outputs stay frozen.
+				expect(frozen.runtimePin).toBe(RUNTIME_PIN);
+				expect({ ...report, runtimePin: RUNTIME_PIN }).toEqual(frozen);
 			}
 		} catch (error) {
 			json(join(root, "failure.json"), { error: String(error), rows });

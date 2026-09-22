@@ -56,7 +56,7 @@ See the [architecture](docs/context-memory/architecture.md) for persistence, con
 
 | Evidence | What it supports |
 | --- | --- |
-| **92 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
+| **94 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
 | **456 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery evaluation and bounded live checks** | [Fixtures, probes, scoring and runners](eval/README.md) are implemented. Luna/max checks produced partial native results; the final project attempt recovered the task after one checkpoint, then rejected a second note with a misattributed quotation. The full two-arm baseline is deferred under the reduced evaluation budget. |

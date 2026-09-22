@@ -1,5 +1,11 @@
 # Validation record
 
+## Unreleased: readable supersedes references
+
+The note validator now applies the same branch-membership and readable-content check to `supersedes` and `sources`. Readable older originals remain valid even when the current fact cites only the newer ruling in `sources`. Checkpoints, metadata, empty text, future and sibling entries are rejected before commit; persisted invalid supersedes are also refused on reopen, with original history retained.
+
+Two focused runtime regressions bring context-memory checks to 94; 456 host security/compatibility checks pass. The evaluation's four structural counterexamples and report expectations are explicitly updated to three hard failures and one accepted original-reference case, including commit refusal and persisted-note reopening. The evaluated runtime advances through `eval/runtime.ts`; fixture/scorer bytes and original preparation results stay frozen, and historical live results keep their original runtime identity. No new provider calls or installation changes accompany this fix.
+
 ## 0.3 measurement: bounded live validation, 2026-09-22 UTC
 
 The evaluation implementation supplies versioned fixtures, deterministic probes/scoring, isolated checkpoint and task runners, and an explicitly authorized subscription transport. The compaction runtime stayed pinned to `149e253cebc56b8e732022e79c294fce5ebb5cbc`; fixture/scorer content stayed frozen. These additions establish a reproducible method, not a completed provider-quality baseline.

@@ -26,12 +26,15 @@ The default script intentionally abstains. F3 requires evaluator writer review
 for original-message artifact probes; without a reviewer those observations are
 explicitly blocked and CLI exits 2.
 
-The runner checks runtime source against `149e253cebc56b8e732022e79c294fce5ebb5cbc`
-and the frozen fixture/schema/scorer files against
+The runner checks runtime source against the explicit current pin in
+[`runtime.ts`](../runtime.ts), and the frozen fixture/schema/scorer files against
 `87f707e9d06da0a9eaac4854a91423ef1c04cf1f`, including unexpected untracked files
 within those paths. It also verifies the fixture manifest. Its own version and
 source hash are recorded. A changed input is rejected before execution; changing
-the pin requires explicit review and a new preflight.
+the pin requires explicit review and a new preflight. The supersedes readability
+fix advances the runtime pin while preserving fixture bytes and original
+preparation outputs; historical provider results keep their original runtime
+identity and are not evidence for the patched runtime.
 
 ## What each participant can see
 

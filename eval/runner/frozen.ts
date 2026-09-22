@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { RUNTIME_PIN } from "../schema.ts";
+import { EVALUATED_RUNTIME_PIN } from "../runtime.ts";
 
 export const FIXTURE_REVISION = "87f707e9d06da0a9eaac4854a91423ef1c04cf1f";
 export const FIXTURE_CONTENT_HASH = "6d19b38a2788a0610ebfc1996a0578437c83ec361f3cd6807ed9a37848b0cbb8";
@@ -42,13 +42,13 @@ export function runnerFingerprint(): string {
 export function assertFrozenInputs(): void {
 	const cwd = fileURLToPath(new URL("../../", import.meta.url));
 	const runtimeFiles = ["packages/coding-agent/src", "packages/ai/src", "packages/agent/src"];
-	const diff = execFileSync("git", ["diff", RUNTIME_PIN, "--", ...runtimeFiles], { cwd, encoding: "utf8" });
+	const diff = execFileSync("git", ["diff", EVALUATED_RUNTIME_PIN, "--", ...runtimeFiles], { cwd, encoding: "utf8" });
 	const untracked = execFileSync(
 		"git",
 		["ls-files", "--others", "--exclude-standard", "--", ...runtimeFiles, "eval/fixtures"],
 		{ cwd, encoding: "utf8" },
 	);
-	if (diff || untracked) throw new Error(`EVAL_FROZEN_INPUT_CHANGED:${RUNTIME_PIN}`);
+	if (diff || untracked) throw new Error(`EVAL_FROZEN_INPUT_CHANGED:${EVALUATED_RUNTIME_PIN}`);
 	// Content lock survives a later squash merge of the accepted implementation commits.
 	const currentFiles = execFileSync(
 		"git",

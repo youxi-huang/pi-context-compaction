@@ -266,6 +266,29 @@ describe("subscription transport: real serializer, fake network", () => {
 		await expect(transport.complete(request())).rejects.toThrow("EVAL_PROVIDER_TRANSPORT_FAILURE");
 		expect(calls).toBe(1);
 	});
+	it("uses explicit estimates for a successful response with missing usage, preserving raw nulls", async () => {
+		const ledger = new Ledger(),
+			quota = big(ledger);
+		ledger.fallback("user-authorized-local-estimate");
+		const transport = codexTransport({
+			mode: "scripted",
+			allowEstimatedUsage: true,
+			ledger,
+			groups: () => [quota],
+			access: () => fakeCredential,
+			fetch: async () => sse("visible answer", { missing: true }),
+		});
+		const response = await transport.complete(request());
+		const measurement = transport.measurement?.();
+		expect(response.usage.output).toBeGreaterThan(0);
+		expect(measurement).toMatchObject({ input: null, output: null, capMode: "local-post-response" });
+		expect(measurement?.estimation?.output).toBe(response.usage.output);
+		expect(quota.knownInput).toBe(0);
+		expect(quota.knownOutput).toBe(0);
+		expect(quota.estimatedOutput).toBe(response.usage.output);
+		expect(quota.reservedOutput).toBe(0);
+		expect(ledger.fatal).toBeUndefined();
+	});
 	it("never retries HTTP failures or persists credential echoes", async () => {
 		const ledger = new Ledger(),
 			quota = big(ledger);
@@ -396,6 +419,29 @@ describe("shared concurrency budget", () => {
 			}),
 		).rejects.toThrow();
 		expect(sent).toBe(1);
+		const continuation = await runLivePlan({
+			outputDirectory: artifactDirectory("stage3-continue-remaining-"),
+			approvalReference: "user accepts estimates",
+			restartFrom: join(result.directory, "plan.json"),
+			continueRemaining: true,
+			transport: {
+				mode: "scripted",
+				access: () => fakeCredential,
+				allowEstimatedUsage: true,
+				onRequest(_body, r) {
+					expect(r.scope?.arm).toBe("native");
+				},
+				fetch: async () => {
+					sent++;
+					throw new Error("synthetic transport stop");
+				},
+			},
+		});
+		expect(sent).toBe(2);
+		expect(continuation.attemptedRuns).toBe(2);
+		expect(continuation.runs[0].id).toBe(result.runs[0].id);
+		expect(continuation.ledger.groups[0].sent).toBe(5);
+		expect(continuation.usagePolicy).toBe("provider-or-explicit-estimate");
 	});
 	it("rejects expired or altered replay budgets before dispatch", () => {
 		const predecessor = restartEvidence();

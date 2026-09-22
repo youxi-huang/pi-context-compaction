@@ -90,6 +90,7 @@ function observeSse(
 }
 export interface CodexOptions {
 	mode: "scripted" | "live";
+	allowEstimatedUsage?: boolean;
 	ledger: Ledger;
 	groups: (request: TransportRequest) => Quota[];
 	access: () => string;
@@ -222,7 +223,33 @@ export function codexTransport(options: CodexOptions): Transport {
 				const measured = rawMeasurement(terminalResponse);
 				latest = { ...measured, sent, capMode: ledger.capMode, inputProxy, reservedInput: reservation?.input ?? 0 };
 				if (status === undefined && diagnostics.transportError) ledger.stop("EVAL_PROVIDER_TRANSPORT_FAILURE");
-				if (reservation) ledger.settle(reservation, measured.input, measured.output);
+				if (own.signal.aborted) ledger.stop("EVAL_REQUEST_TIMEOUT");
+				let accountedInput = measured.input,
+					accountedOutput = measured.output;
+				const estimate =
+					options.allowEstimatedUsage &&
+					status === 200 &&
+					message.stopReason !== "error" &&
+					message.stopReason !== "aborted" &&
+					(measured.input === null || measured.output === null);
+				if (estimate) {
+					accountedInput = measured.input ?? inputProxy;
+					accountedOutput =
+						measured.output ??
+						Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(message.content), "utf8") / 3));
+					latest.estimation = {
+						input: accountedInput,
+						output: accountedOutput,
+						method: "payload/output-content UTF-8 bytes divided by 3; hidden reasoning unavailable",
+					};
+					message.usage = {
+						...message.usage,
+						input: accountedInput,
+						output: accountedOutput,
+						totalTokens: accountedInput + accountedOutput,
+					};
+				}
+				if (reservation) ledger.settle(reservation, accountedInput, accountedOutput, Boolean(estimate));
 				else ledger.stop("EVAL_REQUEST_NOT_ADMITTED");
 				if (
 					status !== 200 ||
@@ -231,8 +258,8 @@ export function codexTransport(options: CodexOptions): Transport {
 					own.signal.aborted
 				)
 					ledger.stop(status ? `EVAL_PROVIDER_HTTP_${status}` : "EVAL_PROVIDER_TRANSPORT_FAILURE");
-				if (measured.output === 0 && message.content.length) ledger.stop("EVAL_OUTPUT_USAGE_UNAVAILABLE");
-				if (measured.output! > request.maxTokens) ledger.fallback("returned-output-exceeds-requested-cap");
+				if (accountedOutput === 0 && message.content.length) ledger.stop("EVAL_OUTPUT_USAGE_UNAVAILABLE");
+				if (accountedOutput! > request.maxTokens) ledger.fallback("returned-output-exceeds-requested-cap");
 				else if (count(object(terminalResponse).max_output_tokens) !== request.maxTokens)
 					ledger.fallback("server-cap-not-confirmed");
 				else if (ledger.capMode !== "local-post-response") ledger.capMode = "server-reported-cap";
@@ -244,7 +271,7 @@ export function codexTransport(options: CodexOptions): Transport {
 					measurement: latest,
 					stopReason: message.stopReason,
 				});
-				if (measured.output! > request.maxTokens) throw new Error("EVAL_PROVIDER_OUTPUT_LIMIT");
+				if (accountedOutput! > request.maxTokens) throw new Error("EVAL_PROVIDER_OUTPUT_LIMIT");
 				return message;
 			} catch (error) {
 				const measured = rawMeasurement(terminalResponse);

@@ -164,7 +164,8 @@ export class ResponseDiagnostics {
 	async response(response: Response) {
 		this.httpStatus = response.status;
 		this.contentType = this.scrub(response.headers.get("content-type") ?? "").slice(0, 256);
-		if (response.ok && this.contentType.toLowerCase().includes("text/event-stream")) return;
+		// Never pre-read a successful stream, including responses without content-type.
+		if (response.ok) return;
 		const reader = response.clone().body?.getReader();
 		if (!reader) return;
 		const chunks: Uint8Array[] = [];

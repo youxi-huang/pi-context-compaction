@@ -509,6 +509,9 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		if (options.transport.mode === "live") {
 			const fields = ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const;
 			return {
+				estimatedCalls: rows.filter((row) => row.providerMeasurement?.estimation).length,
+				estimatedInput: rows.reduce((sum, row) => sum + (row.providerMeasurement?.estimation?.input ?? 0), 0),
+				estimatedOutput: rows.reduce((sum, row) => sum + (row.providerMeasurement?.estimation?.output ?? 0), 0),
 				calls: rows.length,
 				actualSent: rows.filter((row) => row.providerMeasurement?.sent).length,
 				missingUsage: rows.filter(
@@ -548,7 +551,10 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		injectionOnly: result.probes.filter((p) => p.injection).length,
 	};
 	result.usage = {
-		measurement: options.transport.mode === "live" ? "provider-usage-with-field-presence" : "scripted-usage-only",
+		measurement:
+			options.transport.mode === "live"
+				? "provider-usage-with-field-presence-and-explicit-estimates"
+				: "scripted-usage-only",
 		writer: usageFor("writer"),
 		task: usageFor("task"),
 		retrievalFollowup: usageFor("retrieval-followup"),

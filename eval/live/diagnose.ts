@@ -21,6 +21,11 @@ export function seedQuota(quota: Quota, prior: ReturnType<Quota["snapshot"]>): v
 		if (!Number.isSafeInteger(prior[field]) || prior[field] < 0) throw new Error("EVAL_INVALID_PRIOR_LEDGER");
 		quota[field] = prior[field];
 	}
+	for (const field of ["estimatedInput", "estimatedOutput"] as const) {
+		const value = prior[field] ?? 0;
+		if (!Number.isSafeInteger(value) || value < 0) throw new Error("EVAL_INVALID_PRIOR_LEDGER");
+		quota[field] = value;
+	}
 }
 export async function diagnoseOnce(priorPlanFile: string, approvalReference: string) {
 	assertExecutionMode("live");

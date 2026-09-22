@@ -48,6 +48,19 @@ describe("bounded response diagnostics", () => {
 		expect(d.errorBody).toContain("Unsupported parameter");
 		expect(JSON.stringify(d.snapshot())).not.toContain("private-access");
 	});
+	it("never pre-reads a successful response whose content-type is absent", async () => {
+		const response = new Response("successful stream");
+		response.headers.delete("content-type");
+		Object.defineProperty(response, "clone", {
+			value: () => {
+				throw new Error("success body must not be pre-read");
+			},
+		});
+		const diagnostics = new ResponseDiagnostics([]);
+		await diagnostics.response(response);
+		expect(diagnostics.httpStatus).toBe(200);
+		expect(diagnostics.errorBody).toBeNull();
+	});
 	it("observes multiline terminal data independently without changing the accounting parser", () => {
 		const d = new ResponseDiagnostics([]);
 		for (const line of [

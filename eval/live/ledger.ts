@@ -8,6 +8,8 @@ export class Quota {
 	sent = 0;
 	knownInput = 0;
 	knownOutput = 0;
+	estimatedInput = 0;
+	estimatedOutput = 0;
 	inputProxy = 0;
 	reservedInput = 0;
 	reservedOutput = 0;
@@ -24,6 +26,8 @@ export class Quota {
 			sent: this.sent,
 			knownInput: this.knownInput,
 			knownOutput: this.knownOutput,
+			estimatedInput: this.estimatedInput,
+			estimatedOutput: this.estimatedOutput,
 			inputProxy: this.inputProxy,
 			reservedInput: this.reservedInput,
 			reservedOutput: this.reservedOutput,
@@ -81,9 +85,13 @@ export class Ledger {
 		for (const q of groups) {
 			if (performance.now() >= q.deadline) this.stop(`EVAL_TIME_LIMIT:${q.name}`);
 			if (q.calls >= q.limits.calls) this.stop(`EVAL_CALLS_LIMIT:${q.name}`);
-			if (q.knownInput + q.reservedInput + input > q.limits.input || q.inputProxy + proxy > q.limits.input)
+			if (
+				q.knownInput + q.estimatedInput + q.reservedInput + input > q.limits.input ||
+				q.inputProxy + proxy > q.limits.input
+			)
 				this.stop(`EVAL_INPUT_LIMIT:${q.name}`);
-			if (q.knownOutput + q.reservedOutput + output > q.limits.output) this.stop(`EVAL_OUTPUT_LIMIT:${q.name}`);
+			if (q.knownOutput + q.estimatedOutput + q.reservedOutput + output > q.limits.output)
+				this.stop(`EVAL_OUTPUT_LIMIT:${q.name}`);
 		}
 		for (const q of groups) {
 			q.calls++;
@@ -105,22 +113,29 @@ export class Ledger {
 		for (const q of r.groups) q.sent++;
 		this.event({ type: "sent", groups: r.groups.map((q) => q.name) });
 	}
-	settle(r: Reservation, input: number | null, output: number | null) {
+	settle(r: Reservation, input: number | null, output: number | null, estimated = false) {
 		if (r.settled) throw new Error("EVAL_DOUBLE_SETTLEMENT");
 		r.settled = true;
 		if (input === null || output === null) this.stop("EVAL_USAGE_UNAVAILABLE");
 		for (const q of r.groups) {
 			q.reservedInput -= r.input;
 			q.reservedOutput -= r.output;
-			q.knownInput += input;
-			q.knownOutput += output;
+			if (estimated) {
+				q.estimatedInput += input;
+				q.estimatedOutput += output;
+			} else {
+				q.knownInput += input;
+				q.knownOutput += output;
+			}
 		}
-		this.event({ type: "settle", input, output, groups: r.groups.map((q) => q.name) });
+		this.event({ type: "settle", input, output, estimated, groups: r.groups.map((q) => q.name) });
 		if (input > r.input) this.stop("EVAL_INPUT_RESERVATION_OVERRUN");
 		for (const q of r.groups) {
 			if (performance.now() >= q.deadline) this.stop(`EVAL_TIME_LIMIT:${q.name}`);
-			if (q.knownInput + q.reservedInput > q.limits.input) this.stop(`EVAL_INPUT_LIMIT:${q.name}`);
-			if (q.knownOutput + q.reservedOutput > q.limits.output) this.stop(`EVAL_OUTPUT_LIMIT:${q.name}`);
+			if (q.knownInput + q.estimatedInput + q.reservedInput > q.limits.input)
+				this.stop(`EVAL_INPUT_LIMIT:${q.name}`);
+			if (q.knownOutput + q.estimatedOutput + q.reservedOutput > q.limits.output)
+				this.stop(`EVAL_OUTPUT_LIMIT:${q.name}`);
 		}
 	}
 	fallback(reason: string) {

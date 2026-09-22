@@ -43,6 +43,7 @@ export async function runLivePlan(options: {
 	approvalReference: string;
 	judgeConcurrency?: 2 | 4;
 	restartFrom?: string;
+	continueRemaining?: boolean;
 	transport: Omit<CodexOptions, "ledger" | "groups">;
 }) {
 	assertExecutionMode(options.transport.mode);
@@ -51,7 +52,7 @@ export async function runLivePlan(options: {
 		throw new Error("EVAL_PLAN_OUTPUT_AND_APPROVAL_REQUIRED");
 	const judgeConcurrency = options.judgeConcurrency ?? 2;
 	if (![2, 4].includes(judgeConcurrency)) throw new Error("EVAL_INVALID_JUDGE_CONCURRENCY");
-	const restart = options.restartFrom ? loadRestart(options.restartFrom) : undefined;
+	const restart = options.restartFrom ? loadRestart(options.restartFrom, options.continueRemaining) : undefined;
 	if (restart) claimRestart(restart, options.approvalReference);
 	claimPlanRoot(options.outputDirectory);
 	const directory = join(options.outputDirectory, `live-plan-${randomUUID()}`);
@@ -63,7 +64,7 @@ export async function runLivePlan(options: {
 		baseline = ledger.group("baseline", restart?.baselineLimits ?? baselineLimits());
 	if (restart) inheritRestart(ledger, global, baseline, restart);
 	const slots = schedule(),
-		runs: RunResult[] = [],
+		runs: RunResult[] = restart?.retainedRuns ?? [],
 		unstarted: { key: string; reason: string }[] = [],
 		runErrors: { key: string; reason: string }[] = [];
 	const reviews: Awaited<ReturnType<typeof reviewF3>>[] = [];
@@ -88,6 +89,7 @@ export async function runLivePlan(options: {
 			budgetVersion: BUDGET_VERSION,
 			measurementVersion: MEASUREMENT_VERSION,
 			mode: options.transport.mode,
+			usagePolicy: options.transport.allowEstimatedUsage ? "provider-or-explicit-estimate" : "provider-required",
 			approvalReference: options.approvalReference,
 			restart: restart
 				? {
@@ -98,6 +100,8 @@ export async function runLivePlan(options: {
 						elapsedBeforeRestartMs: restart.elapsedBeforeRestartMs,
 						priorRequests: restart.quota.sent,
 						unknownUsageReservationsRetained: true,
+						retainedRunIds: restart.retainedRuns.map((r) => r.id),
+						continueRemaining: restart.continueRemaining,
 					}
 				: null,
 			currentPlanRequests: global.sent - (restart?.quota.sent ?? 0),
@@ -161,11 +165,15 @@ export async function runLivePlan(options: {
 		json(join(directory, "plan.json"), data);
 		writeFileSync(
 			join(directory, "plan.md"),
-			`# Evaluation plan\n\nStatus: ${data.status}. Model: openai-codex/gpt-5.6-luna, thinking max. Contract: ${MEASUREMENT_VERSION}.\n\nPlanned runs 18; attempted ${data.attemptedRuns}; completed task executions ${data.completedExecutionRuns}; unstarted ${unstarted.length}. Provider requests ${global.sent}; real model calls ${data.realModelCalls}.\n\nCap mode: ${ledger.capMode}; ${ledger.fallbackReason ?? "server enforcement not yet established"}. Actual output includes reasoning. Missing usage stops the plan.\n\nF3 selected 60/120 original writer observations; completed ${data.writerReview.completed}. Remaining original observations stay unreviewed; this is an intentionally partial semantic baseline. Failure samples are retained.\n`,
+			`# Evaluation plan\n\nStatus: ${data.status}. Model: openai-codex/gpt-5.6-luna, thinking max. Contract: ${MEASUREMENT_VERSION}.\n\nPlanned runs 18; attempted ${data.attemptedRuns}; completed task executions ${data.completedExecutionRuns}; unstarted ${unstarted.length}. Provider requests ${global.sent}; real model calls ${data.realModelCalls}.\n\nCap mode: ${ledger.capMode}; ${ledger.fallbackReason ?? "server enforcement not yet established"}. Actual output includes reasoning. Usage policy: ${data.usagePolicy}; estimates are explicitly labeled.\n\nF3 selected 60/120 original writer observations; completed ${data.writerReview.completed}. Remaining original observations stay unreviewed; this is an intentionally partial semantic baseline. Failure samples are retained.\n`,
 		);
 		return data;
 	};
 	const executeSlot = async (slot: (typeof slots)[number]) => {
+		if (runs.some((r) => r.fixture === slot.fixture && r.arm === slot.arm && r.replicate === slot.replicate)) {
+			if (slot.key === slots[0].key) firstWriter.release(true);
+			return;
+		}
 		if (ledger.fatal) {
 			unstarted.push({ key: slot.key, reason: ledger.fatal });
 			return;

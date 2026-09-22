@@ -169,3 +169,13 @@ unknown consumption is not relabeled zero. Local rejection cannot stop tokens
 already generated remotely, so reported usage and held reservations remain part
 of aggregate enforcement. The plan records both this replay's request count and
 the cumulative count including the three historical attempts.
+
+The user-authorized `continue-estimated` command accepts a stopped replay plan,
+retains its attempted runs (including failures), and schedules only unstarted
+slots. It carries forward the same quotas/deadlines and does not rerun failures.
+Successful responses lacking core usage may use input payload and returned-content
+UTF-8 byte counts divided by three. Estimates are separate from reported usage;
+hidden reasoning cannot be measured this way. Failed or interrupted responses
+are never converted into success by estimation. All call, time, action and local
+output checks still apply, while token-based limits use the declared estimate.
+Successful streams are never pre-read by diagnostics, even without content-type.

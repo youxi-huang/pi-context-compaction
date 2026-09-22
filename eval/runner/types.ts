@@ -39,6 +39,7 @@ export interface ProviderMeasurement {
 	capMode: string;
 	inputProxy: number;
 	reservedInput: number;
+	estimation?: { input: number; output: number; method: string };
 	diagnostics?: unknown;
 	error?: string;
 }

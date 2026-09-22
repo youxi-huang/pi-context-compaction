@@ -1,5 +1,5 @@
 {
-  "version": "0.3-measurement.1",
+  "version": "0.3-measurement.2",
   "runtimePin": "149e253cebc56b8e732022e79c294fce5ebb5cbc",
   "sourceProxy": "sum over readable original entries of ceil(UTF-8 source-text bytes / 3)",
   "releasedProxy": "intersection of currently active original entries and entries before the actual cut; excludes old notes and already archived originals",
@@ -86,5 +86,20 @@
       "real workload ecological validity"
     ]
   },
-  "failedAttemptRelease": "Record prepared release separately; actual released-source proxy is zero when no checkpoint commits. Ratios with a zero denominator are null, not zero."
+  "failedAttemptRelease": "Record prepared release separately; actual released-source proxy is zero when no checkpoint commits. Ratios with a zero denominator are null, not zero.",
+  "taskOutputBudget": {
+    "tokens": 8192,
+    "includesReasoning": true,
+    "actions": 2,
+    "toolRounds": 3,
+    "fixtureFilesUnchanged": true,
+    "application": "Explicit run measurementVersion applies an in-memory numeric oracle overlay; legacy scripted checks may retain version 1."
+  },
+  "subscription": {
+    "model": "openai-codex/gpt-5.6-luna",
+    "thinking": "max",
+    "capFallback": "onPayload max_output_tokens; if unconfirmed or ignored, local acceptance limits plus post-response usage stop, user-authorized; no retries",
+    "missingFields": "unavailable, including absent cache and reasoning fields; raw usage presence retained",
+    "inputProxy": "ceil(payload UTF-8 JSON bytes / 3), reservation ceil(1.5 * proxy) + 2048; not a tokenizer guarantee"
+  }
 }

@@ -5,14 +5,10 @@ sequential pairs, alternating which arm goes first across fixtures/replicates.
 Every run rebuilds its complete compression chain from the frozen JSONL. Notes
 are never borrowed from a prior replicate and failed samples are never replaced.
 
-This stage exposes only a **scripted transport**. It makes no real provider
-calls. The request interface carries the model, reasoning setting, actual SDK
-context, remaining output limit and abort signal so an explicitly authorized
-provider binding can be added after the live budget is frozen. There is no live
-CLI flag or credential lookup. A selected model and thinking level may be tested
-with the script interface; they are recorded in requests and reports. The
-compactor continues to use its existing session writer, default repair and
-unchanged host code.
+The original CLI and CI path use a scripted transport. The separately gated
+[live harness](../live/README.md) uses the pinned subscription provider, retains
+host options and adds raw-usage observation and budget enforcement. Live execution
+requires explicit authorization; ordinary checks never resolve real credentials.
 
 From the repository root, after the normal offline build:
 
@@ -93,9 +89,11 @@ passing permission score.
 
 ## Enforcement and termination
 
-Continuation limits are read directly from the frozen oracle: **two mutations,
-three tool rounds, 1,024 cumulative output tokens**. Other task probes currently
-use those same conservative defaults. A tool round is one assistant response
+Historical scripted checks use the original 1,024 output-token oracle.
+Measurement `0.3-measurement.2` applies the authorized numeric view of **two
+mutations, three tool rounds, 8,192 cumulative output tokens including reasoning**
+to runner enforcement and scoring; fixture bytes and task prompts are unchanged.
+Other task probes use the same limits for the selected measurement version. A tool round is one assistant response
 containing tool calls, including parallel calls. Every mutation in a batch
 reserves its own action slot before changing state. A third mutation cannot land;
 a fourth tool round is rejected before its tools execute. The model gets at most
@@ -132,8 +130,8 @@ checkpoint remains unchanged. Structural validation still runs on reopen.
 
 Original-message writer promotion requires a `writerReviewer`. Its method is
 recorded as scripted or manual-semantic, and semantic scores stay outside the
-deterministic denominator. Missing review is blocked, not silently safe. A live
-semantic review protocol and any judge budget must be frozen in the live stage.
+deterministic denominator. Missing review is blocked, not silently safe. The live harness performs the separately budgeted option-C review after all task
+requests, using independent, tool-free contexts and a pinned rubric.
 
 The CI runner tests include positive continuation, over-limit batch behavior,
 future-original reads, full-suffix file access, gold canaries, cross-copy writes,

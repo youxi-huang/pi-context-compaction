@@ -9,6 +9,7 @@ import { DefaultResourceLoader } from "../../packages/coding-agent/src/core/reso
 import { createAgentSession } from "../../packages/coding-agent/src/core/sdk.ts";
 import type { SessionManager } from "../../packages/coding-agent/src/core/session-manager.ts";
 import { SettingsManager } from "../../packages/coding-agent/src/core/settings-manager.ts";
+import { assertExecutionMode } from "../live/contract.ts";
 import { reply, model as scriptedModel } from "../pi/offline-host.ts";
 import { measuredRequest, type ProbeBudget, type RunMeter } from "./budget.ts";
 import type { Arm, CallRecord, Transport } from "./types.ts";
@@ -29,12 +30,7 @@ export interface HostOptions {
 	thinkingLevel?: ThinkingLevel;
 }
 export async function createRunnerHost(options: HostOptions) {
-	if (
-		process.env.PI_OFFLINE !== "1" ||
-		process.env.EVAL_MODEL_CALL_BUDGET !== "0" ||
-		options.transport.mode !== "scripted"
-	)
-		throw new Error("EVAL_STAGE2_OFFLINE_REQUIRED");
+	assertExecutionMode(options.transport.mode);
 	const model = options.model ?? scriptedModel;
 	mkdirSync(options.directory, { recursive: true });
 	const agentDir = join(options.directory, "agent");
@@ -69,6 +65,13 @@ export async function createRunnerHost(options: HostOptions) {
 						meter: options.meter,
 						records: options.records,
 						budget: options.budget,
+						providerOptions: {
+							toolChoice: requestOptions?.toolChoice,
+							cacheRetention: requestOptions?.cacheRetention,
+							sessionId: requestOptions?.sessionId,
+							maxRetries: 0,
+							transport: "sse",
+						},
 					});
 					if (options.purpose === "task" && message.stopReason === "length") {
 						options.records.at(-1)!.error = "EVAL_OUTPUT_TRUNCATED";

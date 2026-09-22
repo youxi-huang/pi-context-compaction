@@ -21,6 +21,7 @@ import {
 	renderNote,
 	sourceText,
 } from "../../packages/coding-agent/src/extensions/context-memory/notes.ts";
+import { assertExecutionMode, effectiveProbe, MEASUREMENT_VERSION } from "../live/contract.ts";
 import { model as defaultModel } from "../pi/offline-host.ts";
 import { inspectReferences } from "../pi/structural.ts";
 import { FIXTURE_VERSION, type Probe, RUNTIME_PIN, SCORER_VERSION } from "../schema.ts";
@@ -44,16 +45,14 @@ export interface RunOptions {
 	writerReviewer?: WriterReviewer;
 	maxCalls?: number;
 	timeoutMs?: number;
+	measurementVersion?: typeof MEASUREMENT_VERSION;
 }
 
 /** One run is one independent fixture × arm × replicate chain. No notes are reused between runs. */
 export async function runEvaluation(options: RunOptions): Promise<RunResult> {
-	if (
-		process.env.PI_OFFLINE !== "1" ||
-		process.env.EVAL_MODEL_CALL_BUDGET !== "0" ||
-		options.transport.mode !== "scripted"
-	)
-		throw new Error("EVAL_STAGE2_OFFLINE_REQUIRED");
+	assertExecutionMode(options.transport.mode);
+	if (options.transport.mode === "live" && options.measurementVersion !== MEASUREMENT_VERSION)
+		throw new Error("EVAL_LIVE_CONTRACT_REQUIRED");
 	if (!Number.isSafeInteger(options.replicate) || options.replicate < 1) throw new Error("EVAL_REPLICATE_REQUIRED");
 	if (
 		!isAbsolute(options.outputDirectory) ||
@@ -87,7 +86,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		status: "completed",
 		directory,
 		metadata: {
-			runnerVersion: "0.3-runner.1",
+			runnerVersion: "0.3-runner.2",
 			runnerSourceHash: runnerFingerprint(),
 			runtimePin: RUNTIME_PIN,
 			fixtureRevision: FIXTURE_REVISION,
@@ -95,7 +94,8 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 			fixtureVersion: FIXTURE_VERSION,
 			fixtureHash,
 			scorerVersion: SCORER_VERSION,
-			providerMode: "scripted",
+			providerMode: options.transport.mode,
+			measurementVersion: options.measurementVersion ?? "0.3-measurement.1",
 			realModelCalls: 0,
 			model,
 			thinking: options.thinkingLevel ?? "off",
@@ -120,6 +120,8 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		calls: 0,
 		maxCalls: options.maxCalls ?? 500,
 		deadline: performance.now() + (options.timeoutMs ?? 120000),
+		scope: { runId: id, fixture: options.fixture, arm: options.arm, replicate: options.replicate },
+		writerTimeoutMs: options.measurementVersion ? 180000 : 60000,
 	};
 	let clean = `${JSON.stringify(bundle.header)}\n`;
 	let previousBoundary = -1;
@@ -155,7 +157,10 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 			requests: [],
 		};
 		result.checkpoints.push(checkpoint);
-		const probes = bundle.fixture.probes.filter((probe) => probe.checkpoint === trigger.id);
+		const probes = bundle.fixture.probes
+			.filter((probe) => probe.checkpoint === trigger.id)
+			.map((probe) => effectiveProbe(probe, options.measurementVersion));
+		meter.scope = { ...meter.scope!, checkpoint: trigger.id, probe: undefined };
 		if (chainError) {
 			checkpoint.error = chainError;
 			result.probes.push(...probes.map((probe) => blocked(probe, chainError!)));
@@ -297,6 +302,7 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 				);
 				continue;
 			}
+			meter.scope = { ...meter.scope!, probe: probe.id };
 			const probeDirectory = join(directory, "probes", probe.id);
 			mkdirSync(probeDirectory, { recursive: true });
 			const copyFile = join(probeDirectory, "session.jsonl");
@@ -362,6 +368,10 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 					}
 				} else {
 					const limits = limitsFor(probe);
+					if (options.measurementVersion) {
+						limits.outputTokens = 8192;
+						limits.timeoutMs = 120000;
+					}
 					budget = new ProbeBudget(limits);
 					world = new ProbeWorld(join(probeDirectory, "workspace"), budget, initialFor(probe));
 					taskHost = await createRunnerHost({
@@ -379,7 +389,24 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 						world,
 					});
 					const dispatch = performance.now();
-					await taskHost.session.prompt(taskPrompt(probe));
+					const promptWork = taskHost.session.prompt(taskPrompt(probe));
+					let probeTimer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						await Promise.race([
+							promptWork,
+							new Promise<never>((_resolve, reject) => {
+								probeTimer = setTimeout(
+									() => {
+										void taskHost!.session.abort();
+										reject(new Error("EVAL_PROBE_TIMEOUT"));
+									},
+									options.measurementVersion ? 600000 : 120000,
+								);
+							}),
+						]);
+					} finally {
+						if (probeTimer) clearTimeout(probeTimer);
+					}
 					if (checkpoint.nextTaskRequestAt === undefined && requests.length) {
 						checkpoint.dispatchAt = dispatch;
 						checkpoint.nextTaskRequestAt = requests[0].at;
@@ -479,6 +506,27 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 					)
 				: row.purpose === purpose,
 		);
+		if (options.transport.mode === "live") {
+			const fields = ["input", "output", "cacheRead", "cacheWrite", "reasoning"] as const;
+			return {
+				calls: rows.length,
+				actualSent: rows.filter((row) => row.providerMeasurement?.sent).length,
+				missingUsage: rows.filter(
+					(row) => row.providerMeasurement?.input == null || row.providerMeasurement?.output == null,
+				).length,
+				...Object.fromEntries(
+					fields.map((field) => {
+						const known = rows.flatMap((row) =>
+							row.providerMeasurement?.[field] == null ? [] : [row.providerMeasurement[field]!],
+						);
+						return [
+							field,
+							{ knownTotal: known.reduce((a, b) => a + b, 0), unavailableCalls: rows.length - known.length },
+						];
+					}),
+				),
+			};
+		}
 		return {
 			calls: rows.length,
 			missingUsage: rows.filter((row) => row.usage === null || row.outputTokens === null).length,
@@ -500,19 +548,27 @@ export async function runEvaluation(options: RunOptions): Promise<RunResult> {
 		injectionOnly: result.probes.filter((p) => p.injection).length,
 	};
 	result.usage = {
-		measurement: "scripted-usage-only",
+		measurement: options.transport.mode === "live" ? "provider-usage-with-field-presence" : "scripted-usage-only",
 		writer: usageFor("writer"),
 		task: usageFor("task"),
 		retrievalFollowup: usageFor("retrieval-followup"),
 		realProviderUsage: null,
 	};
+	result.metadata.realModelCalls =
+		options.transport.mode === "live" ? calls.filter((call) => call.providerMeasurement?.sent).length : 0;
+	if (options.transport.mode === "live")
+		result.usage.realProviderUsage = calls.map((call) => call.providerMeasurement ?? null);
 	if (result.probes.some((probe) => probe.status === "blocked")) result.status = "failed";
 	json(join(directory, "run.json"), result);
 	const summary = summarize(result.probes.map((probe) => probe.score));
 	json(join(directory, "scores.json"), summary);
-	writeFileSync(
-		join(directory, "run.md"),
-		`# Scripted runner report\n\n${id}: ${result.status}. This is not a provider-quality baseline.\n\nPlanned checkpoints: ${result.counts.plannedCheckpoints}; attempts: ${result.counts.compressionAttempts}; committed: ${result.counts.successfulCheckpoints}.\nPlanned probes: ${result.counts.plannedProbes}; completed: ${result.counts.completedProbes}; blocked: ${result.counts.blockedProbes}; injection-only: ${result.counts.injectionOnly}.\n\nNative configuration: ${JSON.stringify(bundle.fixture.native)}. Real model calls: 0.\n`,
-	);
+	writeRunReport(result);
 	return result;
+}
+
+export function writeRunReport(result: RunResult): void {
+	writeFileSync(
+		join(result.directory, "run.md"),
+		`# Runner report\n\n${result.id}: ${result.status}. Mode: ${result.metadata.providerMode}; measurement: ${result.metadata.measurementVersion}.\n\nPlanned checkpoints: ${result.counts.plannedCheckpoints}; attempts: ${result.counts.compressionAttempts}; committed: ${result.counts.successfulCheckpoints}. Planned probes: ${result.counts.plannedProbes}; completed: ${result.counts.completedProbes}; blocked: ${result.counts.blockedProbes}; injection-only: ${result.counts.injectionOnly}.\n\nNative configuration: ${JSON.stringify(result.metadata.nativeConfiguration)}. Real model calls: ${result.metadata.realModelCalls}.\n\nWriter semantic review: ${JSON.stringify(result.metadata.writerReview ?? "not provided")}. Completed means execution, not a correct answer. See scores.json for outcomes; all failed and unreviewed observations remain in the denominator.\n`,
+	);
 }

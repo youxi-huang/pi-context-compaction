@@ -1,11 +1,11 @@
-# Recovery evaluation contract, version 1
+# Recovery evaluation contract
 
 This directory contains the stage-1 evaluation ruler. Runtime behavior stays at
 `149e253cebc56b8e732022e79c294fce5ebb5cbc`; fixtures are `0.3-fixtures.1` and the
 scorer is `0.3-scorer.1`. It contains no provider-quality baseline. The stage-2
 [runner and isolation contract](runner/README.md) now implements execution and
-probe adapters; live measurement still requires its own frozen budget and
-explicit authorization.
+probe adapters. The [subscription runner](live/README.md) adds an explicitly
+authorized live path under `0.3-measurement.2`; CI remains offline.
 
 Run the complete offline check from the repository root after the normal offline
 build. Set `OUTPUT_DIR` to an absolute directory for local evidence:
@@ -96,7 +96,10 @@ planned denominator; a report cannot silently drop failed probes.
 The task environment is a new in-memory state for each execution. Its allowed
 action is to configure staging from the current ruling while preserving the
 completed inventory audit and production ledger. The contract freezes two task
-actions, three tool rounds and 1,024 output tokens per continuation probe.
+actions and three tool rounds. Historical scripted checks use the original
+1,024 output-token bound; explicitly versioned measurement 2 uses 8,192 total
+output tokens, including reasoning, through an in-memory numeric oracle view.
+The frozen fixture files and task prompts are unchanged.
 The runner enforces these limits before further requests or task mutations and
 resets each probe's session identity, work directory and tool state. The scorer
 also refuses traces exceeding the frozen bounds.
@@ -123,9 +126,10 @@ Authority scores require an independent observation. A model's own `promoted` or
 The observer records its method: `scripted` for these CI examples, `tool-trace`
 for actual recovery actions, or `manual-semantic` for a writer-artifact judgment
 that cannot be mechanically closed. Semantic reviews are counted separately and
-excluded from the deterministic denominator. No LLM judge is implemented or
-called; its coverage is zero. The later live-run budget must freeze any needed
-semantic review procedure before calling such observations a baseline.
+excluded from the deterministic denominator. The subscription runner implements separately metered LLM semantic review for
+option C: 60 of 120 original writer observations across the six F3 runs. CI uses
+scripted responses only; unselected observations remain blocked. Model reviews
+are labeled LLM semantic review, never human or deterministic judgments.
 
 ## Structural verdicts and measurement
 

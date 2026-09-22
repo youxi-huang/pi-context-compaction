@@ -7,15 +7,44 @@ import type { Observation, Score } from "../scorer.ts";
 export type Arm = "project" | "native";
 /** The transport sees only the actual request, not fixture/gold/another arm or evaluator callbacks. */
 export interface TransportRequest {
-	purpose: "writer" | "task";
+	purpose: "writer" | "task" | "judge";
 	context: Context;
 	model: Model<Api>;
 	maxTokens: number;
 	reasoning?: SimpleStreamOptions["reasoning"];
 	signal: AbortSignal;
+	scope?: RequestScope;
+	providerOptions?: ForwardedOptions;
+}
+export interface RequestScope {
+	runId: string;
+	fixture: string;
+	arm: Arm;
+	replicate: number;
+	checkpoint?: string;
+	probe?: string;
+}
+export type ForwardedOptions = Pick<
+	SimpleStreamOptions,
+	"toolChoice" | "cacheRetention" | "sessionId" | "maxRetries" | "transport"
+>;
+export interface ProviderMeasurement {
+	input: number | null;
+	output: number | null;
+	reasoning: number | null;
+	cacheRead: number | null;
+	cacheWrite: number | null;
+	total: number | null;
+	sent: boolean;
+	capMode: string;
+	inputProxy: number;
+	reservedInput: number;
+	error?: string;
 }
 export interface Transport {
-	mode: "scripted";
+	mode: "scripted" | "live";
+	measurement?(): ProviderMeasurement | undefined;
+	stop?(reason: string): void;
 	complete(request: TransportRequest): Promise<AssistantMessage>;
 }
 export interface ProbeLimits {
@@ -26,11 +55,13 @@ export interface ProbeLimits {
 	timeoutMs: number;
 }
 export interface CallRecord {
-	purpose: "writer" | "task";
+	purpose: "writer" | "task" | "judge";
 	at: number;
 	maxTokens: number;
 	reasoning?: SimpleStreamOptions["reasoning"];
 	context: Context;
+	providerOptions?: ForwardedOptions;
+	providerMeasurement?: ProviderMeasurement;
 	usage: Usage | null;
 	outputTokens: number | null;
 	result?: AssistantMessage;

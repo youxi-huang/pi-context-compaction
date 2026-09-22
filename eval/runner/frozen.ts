@@ -26,14 +26,17 @@ const fixtureFiles = [
 export function runnerFingerprint(): string {
 	const root = fileURLToPath(new URL("./", import.meta.url));
 	const hash = createHash("sha256");
-	for (const file of readdirSync(root)
-		.filter((name) => name.endsWith(".ts"))
-		.sort())
-		hash
-			.update(file)
-			.update("\0")
-			.update(readFileSync(join(root, file)))
-			.update("\0");
+	for (const directory of [root, join(root, "../live")]) {
+		for (const file of readdirSync(directory)
+			.filter((name) => name.endsWith(".ts"))
+			.sort())
+			hash
+				.update(directory === root ? "runner/" : "live/")
+				.update(file)
+				.update("\0")
+				.update(readFileSync(join(directory, file)))
+				.update("\0");
+	}
 	return hash.digest("hex");
 }
 export function assertFrozenInputs(): void {

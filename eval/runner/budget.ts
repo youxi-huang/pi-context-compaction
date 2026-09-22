@@ -1,5 +1,5 @@
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { CallRecord, ProbeLimits, Transport } from "./types.ts";
+import type { CallRecord, ForwardedOptions, ProbeLimits, RequestScope, Transport } from "./types.ts";
 
 export class ProbeBudget {
 	readonly limits: ProbeLimits;
@@ -48,6 +48,8 @@ export interface RunMeter {
 	calls: number;
 	maxCalls: number;
 	deadline: number;
+	scope?: RequestScope;
+	writerTimeoutMs?: number;
 }
 export async function measuredRequest(input: {
 	transport: Transport;
@@ -60,6 +62,7 @@ export async function measuredRequest(input: {
 	meter: RunMeter;
 	records: CallRecord[];
 	budget?: ProbeBudget;
+	providerOptions?: ForwardedOptions;
 }): Promise<AssistantMessage> {
 	input.budget?.assert();
 	if (input.signal?.aborted) throw new Error("EVAL_REQUEST_ABORTED");
@@ -68,7 +71,10 @@ export async function measuredRequest(input: {
 	const remaining = input.budget?.reserveOutput() ?? input.maxTokens;
 	const maxTokens = Math.min(input.maxTokens, remaining);
 	const controller = new AbortController();
-	const deadline = Math.min(input.meter.deadline - performance.now(), input.budget?.limits.timeoutMs ?? 60000);
+	const deadline = Math.min(
+		input.meter.deadline - performance.now(),
+		input.budget?.limits.timeoutMs ?? input.meter.writerTimeoutMs ?? 60000,
+	);
 	const abort = () => controller.abort();
 	input.signal?.addEventListener("abort", abort, { once: true });
 	if (input.signal?.aborted) controller.abort();
@@ -78,6 +84,7 @@ export async function measuredRequest(input: {
 		maxTokens,
 		reasoning: input.reasoning,
 		context: structuredClone(input.context),
+		providerOptions: input.providerOptions,
 		usage: null,
 		outputTokens: null,
 	};
@@ -93,6 +100,8 @@ export async function measuredRequest(input: {
 				maxTokens,
 				reasoning: input.reasoning,
 				signal: controller.signal,
+				scope: structuredClone(input.meter.scope),
+				providerOptions: input.providerOptions,
 			}),
 			new Promise<never>((_resolve, reject) => {
 				timer = setTimeout(
@@ -112,10 +121,13 @@ export async function measuredRequest(input: {
 		return result;
 	} catch (error) {
 		record.error = String(error);
+		if (/EVAL_REQUEST_TIMEOUT|EVAL_REQUEST_ABORTED/.test(record.error))
+			input.transport.stop?.("EVAL_REQUEST_TIMEOUT");
 		if (record.error.includes("EVAL_OUTPUT_USAGE_MISSING")) record.outputTokens = null;
 		if (input.budget) input.budget.error ??= record.error;
 		throw error;
 	} finally {
+		record.providerMeasurement = input.transport.measurement?.();
 		if (timer) clearTimeout(timer);
 		input.signal?.removeEventListener("abort", abort);
 		record.ms = performance.now() - record.at;

@@ -199,6 +199,7 @@ export function codexTransport(options: CodexOptions): Transport {
 							)
 								ledger.stop("EVAL_PAYLOAD_CONFIGURATION_DRIFT");
 							if (ledger.capMode !== "local-post-response") body.max_output_tokens = request.maxTokens;
+							else delete body.max_output_tokens;
 							inputProxy = Math.ceil(Buffer.byteLength(JSON.stringify(body), "utf8") / 3);
 							reservation = ledger.admit(
 								groups,

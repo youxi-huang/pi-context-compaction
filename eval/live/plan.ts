@@ -18,6 +18,7 @@ import {
 } from "./contract.ts";
 import { reviewF3 } from "./judge.ts";
 import { Ledger, type Quota } from "./ledger.ts";
+import { claimRestart, inheritRestart, loadRestart } from "./restart.ts";
 import { boundedWorkers, gate } from "./scheduler.ts";
 
 /** Durable ownership prevents a second process or implicit replay from receiving another budget. */
@@ -41,6 +42,7 @@ export async function runLivePlan(options: {
 	outputDirectory: string;
 	approvalReference: string;
 	judgeConcurrency?: 2 | 4;
+	restartFrom?: string;
 	transport: Omit<CodexOptions, "ledger" | "groups">;
 }) {
 	assertExecutionMode(options.transport.mode);
@@ -49,14 +51,17 @@ export async function runLivePlan(options: {
 		throw new Error("EVAL_PLAN_OUTPUT_AND_APPROVAL_REQUIRED");
 	const judgeConcurrency = options.judgeConcurrency ?? 2;
 	if (![2, 4].includes(judgeConcurrency)) throw new Error("EVAL_INVALID_JUDGE_CONCURRENCY");
+	const restart = options.restartFrom ? loadRestart(options.restartFrom) : undefined;
+	if (restart) claimRestart(restart, options.approvalReference);
 	claimPlanRoot(options.outputDirectory);
 	const directory = join(options.outputDirectory, `live-plan-${randomUUID()}`);
 	mkdirSync(directory, { recursive: true });
 	const ledger = new Ledger((event) =>
 		appendFileSync(join(directory, "budget-events.jsonl"), JSON.stringify(event) + "\n"),
 	);
-	const global = ledger.group("global", combinedLimits()),
-		baseline = ledger.group("baseline", baselineLimits());
+	const global = ledger.group("global", restart?.globalLimits ?? combinedLimits()),
+		baseline = ledger.group("baseline", restart?.baselineLimits ?? baselineLimits());
+	if (restart) inheritRestart(ledger, global, baseline, restart);
 	const slots = schedule(),
 		runs: RunResult[] = [],
 		unstarted: { key: string; reason: string }[] = [],
@@ -84,6 +89,18 @@ export async function runLivePlan(options: {
 			measurementVersion: MEASUREMENT_VERSION,
 			mode: options.transport.mode,
 			approvalReference: options.approvalReference,
+			restart: restart
+				? {
+						predecessor: restart.predecessorFile,
+						predecessorSha256: restart.predecessorSha256,
+						priorPlan: restart.priorPlan,
+						originalStart: restart.originalStart,
+						elapsedBeforeRestartMs: restart.elapsedBeforeRestartMs,
+						priorRequests: restart.quota.sent,
+						unknownUsageReservationsRetained: true,
+					}
+				: null,
+			currentPlanRequests: global.sent - (restart?.quota.sent ?? 0),
 			runnerSourceHash: runnerFingerprint(),
 			directory,
 			status: ledger.fatal
@@ -209,6 +226,7 @@ export async function runLivePlan(options: {
 		}
 		save();
 	};
+	save();
 	for (let index = 0; index < slots.length; index += 2) {
 		if (ledger.fatal) {
 			unstarted.push(...slots.slice(index).map((slot) => ({ key: slot.key, reason: ledger.fatal! })));

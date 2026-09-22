@@ -4,14 +4,20 @@ import { recordStartupEnvironment } from "./environment.ts";
 import { runLivePlan } from "./plan.ts";
 
 recordStartupEnvironment();
-const [command, outputDirectory, approvalReference, rawJudgeConcurrency] = process.argv.slice(2);
+const [command, outputDirectory, approvalReference, rawJudgeConcurrency, predecessor] = process.argv.slice(2);
 assertExecutionMode("live");
-if (command !== "execute" || !outputDirectory || !approvalReference)
+if (
+	!["execute", "restart-local"].includes(command) ||
+	!outputDirectory ||
+	!approvalReference ||
+	(command === "restart-local" ? !predecessor : Boolean(predecessor))
+)
 	throw new Error(
-		"Usage: live/cli.ts execute absolute-artifact-directory approval-reference [judge-concurrency:2|4] (explicit live environment required)",
+		"Usage: live/cli.ts execute|restart-local absolute-artifact-directory approval-reference [judge-concurrency:2|4] [predecessor-diagnostic.json for restart-local] (explicit live environment required)",
 	);
 const result = await runLivePlan({
 	outputDirectory,
+	restartFrom: command === "restart-local" ? predecessor : undefined,
 	approvalReference,
 	judgeConcurrency: rawJudgeConcurrency === undefined ? 2 : (Number(rawJudgeConcurrency) as 2 | 4),
 	transport: { mode: "live", access: codexAccess },

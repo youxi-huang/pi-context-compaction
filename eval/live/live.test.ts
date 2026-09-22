@@ -22,6 +22,7 @@ import {
 import { fixedReviews, judgeContext, selectedCases, validateVerdict } from "./judge.ts";
 import { Ledger } from "./ledger.ts";
 import { claimPlanRoot, runLivePlan } from "./plan.ts";
+import { loadRestart } from "./restart.ts";
 import { RUBRIC_VERSION } from "./rubric.ts";
 import { boundedWorkers } from "./scheduler.ts";
 
@@ -76,6 +77,24 @@ function sse(
 		},
 	});
 	return new Response(body, { headers: { "content-type": "text/event-stream" } });
+}
+function restartEvidence() {
+	const path = join(artifactDirectory("stage3-replay-predecessor-"), "diagnostic.json");
+	const quota = new Ledger().group("global-cumulative", combinedLimits()).snapshot();
+	const data = {
+		status: "diagnostic-stopped-for-evidence",
+		attempt: 3,
+		cumulativeRequests: 3,
+		originalStart: new Date(Date.now() - 60000).toISOString(),
+		originalLimits: combinedLimits(),
+		priorPlan: "synthetic-prior-plan",
+		measurement: { diagnostics: { httpStatus: 400, errorBody: "Unsupported parameter: max_output_tokens" } },
+		ledger: {
+			groups: [{ ...quota, calls: 3, sent: 3, inputProxy: 103968, reservedInput: 162096, reservedOutput: 24000 }],
+		},
+	};
+	json(path, data);
+	return { path, data };
 }
 function request(maxTokens = 8192): TransportRequest {
 	return {
@@ -326,6 +345,65 @@ describe("subscription transport: real serializer, fake network", () => {
 });
 
 describe("shared concurrency budget", () => {
+	it("replays once with local caps, inherited unknown usage and the original deadline", async () => {
+		const predecessor = restartEvidence(),
+			before = readFileSync(predecessor.path, "utf8");
+		let sent = 0;
+		const result = await runLivePlan({
+			outputDirectory: artifactDirectory("stage3-local-replay-"),
+			approvalReference: "offline explicit replay",
+			restartFrom: predecessor.path,
+			transport: {
+				mode: "scripted",
+				access: () => fakeCredential,
+				onRequest(body) {
+					expect(body.max_output_tokens).toBeUndefined();
+					expect(body.reasoning).toMatchObject({ effort: "max" });
+				},
+				fetch: async () => {
+					sent++;
+					return sse("success without usage", { missing: true });
+				},
+			},
+		});
+		expect(sent).toBe(1);
+		expect(result.ledger.fatal).toBe("EVAL_USAGE_UNAVAILABLE");
+		expect(result.ledger.capMode).toBe("local-post-response");
+		expect(result.currentPlanRequests).toBe(1);
+		expect(result.unstarted).toHaveLength(17);
+		expect(result.restart?.priorRequests).toBe(3);
+		for (const q of result.ledger.groups.slice(0, 2)) {
+			expect(q.calls).toBe(4);
+			expect(q.sent).toBe(4);
+			expect(q.reservedInput).toBeGreaterThan(162096);
+			expect(q.reservedOutput).toBe(32000);
+		}
+		expect(result.ledger.groups[0].limits.milliseconds).toBeLessThan(combinedLimits().milliseconds - 59000);
+		expect(readFileSync(predecessor.path, "utf8")).toBe(before);
+		await expect(
+			runLivePlan({
+				outputDirectory: artifactDirectory("stage3-duplicate-replay-"),
+				approvalReference: "duplicate",
+				restartFrom: predecessor.path,
+				transport: {
+					mode: "scripted",
+					access: () => fakeCredential,
+					fetch: async () => {
+						sent++;
+						return sse("forbidden");
+					},
+				},
+			}),
+		).rejects.toThrow();
+		expect(sent).toBe(1);
+	});
+	it("rejects expired or altered replay budgets before dispatch", () => {
+		const predecessor = restartEvidence();
+		json(predecessor.path, { ...predecessor.data, originalStart: new Date(0).toISOString() });
+		expect(() => loadRestart(predecessor.path)).toThrow("EVAL_RESTART_ORIGINAL_DEADLINE");
+		json(predecessor.path, { ...predecessor.data, originalLimits: { ...combinedLimits(), calls: 1693 } });
+		expect(() => loadRestart(predecessor.path)).toThrow("EVAL_RESTART_BUDGET_DRIFT");
+	});
 	it("rejects a second owner rather than allocating a second global budget", () => {
 		const directory = artifactDirectory("stage3-single-owner-");
 		claimPlanRoot(directory);
@@ -555,7 +633,9 @@ describe("measurement revision and judge isolation", () => {
 			const purposes: string[] = [];
 			const prefixEvidence: { purpose: string; cache?: string; toolChoice?: string; prefixPreserved: boolean }[] =
 				[];
+			const restartFrom = judgeConcurrency === 4 ? restartEvidence().path : undefined;
 			const result = await runLivePlan({
+				restartFrom,
 				judgeConcurrency,
 				outputDirectory: artifactDirectory("stage3-full-plan-"),
 				approvalReference: "offline-preflight-only",
@@ -563,6 +643,7 @@ describe("measurement revision and judge isolation", () => {
 					mode: "scripted",
 					access: () => fakeCredential,
 					onRequest(body, r) {
+						if (restartFrom) expect(body.max_output_tokens).toBeUndefined();
 						if (!firstReturned) expect(purposes).toHaveLength(0);
 						purposes.push(r.purpose);
 						let nextText = "";
@@ -626,6 +707,15 @@ describe("measurement revision and judge isolation", () => {
 					run.fixture === "F1" ? 18 : run.fixture === "F2" ? 27 : run.arm === "project" ? 25 : 26,
 				);
 			expect(result.realModelCalls).toBe(0);
+			if (restartFrom) {
+				expect(result.ledger.groups[0]).toMatchObject({
+					calls: 498,
+					sent: 498,
+					reservedInput: 162096,
+					reservedOutput: 24000,
+				});
+				expect(result.ledger.capMode).toBe("local-post-response");
+			}
 			expect(result.unstarted).toHaveLength(0);
 			expect(result.runs.every((r) => r.counts.successfulCheckpoints === r.counts.plannedCheckpoints)).toBe(true);
 			expect(result.writerReview.completed).toBe(60);

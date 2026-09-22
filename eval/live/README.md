@@ -148,3 +148,24 @@ stack line, cause chain and AggregateError branches. These failures are classifi
 as `EVAL_PROVIDER_TRANSPORT_FAILURE`; missing actual usage remains unknown and
 its full reservation stays held. This classification does not prove the remote
 server received or executed the request.
+
+## Explicit replay using local output limits
+
+After a separately authorized rejection-to-local transition, `restart-local`
+accepts the third diagnostic JSON as the final CLI argument (after judge
+concurrency). Its predecessor must record three cumulative attempts and the
+HTTP 400 unsupported-parameter response. A claim beside that predecessor prevents
+reusing it to start multiple plans, even under different output directories.
+The replay has a fresh artifact directory and starts at run 1. Original failures
+and unknown reservations remain intact. Both global and baseline allocations
+inherit all earlier calls and held reservations; elapsed time is subtracted from
+the original windows. Per-run execution chains start fresh as explicitly authorized.
+
+The shared ledger begins in `local-post-response` mode, and every writer, task,
+native and judge payload omits `max_output_tokens`. Output, action, call and time
+checks remain active. Actual usage is required on successful responses; missing
+usage stops globally without a retry or proxy-accounting substitution. Earlier
+unknown consumption is not relabeled zero. Local rejection cannot stop tokens
+already generated remotely, so reported usage and held reservations remain part
+of aggregate enforcement. The plan records both this replay's request count and
+the cumulative count including the three historical attempts.

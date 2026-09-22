@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { assertFrozenInputs, runnerFingerprint } from "../runner/frozen.ts";
 import { runEvaluation } from "../runner/run.ts";
@@ -18,16 +18,38 @@ import {
 } from "./contract.ts";
 import { reviewF3 } from "./judge.ts";
 import { Ledger, type Quota } from "./ledger.ts";
+import { boundedWorkers, gate } from "./scheduler.ts";
+
+/** Durable ownership prevents a second process or implicit replay from receiving another budget. */
+export function claimPlanRoot(directory: string): void {
+	mkdirSync(directory, { recursive: true });
+	if (readdirSync(directory).some((name) => name.startsWith("live-plan-")))
+		throw new Error("EVAL_PRIOR_PLAN_EXISTS_NO_IMPLICIT_REPLAY");
+	try {
+		writeFileSync(
+			join(directory, "evaluation-owner.json"),
+			JSON.stringify({ pid: process.pid, budgetVersion: BUDGET_VERSION, claimedAt: new Date().toISOString() }) +
+				"\n",
+			{ flag: "wx", mode: 0o600 },
+		);
+	} catch {
+		throw new Error("EVAL_PLAN_ROOT_ALREADY_OWNED");
+	}
+}
 
 export async function runLivePlan(options: {
 	outputDirectory: string;
 	approvalReference: string;
+	judgeConcurrency?: 2 | 4;
 	transport: Omit<CodexOptions, "ledger" | "groups">;
 }) {
 	assertExecutionMode(options.transport.mode);
 	assertFrozenInputs();
 	if (!isAbsolute(options.outputDirectory) || !options.approvalReference.trim())
 		throw new Error("EVAL_PLAN_OUTPUT_AND_APPROVAL_REQUIRED");
+	const judgeConcurrency = options.judgeConcurrency ?? 2;
+	if (![2, 4].includes(judgeConcurrency)) throw new Error("EVAL_INVALID_JUDGE_CONCURRENCY");
+	claimPlanRoot(options.outputDirectory);
 	const directory = join(options.outputDirectory, `live-plan-${randomUUID()}`);
 	mkdirSync(directory, { recursive: true });
 	const ledger = new Ledger((event) =>
@@ -41,7 +63,21 @@ export async function runLivePlan(options: {
 		runErrors: { key: string; reason: string }[] = [];
 	const reviews: Awaited<ReturnType<typeof reviewF3>>[] = [];
 	let phase = "baseline";
+	const firstWriter = gate();
+	const pairTimings: { pair: number; keys: string[]; wallMs: number }[] = [];
+	let firstPairForecast: {
+		observedPairMs: number;
+		remainingPairs: number;
+		roughRemainingBaselineMs: number;
+		limitation: string;
+	} | null = null;
+
 	const save = () => {
+		runs.sort(
+			(a, b) =>
+				slots.findIndex((s) => s.key === `${a.fixture}-${a.arm}-r${a.replicate}`) -
+				slots.findIndex((s) => s.key === `${b.fixture}-${b.arm}-r${b.replicate}`),
+		);
 		const expectedPartial = runs.filter((r) => r.fixture === "F3").length > 0;
 		const data = {
 			budgetVersion: BUDGET_VERSION,
@@ -58,6 +94,15 @@ export async function runLivePlan(options: {
 						? "finished"
 						: "running",
 			phase,
+			concurrency: {
+				runs: 2,
+				judge: judgeConcurrency,
+				processes: 1,
+				sharedLedger: true,
+				firstWriterExclusive: true,
+			},
+			pairTimings,
+			firstPairForecast,
 			scope: "18 chains plus option-C writer semantic coverage; unselected observations stay blocked",
 			schedule: slots,
 			plannedRuns: 18,
@@ -103,14 +148,15 @@ export async function runLivePlan(options: {
 		);
 		return data;
 	};
-	for (const slot of slots) {
+	const executeSlot = async (slot: (typeof slots)[number]) => {
 		if (ledger.fatal) {
 			unstarted.push({ key: slot.key, reason: ledger.fatal });
-			continue;
+			return;
 		}
+
 		const runQuota = ledger.group(slot.key, slot.limits),
 			checkpoints = new Map<string, Quota>();
-		const transport = codexTransport({
+		const underlying = codexTransport({
 			...options.transport,
 			ledger,
 			groups(request) {
@@ -127,6 +173,16 @@ export async function runLivePlan(options: {
 				return groups;
 			},
 		});
+		const transport = {
+			...underlying,
+			async complete(request: Parameters<typeof underlying.complete>[0]) {
+				try {
+					return await underlying.complete(request);
+				} finally {
+					if (slot.key === slots[0].key && request.purpose === "writer") firstWriter.release(!ledger.fatal);
+				}
+			},
+		};
 		try {
 			const run = await runEvaluation({
 				...slot,
@@ -144,24 +200,63 @@ export async function runLivePlan(options: {
 					/EVAL_RUN_CALL_LIMIT|EVAL_RUN_TIMEOUT/.test(item.error ?? ""),
 				)
 			)
-				ledger.fatal ??= "EVAL_RUN_BUDGET_EXHAUSTED";
+				ledger.halt("EVAL_RUN_BUDGET_EXHAUSTED");
 		} catch {
-			ledger.fatal ??= "EVAL_RUN_INFRASTRUCTURE_FAILURE";
-			runErrors.push({ key: slot.key, reason: ledger.fatal });
+			ledger.halt("EVAL_RUN_INFRASTRUCTURE_FAILURE");
+			runErrors.push({ key: slot.key, reason: ledger.fatal! });
+		} finally {
+			if (slot.key === slots[0].key) firstWriter.release(!ledger.fatal);
 		}
+		save();
+	};
+	for (let index = 0; index < slots.length; index += 2) {
+		if (ledger.fatal) {
+			unstarted.push(...slots.slice(index).map((slot) => ({ key: slot.key, reason: ledger.fatal! })));
+			break;
+		}
+		const pair = slots.slice(index, index + 2),
+			started = performance.now();
+		if (index === 0) {
+			const first = executeSlot(pair[0]);
+			await firstWriter.promise;
+			await Promise.all([first, executeSlot(pair[1])]);
+		} else await Promise.all(pair.map(executeSlot));
+		const wallMs = performance.now() - started;
+		pairTimings.push({ pair: index / 2 + 1, keys: pair.map((s) => s.key), wallMs });
+		if (
+			index === 0 &&
+			!ledger.fatal &&
+			runs.length === 2 &&
+			runs.every(
+				(r) =>
+					r.checkpoints.every((c) => c.status === "committed") &&
+					r.probes.filter((p) => p.target === "task").every((p) => p.status === "completed"),
+			)
+		)
+			firstPairForecast = {
+				observedPairMs: wallMs,
+				remainingPairs: 8,
+				roughRemainingBaselineMs: wallMs * 8,
+				limitation:
+					"Only F1 first pair observed; F2 is longer, F3 differs, subscription latency/limits/cache may change. Not an ETA guarantee.",
+			};
 		save();
 	}
 	phase = "judge";
 	const judge = ledger.group("judge", JUDGE_LIMITS);
-	for (const run of runs.filter((r) => r.fixture === "F3")) {
-		if (ledger.fatal) break;
-		try {
-			reviews.push(await reviewF3(run, { ledger, parents: [global, judge], transport: options.transport }));
-		} catch {
-			ledger.fatal ??= "EVAL_JUDGE_INFRASTRUCTURE_FAILURE";
-		}
-		save();
-	}
+	await boundedWorkers(
+		runs.filter((r) => r.fixture === "F3"),
+		judgeConcurrency,
+		() => Boolean(ledger.fatal),
+		async (run) => {
+			try {
+				reviews.push(await reviewF3(run, { ledger, parents: [global, judge], transport: options.transport }));
+			} catch {
+				ledger.halt("EVAL_JUDGE_INFRASTRUCTURE_FAILURE");
+			}
+			save();
+		},
+	);
 	phase = "finished";
 	return save();
 }

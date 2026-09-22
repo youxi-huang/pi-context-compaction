@@ -1,7 +1,7 @@
 import type { Probe } from "../schema.ts";
 
 export const MEASUREMENT_VERSION = "0.3-measurement.2" as const;
-export const BUDGET_VERSION = "0.3-live-budget.3";
+export const BUDGET_VERSION = "0.3-live-budget.4";
 export const MODEL_ID = "gpt-5.6-luna";
 export function assertExecutionMode(mode: "scripted" | "live"): void {
 	if (mode === "scripted") {

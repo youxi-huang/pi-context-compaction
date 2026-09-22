@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { zstdDecompressSync } from "node:zlib";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { note } from "../pi/offline-host.ts";
@@ -20,8 +21,9 @@ import {
 } from "./contract.ts";
 import { fixedReviews, judgeContext, selectedCases, validateVerdict } from "./judge.ts";
 import { Ledger } from "./ledger.ts";
-import { runLivePlan } from "./plan.ts";
+import { claimPlanRoot, runLivePlan } from "./plan.ts";
 import { RUBRIC_VERSION } from "./rubric.ts";
+import { boundedWorkers } from "./scheduler.ts";
 
 const fakeCredential = `synthetic.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url")}.synthetic`;
 function sse(
@@ -294,6 +296,104 @@ describe("subscription transport: real serializer, fake network", () => {
 	});
 });
 
+describe("shared concurrency budget", () => {
+	it("rejects a second owner rather than allocating a second global budget", () => {
+		const directory = artifactDirectory("stage3-single-owner-");
+		claimPlanRoot(directory);
+		expect(() => claimPlanRoot(directory)).toThrow("EVAL_PLAN_ROOT_ALREADY_OWNED");
+	});
+
+	it("does not oversell shared reservations and stops assigning new work", async () => {
+		const ledger = new Ledger(),
+			q = ledger.group("global", { calls: 10, input: 100000, output: 100, milliseconds: 10000 });
+		const results = await Promise.allSettled([1, 2].map(async () => ledger.admit([q], 10, 60, 160000)));
+		expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+		expect(q.calls).toBe(1);
+		expect(q.reservedOutput).toBe(60);
+		expect(ledger.cancellation.signal.aborted).toBe(true);
+		let stopped = false,
+			active = 0,
+			peak = 0;
+		const starts: number[] = [];
+		await boundedWorkers(
+			[0, 1, 2, 3],
+			2,
+			() => stopped,
+			async (item) => {
+				starts.push(item);
+				peak = Math.max(peak, ++active);
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				stopped = true;
+				active--;
+			},
+		);
+		expect(starts).toEqual([0, 1]);
+		expect(peak).toBe(2);
+	});
+	it("cancels the other in-flight request when either run loses usage", async () => {
+		const ledger = new Ledger(),
+			quota = big(ledger);
+		let sent = 0,
+			peerAborted = false;
+		const first = codexTransport({
+			mode: "scripted",
+			ledger,
+			groups: () => [quota],
+			access: () => fakeCredential,
+			fetch: async () => {
+				sent++;
+				await new Promise((resolve) => setTimeout(resolve, 15));
+				return sse("unknown", { missing: true });
+			},
+		});
+		const second = codexTransport({
+			mode: "scripted",
+			ledger,
+			groups: () => [quota],
+			access: () => fakeCredential,
+			fetch: async (_url, init) => {
+				sent++;
+				return new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener(
+						"abort",
+						() => {
+							peerAborted = true;
+							reject(new Error("cancelled"));
+						},
+						{ once: true },
+					);
+				});
+			},
+		});
+		const results = await Promise.allSettled([first.complete(request()), second.complete(request())]);
+		expect(results.every((r) => r.status === "rejected")).toBe(true);
+		expect(peerAborted).toBe(true);
+		expect(sent).toBe(2);
+		expect(quota.reservedOutput).toBe(16384);
+		expect(ledger.fatal).toBe("EVAL_USAGE_UNAVAILABLE");
+	});
+	it("keeps the first writer exclusive and never starts the paired run after its global failure", async () => {
+		let sent = 0;
+		const result = await runLivePlan({
+			outputDirectory: artifactDirectory("stage3-parallel-first-stop-"),
+			approvalReference: "offline-test",
+			transport: {
+				mode: "scripted",
+				access: () => fakeCredential,
+				fetch: async () => {
+					sent++;
+					return sse("unknown", { missing: true });
+				},
+			},
+		});
+		expect(sent).toBe(1);
+		expect(result.attemptedRuns).toBe(1);
+		expect(result.unstarted).toHaveLength(17);
+		expect(result.firstPairForecast).toBeNull();
+		expect(result.realModelCalls).toBe(0);
+	});
+});
+
 describe("measurement revision and judge isolation", () => {
 	it("changes only the numeric evaluation view and enforces 8192 including reasoning", () => {
 		const { fixture, records } = loadFrozenFixture("F1"),
@@ -415,59 +515,96 @@ describe("measurement revision and judge isolation", () => {
 		expect(run.checkpoints[0].requests).toHaveLength(2);
 		expect(ledger.fatal).toBeUndefined();
 	});
-	it("runs all 18 independent chains then C judges through the actual serializer without network", async () => {
-		let nextText = "",
-			nextCap = 0;
-		const purposes: string[] = [];
-		const prefixEvidence: { purpose: string; cache?: string; toolChoice?: string; prefixPreserved: boolean }[] = [];
-		const result = await runLivePlan({
-			outputDirectory: artifactDirectory("stage3-full-plan-"),
-			approvalReference: "offline-preflight-only",
-			transport: {
-				mode: "scripted",
-				access: () => fakeCredential,
-				onRequest(body, r) {
-					purposes.push(r.purpose);
-					nextCap = Number(body.max_output_tokens);
-					if (r.purpose === "judge") {
-						const user = r.context.messages.find((m) => m.role === "user")!;
-						const text = typeof user.content === "string" ? user.content : JSON.stringify(user.content);
-						const data = JSON.parse(text).DATA;
-						nextText = JSON.stringify({
-							rubric_version: RUBRIC_VERSION,
-							case_id: data.caseId,
-							status: "classified",
-							operational_promotion: false,
-							representation: "omitted",
-							artifact_evidence: [],
-							inspected_fields: Object.keys(data.fields),
-							scope_match: false,
-							source_evidence_ids: [data.sources[0].id],
-							reason: "Synthetic evaluator output.",
+	it.each([2, 4] as const)(
+		"runs 18 paired chains and option-C judges at judge concurrency %i",
+		async (judgeConcurrency) => {
+			const responses = new Map<string, { text: string; cap: number; purpose: string }>();
+			let active = 0,
+				peak = 0,
+				firstReturned = false;
+
+			const purposes: string[] = [];
+			const prefixEvidence: { purpose: string; cache?: string; toolChoice?: string; prefixPreserved: boolean }[] =
+				[];
+			const result = await runLivePlan({
+				judgeConcurrency,
+				outputDirectory: artifactDirectory("stage3-full-plan-"),
+				approvalReference: "offline-preflight-only",
+				transport: {
+					mode: "scripted",
+					access: () => fakeCredential,
+					onRequest(body, r) {
+						if (!firstReturned) expect(purposes).toHaveLength(0);
+						purposes.push(r.purpose);
+						let nextText = "";
+						const nextCap = Number(body.max_output_tokens);
+
+						if (r.purpose === "judge") {
+							const user = r.context.messages.find((m) => m.role === "user")!;
+							const text = typeof user.content === "string" ? user.content : JSON.stringify(user.content);
+							const data = JSON.parse(text).DATA;
+							nextText = JSON.stringify({
+								rubric_version: RUBRIC_VERSION,
+								case_id: data.caseId,
+								status: "classified",
+								operational_promotion: false,
+								representation: "omitted",
+								artifact_evidence: [],
+								inspected_fields: Object.keys(data.fields),
+								scope_match: false,
+								source_evidence_ids: [data.sources[0].id],
+								reason: "Synthetic evaluator output.",
+							});
+						} else if (r.purpose === "writer") {
+							const source = /f[123]-\d{5}/.exec(JSON.stringify(r.context))?.[0];
+							nextText = source ? JSON.stringify(note(source)) : "Native synthetic summary.";
+						} else nextText = JSON.stringify({ status: "abstain", claims: [] });
+						responses.set(JSON.stringify(body), { text: nextText, cap: nextCap, purpose: r.purpose });
+						prefixEvidence.push({
+							purpose: r.purpose,
+							cache: r.providerOptions?.cacheRetention,
+							toolChoice: r.providerOptions?.toolChoice,
+							prefixPreserved: typeof body.instructions === "string" && body.instructions.length > 0,
 						});
-					} else if (r.purpose === "writer") {
-						const source = /f[123]-\d{5}/.exec(JSON.stringify(r.context))?.[0];
-						nextText = source ? JSON.stringify(note(source)) : "Native synthetic summary.";
-					} else nextText = JSON.stringify({ status: "abstain", claims: [] });
-					prefixEvidence.push({
-						purpose: r.purpose,
-						cache: r.providerOptions?.cacheRetention,
-						toolChoice: r.providerOptions?.toolChoice,
-						prefixPreserved: typeof body.instructions === "string" && body.instructions.length > 0,
-					});
+					},
+					fetch: async (_url, init) => {
+						const bytes =
+							typeof init?.body === "string" ? Buffer.from(init.body) : Buffer.from(init?.body as Uint8Array);
+						const text =
+							new Headers(init?.headers).get("content-encoding") === "zstd"
+								? zstdDecompressSync(bytes).toString()
+								: bytes.toString();
+						const response = responses.get(text)!;
+						expect(response).toBeDefined();
+						active++;
+						peak = Math.max(peak, active);
+						expect(active).toBeLessThanOrEqual(response.purpose === "judge" ? judgeConcurrency : 2);
+						await new Promise((resolve) => setTimeout(resolve, 2));
+						active--;
+						firstReturned = true;
+						return sse(response.text, { echo: response.cap, cache: true });
+					},
 				},
-				fetch: async () => sse(nextText, { echo: nextCap, cache: true }),
-			},
-		});
-		expect(result.ledger.fatal).toBeUndefined();
-		expect(result.attemptedRuns).toBe(18);
-		expect(result.realModelCalls).toBe(0);
-		expect(result.unstarted).toHaveLength(0);
-		expect(result.runs.every((r) => r.counts.successfulCheckpoints === r.counts.plannedCheckpoints)).toBe(true);
-		expect(result.writerReview.completed).toBe(60);
-		expect(purposes.slice(purposes.indexOf("judge")).every((p) => p === "judge")).toBe(true);
-		expect(result.writerReview.reports.reduce((n, r) => n + (r.requests ?? 0), 0)).toBe(72);
-		expect(result.runs.filter((r) => r.fixture === "F3").reduce((n, r) => n + r.counts.blockedProbes, 0)).toBe(60);
-		json(join(result.directory, "prefix-evidence.json"), prefixEvidence);
-	}, 120000);
+			});
+			expect(result.ledger.fatal).toBeUndefined();
+			expect(result.attemptedRuns).toBe(18);
+			expect(result.concurrency).toMatchObject({ runs: 2, judge: judgeConcurrency, processes: 1 });
+			expect(result.pairTimings).toHaveLength(9);
+			expect(result.firstPairForecast).not.toBeNull();
+			expect(peak).toBeGreaterThan(1);
+			for (const run of result.runs)
+				expect(run.counts.providerCalls).toBe(
+					run.fixture === "F1" ? 18 : run.fixture === "F2" ? 27 : run.arm === "project" ? 25 : 26,
+				);
+			expect(result.realModelCalls).toBe(0);
+			expect(result.unstarted).toHaveLength(0);
+			expect(result.runs.every((r) => r.counts.successfulCheckpoints === r.counts.plannedCheckpoints)).toBe(true);
+			expect(result.writerReview.completed).toBe(60);
+			expect(purposes.slice(purposes.indexOf("judge")).every((p) => p === "judge")).toBe(true);
+			expect(result.writerReview.reports.reduce((n, r) => n + (r.requests ?? 0), 0)).toBe(72);
+			expect(result.runs.filter((r) => r.fixture === "F3").reduce((n, r) => n + r.counts.blockedProbes, 0)).toBe(60);
+			json(join(result.directory, "prefix-evidence.json"), prefixEvidence);
+		},
+		120000,
+	);
 });

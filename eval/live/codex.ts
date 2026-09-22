@@ -101,7 +101,7 @@ export function codexTransport(options: CodexOptions): Transport {
 		mode: options.mode,
 		measurement: () => (latest ? structuredClone(latest) : undefined),
 		stop(reason) {
-			ledger.fatal ??= reason;
+			ledger.halt(reason);
 			activeAbort?.();
 			ledger.event({ type: "stop", reason });
 		},
@@ -123,6 +123,8 @@ export function codexTransport(options: CodexOptions): Transport {
 			const own = new AbortController();
 			const abort = () => own.abort();
 			request.signal.addEventListener("abort", abort, { once: true });
+			ledger.cancellation.signal.addEventListener("abort", abort, { once: true });
+			if (ledger.cancellation.signal.aborted) abort();
 			if (request.signal.aborted) abort();
 			activeAbort = abort;
 			const timeout = Math.max(
@@ -138,9 +140,9 @@ export function codexTransport(options: CodexOptions): Transport {
 				const fetch: Fetch = async (url, init) => {
 					if (String(url) !== "https://chatgpt.com/backend-api/codex/responses" || !reservation || sent)
 						ledger.stop("EVAL_UNEXPECTED_PROVIDER_REQUEST");
+					ledger.sent(reservation!);
 					sent = true;
 					if (latest) latest.sent = true;
-					ledger.sent(reservation!);
 					const response = await (options.fetch ?? globalThis.fetch)(url, {
 						...init,
 						redirect: "error",
@@ -244,12 +246,13 @@ export function codexTransport(options: CodexOptions): Transport {
 						/* fatal state is already durable */
 					}
 				}
-				if (code !== "EVAL_PROVIDER_OUTPUT_LIMIT") ledger.fatal ??= code;
+				if (code !== "EVAL_PROVIDER_OUTPUT_LIMIT") ledger.halt(code);
 				ledger.event({ type: "request-failed", reason: code, sent, scope: request.scope, measurement: latest });
 				throw new Error(code);
 			} finally {
 				clearTimeout(timer);
 				request.signal.removeEventListener("abort", abort);
+				ledger.cancellation.signal.removeEventListener("abort", abort);
 				activeAbort = undefined;
 			}
 		},

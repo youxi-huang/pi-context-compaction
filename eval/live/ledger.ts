@@ -38,6 +38,7 @@ export interface Reservation {
 }
 export class Ledger {
 	fatal?: string;
+	readonly cancellation = new AbortController();
 	capMode: "requested-unverified" | "server-reported-cap" | "local-post-response" = "requested-unverified";
 	fallbackReason?: string;
 	readonly events: Record<string, unknown>[] = [];
@@ -56,11 +57,18 @@ export class Ledger {
 		this.groups.push(q);
 		return q;
 	}
+	halt(code: string): void {
+		if (!this.fatal) {
+			this.fatal = code;
+			this.event({ type: "stop", reason: code });
+		}
+		this.cancellation.abort();
+	}
 	stop(code: string): never {
-		this.fatal ??= code;
-		this.event({ type: "stop", reason: this.fatal });
+		this.halt(code);
 		throw new Error(this.fatal);
 	}
+
 	assert() {
 		if (this.fatal) throw new Error(this.fatal);
 	}
@@ -93,6 +101,7 @@ export class Ledger {
 		return { groups, input, output, settled: false };
 	}
 	sent(r: Reservation) {
+		this.assert();
 		for (const q of r.groups) q.sent++;
 		this.event({ type: "sent", groups: r.groups.map((q) => q.name) });
 	}

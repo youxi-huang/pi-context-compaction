@@ -22,6 +22,29 @@ including size repair and native split summaries. An offline 18-run test then
 performs the 60 selected semantic observations plus 12 fixed rechecks. Those
 responses are scripted and establish no model-quality or server-cap claims.
 
+## Bounded concurrency
+
+Budget version `0.3-live-budget.4` keeps all sample and resource limits unchanged.
+One process owns one shared ledger. An exclusive owner file protects the artifact
+root; a second process or implicit replay against an existing plan is refused. The first F1/project/r1 writer request completes
+alone. If it triggers a global stop, the paired native run never starts. Otherwise
+the runner schedules one project/native pair at a time with at most two runs in
+flight; each run's checkpoints and probes remain sequential. The next pair starts
+only after both current runs terminate. Admission reserves shared quota synchronously,
+and a global stop aborts other in-flight requests. Unknown reservations remain held.
+
+Judges start after the baseline phase, with two independent F3-review workers by
+default; the CLI can explicitly select four. Per-run review calls remain sequential,
+so their private transport/context and quotas cannot cross. There is no automatic
+ramp to four or expansion of the budget. All limits still apply in aggregate.
+
+The first completed F1 pair records its wall time and a rough extrapolation for
+eight remaining pairs. This is only an early planning estimate: F2 is larger,
+F3 differs, and quota/cache/latency may change. The 924-minute limit is a worst-case
+stop window, not a duration prediction. Results record concurrency as a comparison
+condition. A stopped prior plan is not resumed or rerun by this code change;
+its failed slot, held unknown usage and artifacts remain authoritative.
+
 ## Transport and accounting
 
 The transport forwards tool choice, cache retention and session identity, pins
@@ -84,9 +107,9 @@ specific authorization. Do not run this command as a test or preflight.
 
 ```sh
 PI_OFFLINE=0 EVAL_PROVIDER_MODE=live EVAL_MODEL_CALL_BUDGET=1692 \
-  EVAL_LIVE_APPROVAL=0.3-live-budget.3 \
+  EVAL_LIVE_APPROVAL=0.3-live-budget.4 \
   node --experimental-strip-types eval/live/cli.ts execute \
-  "$OUTPUT_DIR" "$APPROVAL_REFERENCE"
+  "$OUTPUT_DIR" "$APPROVAL_REFERENCE" 2
 ```
 
 Normal CI retains `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and

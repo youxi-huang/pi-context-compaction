@@ -1,5 +1,21 @@
 # Validation record
 
+## Unreleased: Pi v0.99.2 isolated host-port check, 2026-10-01 UTC
+
+A disposable resident-host port of compact source `484d85a185a3e91762d4185bf13743bf11babb48` was checked against upstream Pi v0.99.2, commit `005af57d88ee23b33778f343a9595b32e67ff788`. The port replayed the six host integrations onto the newer source while retaining its finalized-context refresh and immediate persistence of the first user message. This check establishes feasibility for that adapted host; the port is not included in this repository or released assets, and the published baseline remains Pi v0.86.0. It does not establish installation as an ordinary extension on unmodified Pi.
+
+| Check | Result and scope |
+| --- | --- |
+| Original Pi v0.86.0 core regressions | 94 passed before the port. |
+| Adapted Pi v0.99.2 compact core regressions | 94 passed. Three persistence fixtures were adjusted for immediate first-user publication; write rollback, source-file protection and failed-fork assertions were retained. |
+| Upstream v0.99.2 compaction-related regressions | 86 passed, two skipped. The skipped cases require real Anthropic credentials. |
+| Type checking and build | Complete TypeScript checking and offline workspace build passed; the coding-agent bundle was rebuilt after the final host adjustment. |
+| Compiled resident startup | RPC state and command queries passed with an isolated configuration and in-memory session. The resident compaction command loaded even with ordinary extensions disabled; no model prompt was sent. |
+
+The context-phase split requires an explicit port adjustment. Pi v0.99.2 runs ordinary `context` transforms separately from `context_with_system`. A mechanically merged candidate initially passed 88 core cases and failed six stop-send protections because resident exceptions were no longer propagated from the ordinary `context` phase. Restoring fatal resident error propagation in that phase made all 94 core cases pass, including failed automatic compaction, missing or stale recovery content, and opaque-history refusal. This is a host-port requirement, not a fix shipped by this documentation change.
+
+The preserved source delta was replayed onto the pinned upstream tree and matched the tested candidate tree. No real-provider quality, cache behavior, Windows persistence, real historical-session migration or third-party integration was measured. Experimental session-worker and mini paths use the separate JSONL harness; their keep-none compatibility remains outside this check. These results do not expand the released compatibility range or change the planned stock-Pi extension's implementation status.
+
 ## Unreleased: readable supersedes references
 
 The note validator now applies the same branch-membership and readable-content check to `supersedes` and `sources`. Readable older originals remain valid even when the current fact cites only the newer ruling in `sources`. Checkpoints, metadata, empty text, future and sibling entries are rejected before commit; persisted invalid supersedes are also refused on reopen, with original history retained.

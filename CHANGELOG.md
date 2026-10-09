@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Security
+
+- Update shell-quote from 1.10.0 to 1.12.0 in the sandbox example extension's standalone lockfile for GHSA-pqg4-j6r4-53mv, matching the root workspace lock. The sandbox example is not part of the coding-agent package or its bundle; a standalone `npm ci` and `npm audit` of that example report no vulnerabilities.
+
 ## [v0.3.0] — 2026-10-09
 
 v0.3.0 is the measurement release: it ships the evaluation method and the bounded live record below, and moves the host baseline to Pi v1.1.0. The complete two-arm baseline remains deferred; this release does not claim continuous two-checkpoint recovery or an advantage over native Pi.

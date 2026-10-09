@@ -11,7 +11,8 @@ export function assignJson(target: JsonContainer, key: string | number, value: J
 	// Parsed JSON can carry an own "__proto__" key; reading or assigning it would reach a prototype, so it is not stored.
 	if (key === "__proto__") return;
 	const slots = target as Record<string | number, JsonValue>;
-	const current = slots[key];
+	// Merge only into own values, never into an inherited object.
+	const current = Object.hasOwn(slots, key) ? slots[key] : undefined;
 	if (isRecord(current) && isRecord(value)) {
 		for (const name of Object.keys(current)) if (!Object.hasOwn(value, name)) delete current[name];
 		for (const [name, child] of Object.entries(value)) assignJson(current, name, child);

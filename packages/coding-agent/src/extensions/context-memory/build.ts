@@ -1,2 +1,2 @@
 /** Fingerprint of the published runtime source. */
-export const CONTEXT_MEMORY_BUILD = "0.86.0-context-memory.0.2.4+src.d37ae17559873d76";
+export const CONTEXT_MEMORY_BUILD = "1.1.0-context-memory.0.3.0+src.11f42735ed7ad635";

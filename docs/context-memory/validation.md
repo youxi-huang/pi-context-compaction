@@ -1,6 +1,24 @@
 # Validation record
 
-## Unreleased: Pi v0.99.2 isolated host-port check, 2026-10-01 UTC
+## v0.3.0: Pi v1.1.0 port, 2026-10-09 UTC
+
+v0.3.0 moves the host baseline to upstream Pi v1.1.0, commit `abe508e1b89912adde45528136c3221eb69acdd7`. The project delta was replayed onto that source; conflicts in the six compaction host files were resolved against the v0.99.2 port recorded below. Upstream did not change `session-manager.ts` or `agent-session-runtime.ts` between v0.99.2 and v1.1.0; those two files match the v0.99.2 candidate apart from formatting, and the other four carry the same integration changes on the newer upstream code.
+
+| Check | Result and scope |
+| --- | --- |
+| Context-memory regressions | 94 passed, including the three persistence cases updated for first-user publication and the six stop-send protections that depend on resident errors propagating from the ordinary `context` phase. |
+| Host security and compatibility | 450 passed in three groups of 99, 240 and 111. The six `packages/agent` harness checks were removed with the upstream code they covered. |
+| Static, dependency and type checks | Biome, pinned and runtime dependency checks, relative-import and entry-graph checks, the coding-agent install-lock check and TypeScript 7 `tsc --noEmit` passed after a clean `npm ci`. |
+| Offline build | `npm run build:offline` passed with the pinned v1.1.0 model data. |
+| Upstream compaction-related regressions | 86 passed and two skipped across `compaction`, `compaction-serialization`, `settings-manager-compaction` and the fork compaction-label regression. The skipped cases require real Anthropic credentials. |
+| Offline evaluation | 81 evaluator tests passed with network access blocked and a zero model-call budget, against the re-pinned runtime. |
+| Compiled resident startup | With an isolated home directory, a synthetic model and ordinary extensions disabled, RPC state and command queries succeeded, `/compaction-status` was registered and no extension error or model request occurred. |
+
+Upstream's complete coding-agent suite is not a gate for this distribution, and it was run only to look for unexpected failure classes. Under an isolated home directory, 2,381 of 2,887 cases passed. The current v0.2.4-based source, run the same way, passed 2,130 of 2,478. Both runs fail for the same structural reasons: tests that construct `AgentSession` outside `createAgentSession` stop with `CONTEXT_RESIDENT_REQUIRED`, tool lists include the resident's tools, and concurrent fixtures meet session leases. One additional class appears on v1.1.0: virtual models without a declared context window are rejected with `CONTEXT_CAPACITY`, matching the existing handling of unknown windows. Tests for the new built-in MCP and codemode extensions construct sessions directly, so they do not show whether those extensions work alongside the resident.
+
+No real provider, cache behavior, Windows persistence, real historical-session migration or third-party extension was exercised. The experimental session-worker and mini paths still use the separate JSONL harness, whose keep-none compatibility remains outside this check.
+
+## Pi v0.99.2 isolated host-port check, 2026-10-01 UTC
 
 A disposable resident-host port of compact source `484d85a185a3e91762d4185bf13743bf11babb48` was checked against upstream Pi v0.99.2, commit `005af57d88ee23b33778f343a9595b32e67ff788`. The port replayed the six host integrations onto the newer source while retaining its finalized-context refresh and immediate persistence of the first user message. This check establishes feasibility for that adapted host; the port is not included in this repository or released assets, and the published baseline remains Pi v0.86.0. It does not establish installation as an ordinary extension on unmodified Pi.
 
@@ -16,7 +34,7 @@ The context-phase split requires an explicit port adjustment. Pi v0.99.2 runs or
 
 The preserved source delta was replayed onto the pinned upstream tree and matched the tested candidate tree. No real-provider quality, cache behavior, Windows persistence, real historical-session migration or third-party integration was measured. Experimental session-worker and mini paths use the separate JSONL harness; their keep-none compatibility remains outside this check. These results do not expand the released compatibility range or change the planned stock-Pi extension's implementation status.
 
-## Unreleased: readable supersedes references
+## Readable supersedes references
 
 The note validator now applies the same branch-membership and readable-content check to `supersedes` and `sources`. Readable older originals remain valid even when the current fact cites only the newer ruling in `sources`. Checkpoints, metadata, empty text, future and sibling entries are rejected before commit; persisted invalid supersedes are also refused on reopen, with original history retained.
 

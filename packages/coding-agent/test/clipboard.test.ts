@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import type * as OsModule from "node:os";
 import type { NativeClipboard } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { copyToClipboard, readClipboardText } from "../src/utils/clipboard.ts";
@@ -21,7 +23,10 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@earendil-works/pi-tui", () => ({ getNativeClipboard: mocks.getNativeClipboard }));
 vi.mock("../src/utils/clipboard-command.ts", () => ({ runClipboardCommand: mocks.command }));
-vi.mock("node:os", () => ({ platform: mocks.platform }));
+vi.mock("node:os", async () => ({
+	...(await vi.importActual<typeof OsModule>("node:os")),
+	platform: mocks.platform,
+}));
 
 let originalWrite: typeof process.stdout.write;
 let osc52Writes: string[];
@@ -34,6 +39,9 @@ beforeEach(() => {
 		"WAYLAND_DISPLAY",
 		"DISPLAY",
 		"TERMUX_VERSION",
+		"WT_SESSION",
+		"WSL_DISTRO_NAME",
+		"WSLENV",
 	])
 		vi.stubEnv(name, "");
 	mocks.platform.mockReturnValue("darwin");
@@ -68,7 +76,6 @@ describe("readClipboardText", () => {
 		["WAYLAND_DISPLAY", "wl-paste", ["--no-newline", "--type", "text"], ["wl-paste"]],
 		["DISPLAY", "xclip", ["-selection", "clipboard", "-out"], ["xclip"]],
 		["DISPLAY", "xsel", ["--clipboard", "--output"], ["xclip", "xsel"]],
-		["TERMUX_VERSION", "termux-clipboard-get", [], ["termux-clipboard-get"]],
 	] as const) {
 		test.each(["clipboard text", ""])(`${command} result %j stops fallback`, async (text) => {
 			// Regression test for #7248: empty Wayland content must not fall through to stale X11.
@@ -91,6 +98,15 @@ describe("readClipboardText", () => {
 		await expect(readClipboardText()).resolves.toBe(text || null);
 		expect(mocks.getNativeClipboard).toHaveBeenCalledExactlyOnceWith();
 		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wl-paste", "xclip", "xsel"]);
+	});
+	test.each(["clipboard text", ""])("Termux reads termux-clipboard-get result %j on Android", async (text) => {
+		// Regression test for #10391: Termux reports platform "android".
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.command.mockResolvedValue(Buffer.from(text));
+		await expect(readClipboardText()).resolves.toBe(text || null);
+		expect(mocks.command).toHaveBeenCalledExactlyOnceWith("termux-clipboard-get", [], { timeoutMs: 5000 });
+		expect(mocks.getNativeClipboard).not.toHaveBeenCalled();
 	});
 	test("falls back to X11 tools when wl-paste is unavailable", async () => {
 		mocks.platform.mockReturnValue("linux");
@@ -168,6 +184,77 @@ describe("copyToClipboard", () => {
 		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["xclip", "xsel"]);
 		expect(osc52Writes).toHaveLength(0);
 	});
+	test("display-less Linux falls back to OSC 52", async () => {
+		// Regression test for #9688: containers without X11/Wayland access.
+		mocks.platform.mockReturnValue("linux");
+		await copyToClipboard("hello");
+		expect(mocks.command).not.toHaveBeenCalled();
+		expect(osc52Writes).toHaveLength(1);
+	});
+	test("WSL without a display writes the Windows clipboard through PowerShell", async () => {
+		// Regression test for #9688: WSL with WSLg disabled.
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		let written: string | undefined;
+		mocks.command.mockImplementation(async (name, args) => {
+			if (name !== "wslpath") return Buffer.alloc(0);
+			written = readFileSync(args[1]!, "utf8");
+			return Buffer.from("\\\\wsl.localhost\\Ubuntu\\tmp\\clip.txt\n");
+		});
+		await copyToClipboard("héllo");
+		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wslpath", "powershell.exe"]);
+		expect(written).toBe("héllo");
+		const [, wslpathArgs] = mocks.command.mock.calls[0]!;
+		expect(existsSync(wslpathArgs[1]!)).toBe(false);
+		const [, powershellArgs] = mocks.command.mock.calls[1]!;
+		expect(powershellArgs[2]).toContain("Set-Clipboard");
+		expect(powershellArgs[2]).toContain("'\\\\wsl.localhost\\Ubuntu\\tmp\\clip.txt'");
+		expect(osc52Writes).toHaveLength(0);
+	});
+	test("WSL falls back to OSC 52 when Windows interop is unavailable", async () => {
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		mocks.command.mockResolvedValue(undefined);
+		await copyToClipboard("hello");
+		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wslpath"]);
+		expect(osc52Writes).toHaveLength(1);
+	});
+	test("WSL in Windows Terminal prefers OSC 52 over PowerShell", async () => {
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		vi.stubEnv("WT_SESSION", "session");
+		await copyToClipboard("hello");
+		expect(mocks.command).not.toHaveBeenCalled();
+		expect(osc52Writes).toHaveLength(1);
+	});
+	test("WSL in Windows Terminal emits OSC 52 once in a remote session", async () => {
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		vi.stubEnv("WT_SESSION", "session");
+		vi.stubEnv("SSH_CONNECTION", "client server");
+		await copyToClipboard("hello");
+		expect(mocks.command).not.toHaveBeenCalled();
+		expect(osc52Writes).toHaveLength(1);
+	});
+	test("WSL in Windows Terminal uses PowerShell for oversized OSC 52 payloads", async () => {
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		vi.stubEnv("WT_SESSION", "session");
+		mocks.command.mockImplementation(async (name) =>
+			name === "wslpath" ? Buffer.from("C:\\clip.txt") : Buffer.alloc(0),
+		);
+		await copyToClipboard("x".repeat(80_000));
+		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wslpath", "powershell.exe"]);
+		expect(osc52Writes).toHaveLength(0);
+	});
+	test("WSL with a display prefers the Linux clipboard tools", async () => {
+		mocks.platform.mockReturnValue("linux");
+		vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+		vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
+		await copyToClipboard("hello");
+		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wl-copy"]);
+		expect(osc52Writes).toHaveLength(0);
+	});
 	test("reports the Wayland clipboard tool instead of the X11 fallback", async () => {
 		mocks.platform.mockReturnValue("linux");
 		vi.stubEnv("WAYLAND_DISPLAY", "wayland-0");
@@ -177,6 +264,27 @@ describe("copyToClipboard", () => {
 			"Clipboard unavailable: install `wl-clipboard` (`wl-copy`) or check Wayland access",
 		);
 		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wl-copy", "xclip", "xsel"]);
+	});
+	test("Termux on Android writes through termux-clipboard-set", async () => {
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.getNativeClipboard.mockReturnValue(undefined);
+		await copyToClipboard("hello");
+		expect(mocks.command).toHaveBeenCalledExactlyOnceWith("termux-clipboard-set", [], {
+			input: "hello",
+			timeoutMs: 5000,
+		});
+		expect(osc52Writes).toHaveLength(0);
+	});
+	test("reports the Termux:API requirement on Android", async () => {
+		// Regression test for #10391: Termux reports platform "android".
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.getNativeClipboard.mockReturnValue(undefined);
+		mocks.command.mockResolvedValue(undefined);
+		await expect(copyToClipboard("hello")).rejects.toThrow(
+			"Clipboard unavailable: install the Termux:API app and `termux-api` package",
+		);
 	});
 	test("uses OSC 52 when native and command writes fail in a remote session", async () => {
 		vi.stubEnv("SSH_CONNECTION", "client server");
@@ -189,7 +297,9 @@ describe("copyToClipboard", () => {
 		vi.stubEnv("SSH_CONNECTION", "client server");
 		mocks.clipboard.setText.mockRejectedValue(new Error("native failed"));
 		mocks.command.mockResolvedValue(undefined);
-		await expect(copyToClipboard("x".repeat(80_000))).rejects.toThrow("Clipboard unavailable");
+		await expect(copyToClipboard("x".repeat(80_000))).rejects.toThrow(
+			"Clipboard unavailable: text exceeds the OSC 52 size limit",
+		);
 		expect(osc52Writes).toHaveLength(0);
 	});
 });

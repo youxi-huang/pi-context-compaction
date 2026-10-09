@@ -9,9 +9,8 @@ const checks = [
 	["scripts/check-runtime-deps.mjs", []],
 	["scripts/check-ts-relative-imports.mjs", []],
 	["scripts/check-entry-graphs.mjs", []],
-	["scripts/generate-coding-agent-shrinkwrap.mjs", ["--check"]],
 	["scripts/generate-coding-agent-install-lock.mjs", ["--check"]],
-	["node_modules/@typescript/native-preview/bin/tsgo.js", ["--noEmit"]],
+	["node_modules/typescript/bin/tsc", ["--noEmit"]],
 ];
 for (const [file, args] of checks) {
 	const result = spawnSync(process.execPath, [resolve(root, file), ...args], { cwd: root, stdio: "inherit" });

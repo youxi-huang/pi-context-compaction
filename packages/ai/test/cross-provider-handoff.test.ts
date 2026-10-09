@@ -64,7 +64,7 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 		apiOverride: "openai-completions",
 	},
 	{ provider: "openai", model: "gpt-5-mini", label: "openai-responses-gpt-5-mini" },
-	{ provider: "azure-openai-responses", model: "gpt-4o-mini", label: "azure-openai-responses-gpt-4o-mini" },
+	{ provider: "azure", model: "gpt-4o-mini", label: "azure-gpt-4o-mini" },
 	// OpenAI Codex
 	{ provider: "openai-codex", model: "gpt-5.5", label: "openai-codex-gpt-5.5" },
 	// GitHub Copilot
@@ -107,11 +107,13 @@ const PROVIDER_MODEL_PAIRS: ProviderModelPair[] = [
 	// Hugging Face
 	{ provider: "huggingface", model: "moonshotai/Kimi-K2.5", label: "huggingface-kimi-k2.5" },
 	// Together AI
-	{ provider: "together", model: "moonshotai/Kimi-K2.6", label: "together-kimi-k2.6" },
+	{ provider: "together", model: "moonshotai/Kimi-K3", label: "together-kimi-k3" },
 	// Baseten
 	{ provider: "baseten", model: "zai-org/GLM-5.2", label: "baseten-glm-5.2" },
 	// Kimi For Coding
 	{ provider: "kimi-coding", model: "kimi-for-coding", label: "kimi-for-coding" },
+	// Meta
+	{ provider: "meta", model: "muse-spark-1.3", label: "meta-muse-spark-1.3" },
 	// Mistral
 	{ provider: "mistral", model: "devstral-medium-latest", label: "mistral-devstral-medium" },
 	// MiniMax
@@ -175,7 +177,7 @@ async function getApiKey(provider: string): Promise<string | undefined> {
  * Synchronous check for API key availability (env vars only, for skipIf)
  */
 function hasApiKey(pair: ProviderModelPair): boolean {
-	if (pair.provider === "azure-openai-responses") {
+	if (pair.provider === "azure") {
 		return hasAzureOpenAICredentials();
 	}
 	if (pair.provider === "cloudflare-workers-ai") {

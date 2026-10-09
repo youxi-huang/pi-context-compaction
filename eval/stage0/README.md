@@ -14,7 +14,7 @@ PI_OFFLINE=1 STAGE0_ARTIFACT_DIR="$OUTPUT_DIR" \
   node node_modules/vitest/dist/cli.js run \
   --config packages/coding-agent/vitest.config.ts \
   eval/stage0/interface-gate.test.ts
-node node_modules/@typescript/native-preview/bin/tsgo.js --noEmit -p eval/stage0/tsconfig.json
+node node_modules/typescript/bin/tsc --noEmit -p eval/stage0/tsconfig.json
 ```
 
 The test registers only an in-process scripted provider with a reserved `.invalid`

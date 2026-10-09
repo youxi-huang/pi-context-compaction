@@ -234,7 +234,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 	it("first flush includes the candidate; a failed append restores file length and never advances the tree", () => {
 		const store = manager();
 		const user = store.appendMessage({ role: "user", content: "retain this", timestamp: 1 });
-		expect(fs.existsSync(store.getSessionFile()!)).toBe(false);
+		// Pi 0.99.2 persists the first user message; disk-before-memory rollback remains required.
+		expect(fs.existsSync(store.getSessionFile()!)).toBe(true);
 		store.appendMessage(reply());
 		expect(loadEntriesFromFile(store.getSessionFile()!).length).toBe(3);
 		const before = fs.readFileSync(store.getSessionFile()!, "utf8");
@@ -263,7 +264,8 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 
 	it("a checkpoint forces first flush and a failed first publication can be retried without duplicate headers", () => {
 		const store = manager();
-		const id = store.appendMessage({ role: "user", content: "initial evidence", timestamp: 1 });
+		// Metadata alone remains unflushed; a user message now flushes immediately upstream.
+		const id = store.appendCustomEntry("initial-evidence", { value: "checkpoint source" });
 		vi.mocked(fs.linkSync).mockImplementationOnce(() => {
 			throw new Error("injected publication failure");
 		});
@@ -302,9 +304,14 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		vi.mocked(fs.linkSync).mockImplementationOnce(() => {
 			throw new Error("fork write failed");
 		});
-		expect(() => source.createBranchedSession(id)).not.toThrow(); // No assistant: a deferred fork needs no first flush.
-		// The original source is still readable and unchanged; use a real persisted branch for the failure case.
+		// A user-only branch now publishes immediately; verify failure preserves the source.
+		expect(() => source.createBranchedSession(id)).toThrow("fork write failed");
+		expect(source.getSessionFile()).toBe(file);
+		expect(fs.readFileSync(file, "utf8")).toBe(before);
 		source.setSessionFile(file);
+		vi.mocked(fs.linkSync).mockImplementationOnce(() => {
+			throw new Error("fork write failed");
+		});
 		expect(() => source.createBranchedSession(source.getLeafId()!)).toThrow("fork write failed");
 		expect(source.getSessionFile()).toBe(file);
 		expect(fs.readFileSync(file, "utf8")).toBe(before);

@@ -48,7 +48,7 @@
   "missingUsage": "null with missing-call count; never silently zero; scripted placeholders are not provider measurements",
   "cache": "report provider cache fields only when supplied; never infer a hit from a stable prefix",
   "hostFootprint": {
-    "upstreamSha": "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
+    "upstreamSha": "abe508e1b89912adde45528136c3221eb69acdd7",
     "measure": "git diff --no-index --numstat for each paired UTF-8 file; sum additions and deletions; do not count context lines",
     "files": [
       "packages/coding-agent/src/core/sdk.ts",

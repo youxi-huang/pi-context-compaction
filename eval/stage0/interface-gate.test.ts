@@ -266,7 +266,7 @@ it("validates both real host paths, F1 trigger positions, reopened probes and to
 	const rows: Record<string, unknown>[] = [];
 	const metadata = {
 		host: PIN,
-		upstream: "ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc",
+		upstream: "abe508e1b89912adde45528136c3221eb69acdd7",
 		model,
 		thinking: "off",
 		writer: "session",

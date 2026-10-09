@@ -11,7 +11,6 @@ const checks = [
 	["packages/coding-agent", [vitest, "--run",
 		"test/security-inputs.test.ts", "test/package-manager-security.test.ts",
 		"test/package-manager.test.ts", "test/package-manager-ssh.test.ts", "test/prompt-templates.test.ts"]],
-	["packages/agent", [vitest, "--run", "test/harness/skills.test.ts", "test/harness/pico3/tool-abort-security.test.ts"]],
 	["packages/tui", ["--test", "test/latex.test.ts"]],
 ];
 

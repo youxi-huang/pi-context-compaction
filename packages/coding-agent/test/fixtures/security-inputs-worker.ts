@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { formatSkillInvocation } from "../../../agent/src/harness/skills.ts";
 import { renderLatex } from "../../../tui/src/latex.ts";
 import { parseSkillBlock } from "../../src/core/agent-session.ts";
 import { DefaultPackageManager } from "../../src/core/package-manager.ts";
@@ -9,9 +8,6 @@ import { initTheme } from "../../src/modes/interactive/theme/theme.ts";
 
 // Run in a killable child: a synchronous regex regression must not hang the test runner.
 const count = 80_000;
-const path = `${"/".repeat(count)}x`;
-const invocation = formatSkillInvocation({ name: "s", description: "s", filePath: path, content: "body" });
-assert.ok(invocation.includes(`References are relative to ${"/".repeat(count - 1)}.`));
 
 const unfinished = `\${@:-${"${0:-|".repeat(count)}`;
 assert.equal(substituteArgs(`${unfinished} $1`, ["argument"]), `${unfinished} argument`);

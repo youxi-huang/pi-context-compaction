@@ -6,6 +6,16 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.3.0] — 2026-10-09
+
+v0.3.0 is the measurement release: it ships the evaluation method and the bounded live record below, and moves the host baseline to Pi v1.1.0. The complete two-arm baseline remains deferred; this release does not claim continuous two-checkpoint recovery or an advantage over native Pi.
+
+### Changed
+
+- Move the host baseline from Pi v0.86.0 to Pi v1.1.0 (`abe508e1b89912adde45528136c3221eb69acdd7`). The six compaction host integrations are replayed onto the newer source. Pi 1.x runs ordinary `context` transforms separately from `context_with_system`; resident failures now propagate from both phases, so a failed or stale compaction still blocks the next request.
+- Follow Pi's first-user persistence: a new session file is published once it holds a user or assistant message or a checkpoint, and it is still written to disk under the session lease before entries reach the in-memory tree. Three persistence regressions now expect the earlier publication point; write rollback, source-file protection and failed-fork assertions are unchanged.
+- Third-party provider and extension code must target Pi v1.1.0 before it is used with this release; it is not bundled or changed here. Existing valid checkpoints are read without rewriting.
+
 ### Fixed
 
 - Require every `supersedes` reference to resolve to readable evidence on the supplied branch, matching the existing `sources` validation. Checkpoints, metadata entries, empty text and out-of-branch IDs are rejected before note commit and when reopening persisted notes. Readable older rulings remain valid without being duplicated in the current fact's `sources`. Previously accepted notes with unreadable `supersedes` references now fail explicitly; no history is deleted or silently repaired.
@@ -15,9 +25,17 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - Add versioned recovery fixtures, probes and deterministic scoring with isolated Pi runners and an explicitly authorized Luna/max subscription transport. Live evaluation preserves failure evidence, cumulative budgets and separately labeled actual/estimated usage; it does not change the compaction runtime.
 - Add a bounded project-only daily validation: two selected compactions and two continuation checks, at most eight requests and ten minutes, with a 600-second writer deadline limited to this entry point. The final calibration allows 32,768 total writer output tokens including reasoning while preserving note commit limits and the probe ceiling. Its targeted offline test removes temporary artifacts.
 
+### Security
+
+- Retain provider URL-domain checks, now including upstream's `isCerebras` path, and the linear-time overflow, LaTeX, prompt-argument, diff and package-spec hardening with their regressions on the new baseline.
+- Drop the v0.2.4 tool-slot index and skill-path repairs and their regressions: Pi v1.1.0 removed the `packages/agent` harness that contained that code. The host security check now runs 99, 240 and 111 checks, 450 in total.
+
 ### Maintenance
 
-- Record the Pi v0.99.2 isolated resident-host compatibility check: 94 adapted compact core regressions and 86 upstream compaction-related cases passed, with two provider-dependent cases skipped. Document the context-phase error propagation required during a port and the updated first-user persistence fixtures. Documentation only; runtime source, the published Pi v0.86.0 baseline and released assets are unchanged. See the [validation record](docs/context-memory/validation.md#unreleased-pi-v0992-isolated-host-port-check-2026-10-01-utc) and its [documentation commit](https://github.com/youxi-huang/pi-context-compaction/commit/256dd05a68a7894b9551daffe7e676e9f4591786).
+- Pin the Pi v1.1.0 source archive for model data (SHA256 `63b17b48b855e36e64c5013523acd48131ffcfa90ae48fe2f3e6fa9fe3d0da32`), stamp builds as `1.1.0-context-memory.0.3.0+src.<hash>` and type-check with TypeScript 7's `tsc`. Omit the upstream `env`, `env-daemons` and `nix` workflows added since v0.86.0, consistent with the original snapshot import, and refresh `UPSTREAM_README.md` and `UPSTREAM_AGENTS.md`.
+- Re-pin the evaluated runtime to the v1.1.0 port. Fixture and scorer bytes and historical live results keep their original runtime identities. The live transport reads the Luna model from Pi 1.x's type-keyed model data, and the measurement contract's host-footprint baseline now names v1.1.0.
+- Known limits on the new baseline: Pi 1.x virtual models without a declared context window are rejected at session start with `CONTEXT_CAPACITY`, as other unknown windows are. The new built-in MCP, codemode and tool-search extensions have not been validated alongside the resident. Upstream's full coding-agent suite is not a release gate: tests that construct sessions outside `createAgentSession` fail by design with `CONTEXT_RESIDENT_REQUIRED`.
+- Record the Pi v0.99.2 isolated resident-host compatibility check: 94 adapted compact core regressions and 86 upstream compaction-related cases passed, with two provider-dependent cases skipped. Document the context-phase error propagation required during a port and the updated first-user persistence fixtures. Documentation only; runtime source, the published Pi v0.86.0 baseline and released assets are unchanged. See the [validation record](docs/context-memory/validation.md#pi-v0992-isolated-host-port-check-2026-10-01-utc) and its [documentation commit](https://github.com/youxi-huang/pi-context-compaction/commit/256dd05a68a7894b9551daffe7e676e9f4591786).
 - Record the reduced 0.3 measurement scope and actual live outcomes. Retain native partial recovery, the initial project output-limit failure, and the final calibrated attempt: one project checkpoint and continuation passed, then a second note was rejected for a misattributed quotation. Continuous two-checkpoint recovery and superiority over native Pi remain unproven; the complete two-arm baseline is deferred under the evaluation budget, with 16 unstarted runs closed.
 - Settle the roadmap's architectural direction: session records and committed checkpoints are the durable facts, derived summaries and indexes are rebuildable projections, and compaction moves toward increments prepared during the task with the full commit gate retained at the boundary. Add a dedicated instruction-authority milestone ahead of the session-model increment experiment, reframe 0.4 around two compared preparation arms with an explicit failure lifecycle, fairness metrics and a stop condition, bound the 0.5 typed index and 0.6 reversible reduction with fallback and eligibility rules, and list a fingerprint-bound provider acceleration payload as a post-1.0 direction. The README states the same direction briefly. Documentation only; these plans are not implemented capabilities.
 - Refine the roadmap's planned evaluation to distinguish evidence support, instruction authority and task continuation, and separate deterministic CI from provider measurements. Prioritize same-writer background preparation before a separate tiered-writer experiment; keep third-party baselines optional and require preserved guarantees while reducing host changes. Distinguish the first public stock-Pi extension from the mature compatibility and recovery contract required for 1.0. Documentation only; these plans are not implemented capabilities or new benchmark results.
@@ -178,7 +196,8 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.0...main
+[v0.3.0]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...v0.3.0
 [v0.2.3]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3
 [v0.2.3 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...v0.2.3
 [v0.2.2]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.2

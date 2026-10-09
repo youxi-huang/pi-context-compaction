@@ -64,7 +64,7 @@ v0.2.2 updates Vitest and its matching coverage packages from 4.1.9 to 4.1.11 fo
 
 v0.3.0 adopts Pi v1.1.0; published v0.2.4 assets retain the v0.86.0 baseline. Pi 1.x splits ordinary `context` transforms from `context_with_system`, so `runner.ts` propagates resident errors from both phases; without that, a failed or stale compaction would no longer stop the next request. `session-manager.ts` keeps Pi's first-user publication rule, extended to checkpoints, and still writes under the lease before entries reach the in-memory tree. `agent-session.ts` keeps upstream's finalized-context refresh after a checkpoint.
 
-Pi v1.1.0 removed the `packages/agent` harness, so the v0.2.4 repairs to its tool-slot index and skill-path handling and their regressions are gone with it. The `overflow.ts`, provider URL-domain, LaTeX, prompt-argument, diff and package-spec hardening is retained. `overflow.ts` remains in the build fingerprint.
+Pi v1.1.0 removed the `packages/agent` harness, so the v0.2.4 repairs to its tool-slot index and skill-path handling and their regressions are gone with it. The `overflow.ts`, provider URL-domain, LaTeX, prompt-argument, diff and package-spec hardening is retained. `overflow.ts` remains in the build fingerprint. v0.3.0 also changes `packages/durable/src/harness/json.ts` so a parsed `__proto__` key cannot carry the experimental durable harness merge into `Object.prototype`; this is a separate upstream security repair, not a compaction hook.
 
 ## v0.2.4: Pi v0.86.0 port
 

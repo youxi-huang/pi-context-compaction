@@ -28,7 +28,8 @@ v0.3.0 is the measurement release: it ships the evaluation method and the bounde
 ### Security
 
 - Retain provider URL-domain checks, now including upstream's `isCerebras` path, and the linear-time overflow, LaTeX, prompt-argument, diff and package-spec hardening with their regressions on the new baseline.
-- Drop the v0.2.4 tool-slot index and skill-path repairs and their regressions: Pi v1.1.0 removed the `packages/agent` harness that contained that code. The host security check now runs 99, 240 and 111 checks, 450 in total.
+- Drop the v0.2.4 tool-slot index and skill-path repairs and their regressions: Pi v1.1.0 removed the `packages/agent` harness that contained that code. The host security check now runs 99, 240, 3 and 111 checks, 453 in total.
+- Stop the durable harness JSON merge from following a parsed `__proto__` key into `Object.prototype` (CodeQL #47, new in the v1.1.0 snapshot). The key is not stored; ordinary keys, including `constructor`, remain data. The merge is used by the experimental durable, session-worker and vacation paths, not the default CLI/SDK session. Three focused regressions run in the security check.
 - `npm audit` reports GHSA-86w9-cpqp-85rv (node-forge 1.4.0 and earlier, no patched release yet) through the upstream Gondolin example-extension workspace. node-forge is not a dependency of the coding-agent package or its bundle.
 
 ### Maintenance

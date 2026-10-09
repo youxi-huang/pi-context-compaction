@@ -7,7 +7,7 @@ v0.3.0 moves the host baseline to upstream Pi v1.1.0, commit `abe508e1b89912adde
 | Check | Result and scope |
 | --- | --- |
 | Context-memory regressions | 94 passed, including the three persistence cases updated for first-user publication and the six stop-send protections that depend on resident errors propagating from the ordinary `context` phase. |
-| Host security and compatibility | 450 passed in three groups of 99, 240 and 111. The six `packages/agent` harness checks were removed with the upstream code they covered. |
+| Host security and compatibility | 453 passed in four groups of 99, 240, 3 and 111. The six `packages/agent` harness checks were removed with the upstream code they covered; three new checks cover the durable JSON merge repair. |
 | Static, dependency and type checks | Biome, pinned and runtime dependency checks, relative-import and entry-graph checks, the coding-agent install-lock check and TypeScript 7 `tsc --noEmit` passed after a clean `npm ci`. |
 | Offline build | `npm run build:offline` passed with the pinned v1.1.0 model data. |
 | Upstream compaction-related regressions | 86 passed and two skipped across `compaction`, `compaction-serialization`, `settings-manager-compaction` and the fork compaction-label regression. The skipped cases require real Anthropic credentials. |

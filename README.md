@@ -7,7 +7,7 @@ Source-linked context compaction for [Pi](https://github.com/earendil-works/pi).
 
 A compaction note should carry the task forward and provide an index back to the original transcript.
 
-**Status:** experimental source build based on Pi v0.86.0; latest release [v0.2.4](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.4) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
+**Status:** experimental source build based on Pi v1.1.0; latest release [v0.3.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.0) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
 
 [Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Build and run](#build-and-run) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
 
@@ -57,7 +57,7 @@ See the [architecture](docs/context-memory/architecture.md) for persistence, con
 | Evidence | What it supports |
 | --- | --- |
 | **94 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
-| **456 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
+| **453 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery evaluation and bounded live checks** | [Fixtures, probes, scoring and runners](eval/README.md) are implemented. Luna/max checks produced partial native results; the final project attempt recovered the task after one checkpoint, then rejected a second note with a misattributed quotation. The full two-arm baseline is deferred under the reduced evaluation budget. |
 
@@ -74,7 +74,7 @@ Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent session
 ```sh
 git clone https://github.com/youxi-huang/pi-context-compaction.git
 cd pi-context-compaction
-git checkout v0.2.4
+git checkout v0.3.0
 npm ci --ignore-scripts
 node scripts/context-memory-model-data.mjs
 node scripts/stamp-context-memory.mjs
@@ -96,15 +96,15 @@ The **current session model writes the note by default**, so no second model con
 
 ## Status and compatibility
 
-This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v0.86.0** (`ecac0a9c`), imported as a clean snapshot. The extension and its required host changes ship together; a publicly installable stock-Pi extension is a [planned pre-1.0 delivery](docs/context-memory/roadmap.md), followed by the mature compatibility and recovery contract at 1.0. That package is not yet implemented. The root `package.json` carries upstream workspace metadata and is not this project's version.
+This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v1.1.0** (`abe508e1`), imported as a clean snapshot. The extension and its required host changes ship together; a publicly installable stock-Pi extension is a [planned pre-1.0 delivery](docs/context-memory/roadmap.md), followed by the mature compatibility and recovery contract at 1.0. That package is not yet implemented. The root `package.json` carries upstream workspace metadata and is not this project's version.
 
-The latest tagged release, **v0.2.4**, ports the existing compaction behavior to Pi v0.86.0, preserving transcript prompt/tool changes and adopting the upstream cut-point fix. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
+The latest tagged release, **v0.3.0**, moves the host baseline to Pi v1.1.0 and ships the recovery evaluation described above, with its partial live results and the full baseline still deferred. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
 
 Notes, tool results and history can contain sensitive information. They remain in local session files, but relevant source content is sent to the writer during compaction and to the selected model when retrieved. History grants restrict this API; they are not an operating-system sandbox for agents with shell access.
 
 Opaque checkpoints from older provider-specific compactors require a reviewed migration copy before resuming. Run `node scripts/context-memory-migrate.mjs --help` for the workflow. The script has no live session, so it needs a fixed `provider/model` writer in `pi-context-memory.json` for the run; with `"session"` it stops before any work. It cannot recover missing evidence or decrypt remote checkpoints.
 
-v0.2.4 reads existing valid checkpoints without rewriting them and preserves Pi v0.86.0 transcript prompt/tool state through compaction and reopening. Custom providers must support Pi v0.86.0 normalized transcript inputs; update provider extensions before using them with this release. A provider still reading legacy `context.systemPrompt` or `context.tools` may silently omit instructions or tools.
+v0.3.0 reads existing valid checkpoints without rewriting them and preserves transcript prompt/tool state through compaction and reopening. Custom providers and extensions must target Pi v1.1.0; update them before using them with this release. A provider still reading legacy `context.systemPrompt` or `context.tools` may silently omit instructions or tools. Pi 1.x virtual models must declare a context window, or the session stops with `CONTEXT_CAPACITY`. The new built-in MCP, codemode and tool-search extensions have not been validated alongside the compaction resident.
 
 The v0.2.3 note-budget behavior remains unchanged. New checkpoints carry a bounded budget decision so publication and reopening agree even above 6,000 estimated tokens; lowering generation settings does not invalidate stored notes. **Older binaries cannot read new notes above their 6,000-token limit.** Keep those sessions on v0.2.3 or newer; a binary rollback is not a session-format downgrade. A changed model still must fit the final recovery payload.
 

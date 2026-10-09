@@ -1,5 +1,5 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
+import type { Api, ImageContent, Model, ModelImageResizeOptions, TextContent } from "@earendil-works/pi-ai";
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
@@ -23,6 +23,19 @@ export const readToolSystemPromptContribution = {
 } as const;
 
 export type ReadToolInput = Static<typeof readSchema>;
+
+/**
+ * Result for programmatic callers such as codemode scripts: the text for text files, and an image
+ * block for images that codemode's `image()` accepts. `note` is the text that goes with the image,
+ * such as resize hints. Property descriptions are left out so the type stays on one line in tool
+ * descriptions.
+ */
+const readOutputSchema = Type.Union([
+	Type.String(),
+	Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String(), note: Type.String() }),
+]);
+
+export type ReadToolOutput = Static<typeof readOutputSchema>;
 
 export interface ReadToolDetails {
 	truncation?: TruncationResult;
@@ -48,10 +61,19 @@ const defaultReadOperations: ReadOperations = {
 };
 
 export interface ReadToolOptions {
-	/** Whether to auto-resize images to 2000x2000 max. Default: true */
+	/** Whether to auto-resize images. Default: true */
 	autoResizeImages?: boolean;
+	/** Fallback resize profile when the execution context has no model metadata. */
+	resizeOptions?: ModelImageResizeOptions;
 	/** Custom operations for file reading. Default: local filesystem */
 	operations?: ReadOperations;
+}
+
+/** The image block and its note, or the text for text files and images that could not be processed. */
+function toReadOutput(content: (TextContent | ImageContent)[]): ReadToolOutput {
+	const text = content.find((block) => block.type === "text")?.text ?? "";
+	const image = content.find((block) => block.type === "image");
+	return image ? { type: "image", data: image.data, mimeType: image.mimeType, note: text } : text;
 }
 
 function getNonVisionImageNote(model: Model<Api> | undefined): string | undefined {
@@ -66,6 +88,7 @@ export function createReadToolDefinition(
 	options?: ReadToolOptions,
 ): ToolDefinition<typeof readSchema, ReadToolDetails | undefined> {
 	const autoResizeImages = options?.autoResizeImages ?? true;
+	const fallbackResizeOptions = options?.resizeOptions;
 	const ops = options?.operations ?? defaultReadOperations;
 	return {
 		name: "read",
@@ -74,6 +97,7 @@ export function createReadToolDefinition(
 		promptSnippet: readToolSystemPromptContribution.snippet,
 		promptGuidelines: [...readToolSystemPromptContribution.guidelines],
 		parameters: readSchema,
+		outputSchema: readOutputSchema,
 		constrainedSampling: { type: "json_schema", strict: "prefer" },
 		async execute(
 			_toolCallId,
@@ -109,7 +133,10 @@ export function createReadToolDefinition(
 							if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
-								const processed = await processImage(buffer, mimeType, { autoResizeImages });
+								const processed = await processImage(buffer, mimeType, {
+									autoResizeImages,
+									resizeOptions: ctx?.model?.inputLimits?.images?.resize ?? fallbackResizeOptions,
+								});
 								if (!processed.ok) {
 									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
 									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
@@ -186,7 +213,7 @@ export function createReadToolDefinition(
 						}
 					})();
 				},
-			);
+			).then((result) => ({ ...result, structuredContent: toReadOutput(result.content) }));
 		},
 		...readRenderers,
 	};

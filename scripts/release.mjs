@@ -9,6 +9,7 @@
  * Steps:
  * 1. Check for uncommitted changes
  * 2. Verify every public workspace package is registered on npm
+ *    and refresh the Nix model catalog pin if it is stale
  * 3. Bump version via npm run version:xxx or set an explicit version
  * 4. Update CHANGELOG.md files: [Unreleased] -> [version] - date
  * 5. Regenerate release artifacts
@@ -224,6 +225,13 @@ console.log("  Working directory clean\n");
 // 2. Verify npm package registration before modifying the worktree.
 assertPackagesAreRegisteredWithNpm();
 
+// Release tags are immutable, so the tagged Nix pin must already build the
+// release. Refresh it before the version bump, while pi.dev still knows the
+// current version, so it lands in the release commit.
+console.log("Refreshing the Nix model catalog pin if stale...");
+run("node scripts/update-model-catalog-pin.mjs --if-stale");
+console.log();
+
 // 3. Bump or set version
 const version = bumpOrSetVersion(RELEASE_TARGET);
 console.log(`  New version: ${version}\n`);
@@ -237,7 +245,6 @@ console.log();
 console.log("Regenerating release artifacts...");
 run("npm run generate:models");
 run("npm run check:model-data");
-run("npm run shrinkwrap:coding-agent");
 run("npm run install-lock:coding-agent");
 console.log();
 
@@ -250,9 +257,15 @@ console.log("Building packages for tests...");
 run("npm run build:offline");
 console.log();
 
-console.log("Running tests...");
-run("./test.sh");
-console.log();
+// PI_RELEASE_SKIP_TESTS=1 skips the test suite, e.g. when it already passed in `npm run release:local`
+// and an overloaded machine makes timing-sensitive tests fail. Checks and the install check still run.
+if (process.env.PI_RELEASE_SKIP_TESTS === "1") {
+	console.log("Skipping tests (PI_RELEASE_SKIP_TESTS=1)\n");
+} else {
+	console.log("Running tests...");
+	run("./test.sh");
+	console.log();
+}
 
 console.log("Checking the packed coding-agent consumer install...");
 run("npm run check:package-install");

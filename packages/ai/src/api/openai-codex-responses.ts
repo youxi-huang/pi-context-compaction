@@ -665,12 +665,18 @@ async function processStream(
 	grammarToolInputProperties: ReadonlyMap<string, string>,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<void> {
-	await processResponsesStream(mapCodexEvents(parseSSE(response, options?.signal), output), output, stream, model, {
-		serviceTier: options?.serviceTier,
-		grammarToolInputProperties,
-		resolveServiceTier: resolveCodexServiceTier,
-		applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
-	});
+	await processResponsesStream(
+		mapCodexEvents(parseSSE(response, options?.signal), output, model, options?.onProviderStreamEvent),
+		output,
+		stream,
+		model,
+		{
+			serviceTier: options?.serviceTier,
+			grammarToolInputProperties,
+			resolveServiceTier: resolveCodexServiceTier,
+			applyServiceTierPricing: (usage, serviceTier) => applyServiceTierPricing(usage, serviceTier, model),
+		},
+	);
 }
 
 class CodexApiError extends Error {
@@ -697,8 +703,20 @@ class CodexProtocolError extends Error {
 	}
 }
 
+class ProviderStreamEventCallbackError extends Error {
+	constructor(cause: unknown) {
+		super(formatThrownValue(cause));
+		this.name = "ProviderStreamEventCallbackError";
+		this.cause = cause;
+	}
+}
+
 function isCodexNonTransportError(error: unknown): boolean {
-	return error instanceof CodexApiError || error instanceof CodexProtocolError;
+	return (
+		error instanceof CodexApiError ||
+		error instanceof CodexProtocolError ||
+		error instanceof ProviderStreamEventCallbackError
+	);
 }
 
 function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
@@ -725,8 +743,16 @@ function extractCodexEventError(event: Record<string, unknown>): { code?: string
 async function* mapCodexEvents(
 	events: AsyncIterable<Record<string, unknown>>,
 	output: AssistantMessage,
+	model: Model<"openai-codex-responses">,
+	onProviderStreamEvent: StreamOptions["onProviderStreamEvent"] | undefined,
 ): AsyncGenerator<ResponseStreamEvent> {
 	for await (const event of events) {
+		try {
+			await onProviderStreamEvent?.(event, model);
+		} catch (error) {
+			// Keep callback failures out of Codex's WebSocket retry and SSE fallback path.
+			throw new ProviderStreamEventCallbackError(error);
+		}
 		const type = typeof event.type === "string" ? event.type : undefined;
 		if (!type) continue;
 
@@ -1516,7 +1542,12 @@ async function processWebSocketStream(
 		socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
 		await processResponsesStream(
 			startWebSocketOutputOnFirstEvent(
-				mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs), output),
+				mapCodexEvents(
+					parseWebSocket(socket, options?.signal, idleTimeoutMs),
+					output,
+					model,
+					options?.onProviderStreamEvent,
+				),
 				onStart,
 			),
 			output,
@@ -1612,7 +1643,11 @@ function buildBaseCodexHeaders(
 	accountId: string,
 	token: string,
 ): Headers {
-	const headers = new Headers(initHeaders);
+	// Defaults first so model and caller headers can override them, matching the other providers.
+	const headers = new Headers({ originator: "pi", "User-Agent": getPiUserAgent() });
+	for (const [key, value] of Object.entries(initHeaders || {})) {
+		headers.set(key, value);
+	}
 	for (const [key, value] of Object.entries(additionalHeaders || {})) {
 		if (value === null) {
 			headers.delete(key);
@@ -1622,8 +1657,6 @@ function buildBaseCodexHeaders(
 	}
 	headers.set("Authorization", `Bearer ${token}`);
 	headers.set("chatgpt-account-id", accountId);
-	headers.set("originator", "pi");
-	headers.set("User-Agent", getPiUserAgent());
 	return headers;
 }
 

@@ -125,7 +125,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!hasAzureOpenAICredentials())("Azure OpenAI Responses Provider", () => {
-		const model = getModel("azure-openai-responses", "gpt-4o-mini");
+		const model = getModel("azure", "gpt-4o-mini");
 		const azureDeploymentName = resolveAzureDeploymentName(model.id);
 		const azureOptions = azureDeploymentName ? { azureDeploymentName } : {};
 
@@ -191,7 +191,7 @@ describe("Tool Call Without Result Tests", () => {
 	});
 
 	describe.skipIf(!process.env.TOGETHER_API_KEY)("Together AI Provider", () => {
-		const model = getModel("together", "moonshotai/Kimi-K2.6");
+		const model = getModel("together", "moonshotai/Kimi-K3");
 
 		it("should filter out tool calls without corresponding tool results", { retry: 3, timeout: 30000 }, async () => {
 			await testToolCallWithoutResult(model, { reasoningEffort: "high" });

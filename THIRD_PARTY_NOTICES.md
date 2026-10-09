@@ -2,7 +2,7 @@
 
 ## Pi
 
-This distribution is based on [earendil-works/pi](https://github.com/earendil-works/pi), tag `v0.86.0`, commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc`.
+This distribution is based on [earendil-works/pi](https://github.com/earendil-works/pi), tag `v1.1.0`, commit `abe508e1b89912adde45528136c3221eb69acdd7`.
 
 Pi is MIT licensed, copyright 2025 Mario Zechner. Its original license is retained in `LICENSE`. Existing notices in source files remain in place. Dependency metadata and upstream package names identify their original authors; this repository does not publish packages under those names.
 

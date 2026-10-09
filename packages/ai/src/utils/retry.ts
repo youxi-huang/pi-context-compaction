@@ -21,12 +21,19 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	"out of budget",
 	"quota exceeded",
 	"billing",
+
+	// Sign in with ChatGPT: the subscription's shared usage limit, which resets
+	// after hours rather than seconds.
+	"subscription_sharing_usage_limit_exceeded",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	// Generic provider load, HTTP status, and server-side transient failures.
 	"overloaded",
+	"server_busy",
+	"servers are currently busy",
 	"currently experiencing high demand",
+	"model is at capacity",
 	"rate.?limit",
 	"too many requests",
 	"429",
@@ -76,6 +83,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"stream ended before message_stop",
 	"stream ended before a terminal response event",
 	"http2 request did not get a response",
+	// Node ERR_HTTP2_STREAM_CANCEL: the HTTP/2 session died before the request was
+	// sent, e.g. after the Bedrock SDK's 5-minute session timeout (#10379).
+	"pending stream has been canceled",
 
 	// Provider-requested retry delay cap failures should flow through the outer
 	// retry policy so callers can surface/abort the backoff (#1123).
@@ -89,6 +99,11 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 
 	// gRPC based providers (e.g. NVIDIA NIM)
 	"ResourceExhausted",
+
+	// Sign in with ChatGPT: usage or user data temporarily unavailable. Usage
+	// failures can arrive mid-stream without an HTTP 503 in the message.
+	"subscription_sharing_usage_unavailable",
+	"subscription_sharing_user_unavailable",
 ]);
 
 /**

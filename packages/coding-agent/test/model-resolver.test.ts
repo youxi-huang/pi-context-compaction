@@ -432,7 +432,7 @@ describe("resolveCliModel", () => {
 			...mockModels[1],
 			id: "gpt-5.6-sol",
 			name: "GPT 5.6 Sol",
-			provider: "azure-openai-responses",
+			provider: "azure",
 		};
 		const codexModel: Model<"anthropic-messages"> = {
 			...mockModels[1],
@@ -460,7 +460,7 @@ describe("resolveCliModel", () => {
 			...mockModels[1],
 			id: "gpt-5.6-sol",
 			name: "GPT 5.6 Sol",
-			provider: "azure-openai-responses",
+			provider: "azure",
 		};
 		const codexModel: Model<"anthropic-messages"> = {
 			...mockModels[1],
@@ -480,7 +480,7 @@ describe("resolveCliModel", () => {
 
 		expect(result.model).toBeUndefined();
 		expect(result.error).toContain('Model "gpt-5.6-sol" is ambiguous across providers');
-		expect(result.error).toContain("azure-openai-responses/gpt-5.6-sol");
+		expect(result.error).toContain("azure/gpt-5.6-sol");
 		expect(result.error).toContain("openai-codex/gpt-5.6-sol");
 		expect(result.error).toContain("Use --provider or provider/model");
 	});
@@ -708,7 +708,7 @@ describe("resolveCliModel", () => {
 describe("default model selection", () => {
 	test("openai defaults track current models", () => {
 		expect(defaultModelPerProvider.openai).toBe("gpt-5.5");
-		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-5.5");
+		expect(defaultModelPerProvider["openai-codex"]).toBe("gpt-6.1-sol");
 	});
 
 	test("zai, minimax, cerebras, and ant-ling defaults track current models", () => {
@@ -720,11 +720,16 @@ describe("default model selection", () => {
 		expect(defaultModelPerProvider["ant-ling"]).toBe("Ring-2.6-1T");
 	});
 
-	test("built-in defaults exist in generated provider catalogs", () => {
+	test("built-in chat providers have defaults in their generated catalogs", () => {
 		for (const provider of getBuiltinProviders()) {
+			const chatModels = getBuiltinModels(provider);
 			const defaultId = defaultModelPerProvider[provider];
+			if (chatModels.length === 0) {
+				expect(defaultId, `${provider} has no chat models and should have no chat default`).toBeUndefined();
+				continue;
+			}
 			expect(
-				getBuiltinModels(provider).some((model) => model.id === defaultId),
+				chatModels.some((model) => model.id === defaultId),
 				`${provider} default ${defaultId} should exist in its generated catalog`,
 			).toBe(true);
 		}
@@ -735,7 +740,7 @@ describe("default model selection", () => {
 	});
 
 	test("xai default tracks current model", () => {
-		expect(defaultModelPerProvider.xai).toBe("grok-4.6");
+		expect(defaultModelPerProvider.xai).toBe("grok-4.7");
 	});
 
 	test("qwen token plan individual default tracks current model", () => {

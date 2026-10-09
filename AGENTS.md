@@ -1,6 +1,6 @@
 # Agent instructions for this repository
 
-This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v0.86.0` (commit `ecac0a9c4edad3dac5d9f8b40e0c7db7a56471fc`) and adds a context-compaction extension plus a small number of host changes. It is not the Pi monorepo and it is not a Pi package. Upstream release, publishing, labeling and changelog rules do not apply here.
+This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. It is not the Pi monorepo and it is not a Pi package. Upstream release, publishing, labeling and changelog rules do not apply here.
 
 The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UPSTREAM_AGENTS.md). Their code-quality rules for TypeScript still hold in this repository: no `any`, top-level imports only, erasable TypeScript syntax only, no hardcoded key checks. Their commands, release process and issue conventions do not apply. Where this file and [CONTRIBUTING.md](CONTRIBUTING.md) say something different from the upstream file, this file wins.
 

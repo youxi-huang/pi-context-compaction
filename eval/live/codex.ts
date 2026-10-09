@@ -19,7 +19,8 @@ export function lunaModel(): Model<"openai-codex-responses"> {
 	const data = JSON.parse(
 		readFileSync(new URL("../../packages/ai/src/providers/data/openai-codex.json", import.meta.url), "utf8"),
 	);
-	return structuredClone(data["openai-codex-responses"][MODEL_ID]);
+	// Pi 1.x keys generated model data by model type; the model id itself is unchanged.
+	return structuredClone(data["openai-codex-responses"][`chat:${MODEL_ID}`]);
 }
 export function codexAccess(): string {
 	const value = readStoredCredential("openai-codex");

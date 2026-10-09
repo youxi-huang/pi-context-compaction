@@ -10,7 +10,7 @@ if (!output || !isAbsolute(output)) throw new Error("EVAL_ARTIFACT_DIR must be a
 mkdirSync(output, { recursive: true });
 const env = { ...process.env, STAGE0_ARTIFACT_DIR: output, NODE_OPTIONS: `--import=${JSON.stringify(resolve(root, "eval/deny-network.mjs"))}` };
 for (const args of [
-	["node_modules/@typescript/native-preview/bin/tsgo.js", "--noEmit", "-p", "eval/tsconfig.json"],
+	["node_modules/typescript/bin/tsc", "--noEmit", "-p", "eval/tsconfig.json"],
 	["--experimental-strip-types", "eval/generate-fixtures.ts", "--check"],
 	["node_modules/vitest/dist/cli.js", "run", "--config", "packages/coding-agent/vitest.config.ts", "eval/fixture.test.ts", "eval/scorer.test.ts", "eval/report.test.ts", "eval/pi/preflight.test.ts", "eval/pi/structure.test.ts", "eval/stage0/interface-gate.test.ts", "eval/runner/runner.test.ts", "eval/live/live.test.ts", "eval/live/diagnostics.test.ts"],
 ]) {

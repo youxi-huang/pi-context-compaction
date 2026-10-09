@@ -1,6 +1,11 @@
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS, type Model, type Transport } from "@earendil-works/pi-ai";
-import type { TuiMode as RendererTuiMode, ScrollViewScrollbar, TerminalCapabilities } from "@earendil-works/pi-tui";
+import type {
+	TuiMode as RendererTuiMode,
+	ScrollViewScrollbar,
+	TerminalCapabilities,
+	WheelScrollLines,
+} from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -86,7 +91,25 @@ export interface WarningSettings {
 	anthropicExtraUsage?: boolean; // default: true
 }
 
+/**
+ * How the codemode tool presents tools while it is active.
+ * - `on`: declared tools that scripts can call get a note on calling them from scripts appended to
+ *   their description; the codemode description lists only the tools without `direct` exposure.
+ * - `only`: the codemode description lists every tool scripts can call, and active `direct` tools are
+ *   not declared to the model.
+ */
+export type CodemodeMode = "on" | "only";
+
+export interface CodemodeSettings {
+	/** Default: `on`. */
+	mode?: CodemodeMode;
+	/** Estimated tokens (characters / 4) the codemode description may spend on tool declarations. Default: 3000. */
+	inlineBudget?: number;
+}
+
 export type DefaultProjectTrust = "ask" | "always" | "never";
+/** true hides all startup output, "header" keeps only the startup header. */
+export type QuietStartup = boolean | "header";
 
 export type TransportSetting = Transport;
 
@@ -124,7 +147,7 @@ export interface Settings {
 	showCacheMissNotices?: boolean; // default: false - show cache cost and provider recovery notices
 	externalEditor?: string; // Command for Ctrl+G external editor; takes precedence over VISUAL/EDITOR
 	shellPath?: string; // Custom shell path (e.g., for Cygwin users on Windows); supports leading ~ expansion
-	quietStartup?: boolean;
+	quietStartup?: QuietStartup; // default: false
 	defaultProjectTrust?: DefaultProjectTrust; // default: "ask"; global setting only
 	shellCommandPrefix?: string; // Prefix prepended to every bash command (e.g., "shopt -s expand_aliases" for alias support)
 	npmCommand?: string[]; // Command used for npm package lookup/install operations, argv-style (e.g., ["mise", "exec", "node@20", "--", "npm"])
@@ -132,6 +155,7 @@ export interface Settings {
 	enableInstallTelemetry?: boolean; // default: true - anonymous version/update ping after changelog-detected updates
 	enableAnalytics?: boolean; // default: false - opt-in analytics data sharing
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
+	deviceId?: string; // stable UUID of this installation, created when a login first needs it; global setting only
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
@@ -141,25 +165,27 @@ export interface Settings {
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
-	defaultTools?: string[]; // Initial built-in tool selection
+	defaultTools?: string[]; // Initial tool selection; `+name`/`-name` entries add to or remove from the inherited selection
 	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
-	outputPad?: 0 | 1; // Horizontal padding for chat message output (default: 1)
+	outputPad?: 0 | 1; // Horizontal padding for transcript content (default: 1)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
 	warnings?: WarningSettings;
+	codemode?: CodemodeSettings;
 	sessionDir?: string; // Custom session storage directory (same format as --session-dir CLI flag)
 	httpProxy?: string; // Proxy URL applied as HTTP_PROXY and HTTPS_PROXY for Pi-managed HTTP clients
 	httpIdleTimeoutMs?: number; // HTTP header/body idle timeout in milliseconds; 0 disables it
 	cacheWarming?: CacheWarmingMode; // default: "streaming"; global only because each refresh costs money
 	websocketConnectTimeoutMs?: number; // WebSocket connect/open handshake timeout in milliseconds; 0 disables it
-	tuiMode?: TuiMode; // default: "regular"
+	tuiMode?: TuiMode; // default: "fullscreen"
 	fullscreenExitOutput?: FullscreenExitOutput; // default: "transcript"; no effect in regular TUI mode
 	fullscreenScrollbar?: ScrollViewScrollbar; // default: "auto"; no effect in regular TUI mode
 	fullscreenCopyOnSelect?: boolean; // default: true; no effect in regular TUI mode
+	fullscreenWheelScrollLines?: WheelScrollLines; // default: "auto"; lines per wheel event, 1-100
 }
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
@@ -185,9 +211,69 @@ function deepMergeObjects(base: Record<string, unknown>, overrides: Record<strin
 	return result;
 }
 
+/** Tools enabled at startup when `defaultTools` does not change them. */
+export const DEFAULT_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write"];
+
+/** Whether a tool selection entry is a `+name` or `-name` modifier. */
+export function isToolModifier(entry: unknown): boolean {
+	return typeof entry === "string" && (entry.startsWith("+") || entry.startsWith("-"));
+}
+
+/**
+ * Validate a tool list from `--tools` or the SDK `tools` option. It is either an allowlist of plain
+ * names and patterns or a list of only `+name`/`-name` entries with exact names. Returns the
+ * problem, or undefined when the list is valid.
+ */
+export function getToolListError(entries: readonly string[]): string | undefined {
+	const modifiers = entries.filter(isToolModifier);
+	if (modifiers.length === 0) return undefined;
+	if (modifiers.length < entries.length) return "tool names cannot be mixed with +name or -name entries";
+	const pattern = modifiers.find((entry) => entry.includes("*"));
+	if (pattern) return `+name and -name entries take exact tool names, not patterns: ${pattern}`;
+	return undefined;
+}
+
+/**
+ * Apply the `+name` and `-name` entries of `entries` to `base` in order: `+name` adds a tool and
+ * `-name` removes one. Other entries are ignored.
+ */
+export function applyToolModifiers(base: readonly string[], entries: readonly string[]): string[] {
+	const tools = [...base];
+	for (const entry of entries) {
+		if (!isToolModifier(entry)) continue;
+		const name = entry.slice(1);
+		const index = tools.indexOf(name);
+		if (entry.startsWith("+") && index === -1 && name) tools.push(name);
+		else if (entry.startsWith("-") && index !== -1) tools.splice(index, 1);
+	}
+	return tools;
+}
+
+/**
+ * Merge `defaultTools` of two settings layers. A list with plain tool names replaces the inherited
+ * one; a list of only `+name`/`-name` entries is appended, so it modifies the inherited selection.
+ */
+function mergeDefaultTools(base: string[] | undefined, overrides: string[] | undefined): string[] | undefined {
+	if (overrides === undefined) return base;
+	// Settings files are not validated; a malformed value replaces instead of throwing here.
+	if (!Array.isArray(base) || !Array.isArray(overrides) || !overrides.every(isToolModifier)) return overrides;
+	return [...base, ...overrides];
+}
+
+/**
+ * Resolve a merged `defaultTools` list: plain names replace `DEFAULT_TOOL_NAMES`, then `+name` adds
+ * and `-name` removes a tool, in list order.
+ */
+function resolveDefaultTools(entries: string[]): string[] {
+	const plain = entries.filter((entry) => !isToolModifier(entry));
+	return applyToolModifiers(plain.length > 0 || entries.length === 0 ? plain : DEFAULT_TOOL_NAMES, entries);
+}
+
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
-	return deepMergeObjects(base as Record<string, unknown>, overrides as Record<string, unknown>) as Settings;
+	const merged = deepMergeObjects(base as Record<string, unknown>, overrides as Record<string, unknown>) as Settings;
+	const defaultTools = mergeDefaultTools(base.defaultTools, overrides.defaultTools);
+	return defaultTools === undefined ? merged : { ...merged, defaultTools };
 }
 
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
@@ -497,6 +583,11 @@ export class SettingsManager {
 		}
 
 		return settings as Settings;
+	}
+
+	/** A copy of the effective settings: global and project settings merged, with overrides. */
+	getSettings(): Settings {
+		return structuredClone(this.settings);
 	}
 
 	getGlobalSettings(): Settings {
@@ -1018,11 +1109,12 @@ export class SettingsManager {
 		this.save();
 	}
 
-	getQuietStartup(): boolean {
-		return this.settings.quietStartup ?? false;
+	getQuietStartup(): QuietStartup {
+		const value = this.settings.quietStartup;
+		return value === true || value === "header" ? value : false;
 	}
 
-	setQuietStartup(quiet: boolean): void {
+	setQuietStartup(quiet: QuietStartup): void {
 		this.globalSettings.quietStartup = quiet;
 		this.markModified("quietStartup");
 		this.save();
@@ -1096,6 +1188,20 @@ export class SettingsManager {
 			this.markModified("trackingId");
 		}
 		this.save();
+	}
+
+	/**
+	 * Stable ID of this installation, e.g. sent to OpenAI as its agent host ID.
+	 * Created on first use. Project settings are ignored so a committed project
+	 * settings file cannot give every clone the same ID.
+	 */
+	getOrCreateDeviceId(): string {
+		if (!this.globalSettings.deviceId) {
+			this.globalSettings.deviceId = randomUUID();
+			this.markModified("deviceId");
+			this.save();
+		}
+		return this.globalSettings.deviceId;
 	}
 
 	getPackages(): PackageSource[] {
@@ -1263,7 +1369,7 @@ export class SettingsManager {
 	}
 
 	getTuiMode(): TuiMode {
-		return this.settings.tuiMode === "fullscreen" ? "fullscreen" : "regular";
+		return this.settings.tuiMode === "regular" ? "regular" : "fullscreen";
 	}
 
 	setTuiMode(mode: TuiMode): void {
@@ -1303,6 +1409,20 @@ export class SettingsManager {
 		this.save();
 	}
 
+	getFullscreenWheelScrollLines(): WheelScrollLines {
+		const lines = this.settings.fullscreenWheelScrollLines;
+		return typeof lines === "number" && Number.isFinite(lines)
+			? Math.max(1, Math.min(100, Math.floor(lines)))
+			: "auto";
+	}
+
+	setFullscreenWheelScrollLines(lines: WheelScrollLines): void {
+		this.globalSettings.fullscreenWheelScrollLines =
+			lines === "auto" ? lines : Math.max(1, Math.min(100, Math.floor(lines)));
+		this.markModified("fullscreenWheelScrollLines");
+		this.save();
+	}
+
 	getImageAutoResize(): boolean {
 		return this.settings.images?.autoResize ?? true;
 	}
@@ -1333,9 +1453,11 @@ export class SettingsManager {
 		return this.settings.enabledModels;
 	}
 
+	/** The resolved `defaultTools` selection, or undefined when no settings layer sets it. */
 	getDefaultTools(): string[] | undefined {
 		const tools = this.settings.defaultTools;
-		return tools ? [...tools] : undefined;
+		if (tools === undefined) return undefined;
+		return resolveDefaultTools(Array.isArray(tools) ? tools.filter((tool) => typeof tool === "string") : []);
 	}
 
 	setEnabledModels(patterns: string[] | undefined): void {

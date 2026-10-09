@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,5 +20,7 @@ if (!existsSync(archive)) {
 }
 if (createHash("sha256").update(readFileSync(archive)).digest("hex") !== expected)
 	throw new Error("Upstream source checksum mismatch; inspect the cached archive before retrying");
+// Replace the extracted catalog so files dropped upstream do not survive an upgrade.
+rmSync(resolve(root, "packages/ai/src/providers/data"), { recursive: true, force: true });
 run("tar", ["-xzf", archive, "--strip-components=1", "-C", root, "pi-1.1.0/packages/ai/src/providers/data"]);
 console.log("Verified and extracted the pinned upstream model data.");

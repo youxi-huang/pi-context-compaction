@@ -29,6 +29,7 @@ v0.3.0 is the measurement release: it ships the evaluation method and the bounde
 
 - Retain provider URL-domain checks, now including upstream's `isCerebras` path, and the linear-time overflow, LaTeX, prompt-argument, diff and package-spec hardening with their regressions on the new baseline.
 - Drop the v0.2.4 tool-slot index and skill-path repairs and their regressions: Pi v1.1.0 removed the `packages/agent` harness that contained that code. The host security check now runs 99, 240 and 111 checks, 450 in total.
+- `npm audit` reports GHSA-86w9-cpqp-85rv (node-forge 1.4.0 and earlier, no patched release yet) through the upstream Gondolin example-extension workspace. node-forge is not a dependency of the coding-agent package or its bundle.
 
 ### Maintenance
 

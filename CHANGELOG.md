@@ -9,6 +9,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Security
 
 - Update shell-quote from 1.10.0 to 1.12.0 in the sandbox example extension's standalone lockfile for GHSA-pqg4-j6r4-53mv, matching the root workspace lock. The sandbox example is not part of the coding-agent package or its bundle; a standalone `npm ci` and `npm audit` of that example report no vulnerabilities.
+- Review CodeQL #43, #44, #45 and #46, new in the v1.1.0 snapshot; none requires a runtime change. The two reflected-XSS findings are OAuth callback pages whose provider-supplied text passes through `oauthErrorHtml`, which escapes it. The existing OpenRouter regression covers the shared callback server (#43), and a new regression sends a hostile `error` parameter through the ChatGPT sign-in page, which runs its own server (#44). In the `pi mcp` logging finding (#45), validation messages name the server and the broken rule, not values such as client secrets; only a malformed `--header` or `--env` pair is echoed, to the terminal that supplied it. The password-hash finding (#46) is a test hashing a public MCP server URL into a short identifier. The host security check now runs 107, 240, 3 and 111 checks, 461 in total.
 
 ## [v0.3.0] — 2026-10-09
 

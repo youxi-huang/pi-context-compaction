@@ -6,6 +6,7 @@ const TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token";
 const REQUIRED_SCOPE = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct";
 const neverAbortedSignal = new AbortController().signal;
 const DEVICE_ID = "e61bbe28-07ef-466d-8e5d-a344f94ab305";
+const nativeFetch = globalThis.fetch;
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -157,6 +158,35 @@ describe("OpenAI ChatGPT OAuth", () => {
 			"requires a device ID",
 		);
 		expect(authorizationStarted).toBe(false);
+	});
+
+	// CodeQL #44: this flow runs its own loopback server, so check its error page separately.
+	it("escapes HTML in callback errors", async () => {
+		const payload = '<img src=x onerror="alert(1)"> & <script>alert(2)</script>';
+		const fetchMock = stubTokenEndpoint(tokenResponse());
+		let callbackResponse: Promise<Response> | undefined;
+		const login = openaiChatGPTOAuth.login(
+			{
+				signal: neverAbortedSignal,
+				notify: (event) => {
+					if (event.type !== "auth_url") return;
+					const callbackUrl = new URL(new URL(event.url).searchParams.get("redirect_uri") ?? "");
+					callbackUrl.searchParams.set("error", payload);
+					callbackResponse = nativeFetch(callbackUrl);
+				},
+				prompt: () => new Promise<string>(() => {}),
+			},
+			{ getDeviceId: () => DEVICE_ID },
+		);
+
+		await expect(login).rejects.toThrow(payload);
+		const response = await callbackResponse;
+		expect(response?.status).toBe(400);
+		const html = await response?.text();
+		expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+		expect(html).toContain("&amp; &lt;script&gt;alert(2)&lt;/script&gt;");
+		expect(html).not.toContain(payload);
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
 	it("requires refresh responses to rotate the refresh token", async () => {

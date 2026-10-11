@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -44,6 +43,7 @@ import {
 	sourceText,
 } from "../../packages/coding-agent/src/extensions/context-memory/notes.ts";
 
+import { assertFrozenRuntime } from "../runner/frozen.ts";
 import { EVALUATED_RUNTIME_PIN as PIN } from "../runtime.ts";
 const FUTURE = "FUTURE_SUFFIX_CANARY";
 const GOLD = "EVALUATOR_GOLD_CANARY";
@@ -251,11 +251,7 @@ it("validates both real host paths, F1 trigger positions, reopened probes and to
 	const output = process.env.STAGE0_ARTIFACT_DIR;
 	if (!output || !output.startsWith("/"))
 		throw new Error("STAGE0_ARTIFACT_DIR must be an absolute internal output directory");
-	expect(
-		execFileSync("git", ["diff", PIN, "--", "packages/coding-agent/src", "packages/ai/src", "packages/agent/src"], {
-			encoding: "utf8",
-		}),
-	).toBe("");
+	assertFrozenRuntime(process.cwd(), PIN);
 	mkdirSync(output, { recursive: true });
 	const root = mkdtempSync(join(output, "stage0-run-"));
 	const fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {

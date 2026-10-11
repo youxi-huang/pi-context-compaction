@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 // Default-settings scenarios for the stock-Pi preview, each beside a control run without the extension.
@@ -208,7 +209,9 @@ async function worker() {
 	let session;
 	const check = (key, description, passed, detail) => checks.push({ key, description, passed: Boolean(passed), ...(detail === undefined ? {} : { detail }) });
 	const observe = (step, value) => observations.push({ step, ...value });
+	let expectExtension = false;
 	function writeSettings(extension, extra = {}) {
+		expectExtension = extension;
 		writeFileSync(
 			join(agentDir, "settings.json"),
 			JSON.stringify({ packages: extension ? [packageDir] : [], cacheWarming: "off", defaultTools: [], ...extra }),
@@ -237,7 +240,11 @@ async function worker() {
 		session = created.session;
 		const before = notices.length;
 		await session.bindExtensions({ onError: (error) => diagnostics.push(String(error?.message ?? error).slice(0, 300)) });
-		return { extensionLoaded: loaded.extensions.some((extension) => extension.path.startsWith(packageDir)), notices: notices.slice(before) };
+		const extensionLoaded = loaded.extensions.some((extension) => extension.path.startsWith(packageDir));
+		if (extensionLoaded !== expectExtension) {
+			throw new Error(`The preview package was ${extensionLoaded ? "loaded" : "not loaded"} although the settings ${expectExtension ? "install" : "omit"} it`);
+		}
+		return { extensionLoaded, notices: notices.slice(before) };
 	}
 	function marker() {
 		if (!manager) return null;
@@ -535,12 +542,25 @@ async function worker() {
 // Parent: run every case in isolated processes, then grade the checks against KNOWN_GAPS.
 // ---------------------------------------------------------------------------------------------------------
 
-async function runWorker(name, variant, root, timeoutMs) {
+// The package's host imports must reach the Pi under test. From inside this repository, once
+// `npm run build:offline` has run, they resolve to the workspace build instead, so a copy outside it is loaded.
+function assertNoShadowingHost(directory) {
+	for (let current = directory; ; current = dirname(current)) {
+		for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "typebox"]) {
+			if (existsSync(join(current, "node_modules", name))) {
+				throw new Error(`${join(current, "node_modules", name)} would shadow the host under test; point TMPDIR outside any Node project`);
+			}
+		}
+		if (dirname(current) === current) return;
+	}
+}
+
+async function runWorker(name, variant, root, timeoutMs, candidate) {
 	const caseDir = join(outputDir, "cases", `${name}--${variant}`);
 	rmSync(caseDir, { recursive: true, force: true });
 	mkdirSync(caseDir, { recursive: true });
 	const agentDir = join(caseDir, "agent");
-	const parameters = [script, "--package-dir", packageDir, "--stock-root", root, "--output-dir", outputDir, "--worker", name, "--variant", variant, "--perf-checkpoints", argument("--perf-checkpoints", "20")];
+	const parameters = [script, "--package-dir", candidate, "--stock-root", root, "--output-dir", outputDir, "--worker", name, "--variant", variant, "--perf-checkpoints", argument("--perf-checkpoints", "20")];
 	const child = spawn(process.execPath, parameters, { cwd: outputDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 	let stderr = "";
 	child.stdout.on("data", () => {});
@@ -563,8 +583,27 @@ async function parent() {
 	mkdirSync(outputDir, { recursive: true });
 	const otherStockRoot = argument("--other-stock-root", "");
 	const only = argument("--only", "");
-	const report = { host: "official npm Pi", providers: "loopback HTTP synthetic only", knownGaps: [...KNOWN_GAPS], cases: [], checks: [] };
+	const report = { host: "official npm Pi", providers: "loopback HTTP synthetic only", packageCopy: "temporary directory outside the repository", knownGaps: [...KNOWN_GAPS], cases: [], checks: [] };
 	const counts = { pass: 0, gap: 0, fail: 0, nowPasses: 0, skipped: 0 };
+	const isolatedRoot = mkdtempSync(join(tmpdir(), "pi-preview-scenarios-"));
+	const candidate = join(isolatedRoot, "package");
+	cpSync(packageDir, candidate, { recursive: true });
+	try {
+		assertNoShadowingHost(candidate);
+		await runCases(report, counts, otherStockRoot, only, candidate);
+	} finally {
+		rmSync(isolatedRoot, { recursive: true, force: true });
+	}
+	report.summary = counts;
+	report.passed = counts.fail === 0 && counts.nowPasses === 0;
+	writeFileSync(join(outputDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
+	process.stdout.write(
+		`\n${counts.pass} passed, ${counts.gap} known gaps, ${counts.fail} failed, ${counts.nowPasses} now passing and still listed, ${counts.skipped} skipped\n`,
+	);
+	if (!report.passed) process.exitCode = 1;
+}
+
+async function runCases(report, counts, otherStockRoot, only, candidate) {
 	for (const entry of CASES) {
 		if (only && entry.name !== only) continue;
 		if (entry.otherHost && !otherStockRoot) {
@@ -575,7 +614,7 @@ async function parent() {
 		}
 		for (const variant of entry.variants) {
 			const root = entry.otherHost ? resolve(otherStockRoot) : stockRoot;
-			const result = await runWorker(entry.name, variant, root, entry.timeoutMs ?? 180_000);
+			const result = await runWorker(entry.name, variant, root, entry.timeoutMs ?? 180_000, candidate);
 			report.cases.push(result);
 			for (const item of result.checks) {
 				const id = variant === "control" ? `${entry.name}:control/${item.key}` : `${entry.name}/${item.key}`;
@@ -593,13 +632,6 @@ async function parent() {
 			}
 		}
 	}
-	report.summary = counts;
-	report.passed = counts.fail === 0 && counts.nowPasses === 0;
-	writeFileSync(join(outputDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
-	process.stdout.write(
-		`\n${counts.pass} passed, ${counts.gap} known gaps, ${counts.fail} failed, ${counts.nowPasses} now passing and still listed, ${counts.skipped} skipped\n`,
-	);
-	if (!report.passed) process.exitCode = 1;
 }
 
 if (workerCase) await worker();

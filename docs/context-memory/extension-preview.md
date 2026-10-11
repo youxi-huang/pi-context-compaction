@@ -177,7 +177,10 @@ Every scenario check states intended behavior. Checks in the script's
 as surviving Pi's automatic retry after a transient provider failure or
 leaving sessions it never enrolled usable. They are reported without failing
 the run. A listed check that starts passing fails the run until it is removed
-from the list, so each fix becomes a required regression. The long-session case
+from the list, so each fix becomes a required regression. The runner loads a
+copy of the package from a temporary directory outside the repository: inside
+it, once `npm run build:offline` has run, the package's Pi imports resolve to
+the repository's workspace build instead of the host under test. The long-session case
 uses 20 checkpoints by default; `--perf-checkpoints 60` runs the full
 measurement, which takes several minutes.
 

@@ -29,6 +29,15 @@ overhead per model request. In an earlier attempt, the loopback server closed an
 idle connection at checkpoint 36; Pi retried the connection error and the session
 was blocked as in the dropped-connection case.
 
+The runner loads a copy of the package from outside the repository. Inside it,
+after `npm run build:offline`, the package's `@earendil-works/pi-coding-agent`
+import resolves to the repository's workspace build rather than the host under
+test; on Pi 1.0.4 the preview then read version 1.1.0 and did not block. The
+`verify` workflow runs the acceptance runner after that build with the package
+under `.artifacts/`, so its CI acceptance links the preview against the
+workspace build. The publication workflow does not run that build before
+acceptance.
+
 The automatic-compaction case of the v0.3.1 acceptance reports 200,000 input
 tokens in a 128,000-token window. Stock Pi handles that on its silent-overflow
 branch, not the threshold branch; the threshold scenario covers the threshold

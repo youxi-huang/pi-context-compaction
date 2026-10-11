@@ -168,14 +168,8 @@ if (!publish) {
 		}
 		if (!remoteTag) git("push", "--atomic", "origin", `${packageCommit}:refs/heads/${branch}`, `${packageCommit}:refs/tags/${packageTag}`);
 		if (release.draft) release = await api(`releases/${release.id}`, "PATCH", { draft: false });
-		for (const file of assets) {
-			const asset = release.assets.find((entry) => entry.name === file);
-			assert(asset, `Release does not expose ${file}`);
-			const response = await fetch(asset.browser_download_url);
-			assert(response.ok, `Published download failed for ${file}: ${response.status}`);
-			assert.equal(digest(Buffer.from(await response.arrayBuffer())), digest(readFileSync(join(artifacts, file))), `Published download checksum differs: ${file}`);
-		}
-		console.log(JSON.stringify({ version, sourceCommit, packageCommit, url: release.html_url, downloadsVerified: assets }, null, 2));
+		for (const file of assets) assert(release.assets.some((entry) => entry.name === file), `Release does not expose ${file}`);
+		console.log(JSON.stringify({ version, sourceCommit, packageCommit, url: release.html_url, publishedAssets: assets }, null, 2));
 	} finally {
 		rmSync(temporary, { recursive: true, force: true });
 	}

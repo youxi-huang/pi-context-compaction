@@ -164,6 +164,6 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release with checked downloads. Existing public
+push, and publishes a pre-release after all assets are uploaded. Existing public
 assets and tags are never overwritten. The resident runtime retains its
 v0.3.0 fingerprint because this release changes only the ordinary extension.

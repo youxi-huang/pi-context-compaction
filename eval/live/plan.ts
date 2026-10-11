@@ -278,7 +278,15 @@ export async function runLivePlan(options: {
 			try {
 				reviews.push(await reviewF3(run, { ledger, parents: [global, judge], transport: options.transport }));
 			} catch (error) {
-				if (options.transport.mode === "scripted") console.error("EVAL_JUDGE_INFRASTRUCTURE_FAILURE", error);
+				if (options.transport.mode === "scripted") {
+					console.error("EVAL_JUDGE_INFRASTRUCTURE_FAILURE", error);
+					console.error("EVAL_JUDGE_BASELINE_CHECKPOINTS", {
+						fixture: run.fixture,
+						arm: run.arm,
+						replicate: run.replicate,
+						checkpoints: run.checkpoints.map(({ id, status, error }) => ({ id, status, error })),
+					});
+				}
 				ledger.halt("EVAL_JUDGE_INFRASTRUCTURE_FAILURE");
 			}
 			save();

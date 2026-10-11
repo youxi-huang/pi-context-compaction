@@ -277,7 +277,8 @@ export async function runLivePlan(options: {
 		async (run) => {
 			try {
 				reviews.push(await reviewF3(run, { ledger, parents: [global, judge], transport: options.transport }));
-			} catch {
+			} catch (error) {
+				if (options.transport.mode === "scripted") console.error("EVAL_JUDGE_INFRASTRUCTURE_FAILURE", error);
 				ledger.halt("EVAL_JUDGE_INFRASTRUCTURE_FAILURE");
 			}
 			save();

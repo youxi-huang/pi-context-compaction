@@ -41,6 +41,10 @@ Do not run the full upstream vitest suite or `npm test`; they include end-to-end
 
 Before stamping, make sure there are no stray duplicate files (for example `events 2.ts`) in the extension directory or `scripts/`. The stamp reads every `.ts` file in the extension directory, so an untracked duplicate makes the local fingerprint differ from CI and `verify` fails.
 
+For routine operations, first read [docs/context-memory/operations.md](docs/context-memory/operations.md).
+Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
+`node scripts/context-memory-ops.mjs ci` reproduces the complete CI sequence.
+
 ## Making changes
 
 - Keep memory policy inside the extension directory. A change to a host file must state why the extension layer cannot enforce the behavior itself, must be added to `docs/context-memory/upstream-delta.md`, and must be added to the file list in `scripts/stamp-context-memory.mjs` so the build fingerprint covers it.

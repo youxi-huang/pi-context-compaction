@@ -13,6 +13,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Maintenance
 
 - Add a shared operations runbook and script that connects existing verification commands, retains CI's pinned model-data download and checksum check, and documents private vulnerability reporting. Runtime behavior, build fingerprints, and evaluation contracts are unchanged.
+- Select scripted writer evidence from fixture user messages in the offline paired-plan test, avoiding accidental matches in randomized directory metadata. A deterministic directory-name collision covers both existing judge concurrency cases with every assertion retained.
 
 ## [v0.3.1] — 2026-10-11
 

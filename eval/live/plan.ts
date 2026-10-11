@@ -219,14 +219,6 @@ export async function runLivePlan(options: {
 				maxCalls: slot.limits.calls,
 				timeoutMs: slot.limits.milliseconds,
 			});
-			if (options.transport.mode === "scripted" && run.checkpoints.some((checkpoint) => checkpoint.error)) {
-				console.error("EVAL_BASELINE_CHECKPOINT_FAILURE", {
-					fixture: run.fixture,
-					arm: run.arm,
-					replicate: run.replicate,
-					checkpoints: run.checkpoints.map(({ id, status, error }) => ({ id, status, error })),
-				});
-			}
 			runs.push(run);
 			if (
 				[...run.checkpoints, ...run.probes].some((item) =>
@@ -285,16 +277,7 @@ export async function runLivePlan(options: {
 		async (run) => {
 			try {
 				reviews.push(await reviewF3(run, { ledger, parents: [global, judge], transport: options.transport }));
-			} catch (error) {
-				if (options.transport.mode === "scripted") {
-					console.error("EVAL_JUDGE_INFRASTRUCTURE_FAILURE", error);
-					console.error("EVAL_JUDGE_BASELINE_CHECKPOINTS", {
-						fixture: run.fixture,
-						arm: run.arm,
-						replicate: run.replicate,
-						checkpoints: run.checkpoints.map(({ id, status, error }) => ({ id, status, error })),
-					});
-				}
+			} catch {
 				ledger.halt("EVAL_JUDGE_INFRASTRUCTURE_FAILURE");
 			}
 			save();

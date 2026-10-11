@@ -683,6 +683,7 @@ describe("measurement revision and judge isolation", () => {
 			const result = await runLivePlan({
 				restartFrom,
 				judgeConcurrency,
+				// Directory metadata must not be mistaken for the scripted writer's source evidence.
 				outputDirectory: artifactDirectory("stage3-full-plan-f3-99999-"),
 				approvalReference: "offline-preflight-only",
 				transport: {
@@ -712,7 +713,9 @@ describe("measurement revision and judge isolation", () => {
 								reason: "Synthetic evaluator output.",
 							});
 						} else if (r.purpose === "writer") {
-							const source = /f[123]-\d{5}/.exec(JSON.stringify(r.context))?.[0];
+								const source = /f[123]-\d{5}/.exec(
+									JSON.stringify(r.context.messages.filter((message) => message.role === "user")),
+								)?.[0];
 							nextText = source ? JSON.stringify(note(source)) : "Native synthetic summary.";
 						} else nextText = JSON.stringify({ status: "abstain", claims: [] });
 						responses.set(JSON.stringify(body), { text: nextText, cap: nextCap, purpose: r.purpose });

@@ -113,7 +113,7 @@ async function runtimeAcceptance() {
 	if (!reuseAgentDir) {
 		writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ enabled: true, writerModel: fixedWriterUnavailable ? "missing-provider/missing-writer" : "session", eventLog: false, noteRepair: false, keepRecentTokens: 0 }));
 		if (workerCase === "config-invalid") writeFileSync(join(agentDir, "pi-context-memory.json"), "{invalid config");
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [installedPackage], compaction: { enabled: automaticCase, keepRecentTokens: 0, reserveTokens: 16_384 }, retry: { enabled: false }, providerRetry: { maxRetries: 0 }, cacheWarming: warmingCase ? "idle" : "off", defaultTools: [] }));
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [installedPackage], compaction: { enabled: automaticCase, keepRecentTokens: 0, reserveTokens: 16_384 }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: warmingCase ? "idle" : "off", defaultTools: [] }));
 	}
 	const requests = [];
 	const diagnostics = [];

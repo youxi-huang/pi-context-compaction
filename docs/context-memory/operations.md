@@ -15,7 +15,7 @@ Run `node scripts/context-memory-ops.mjs <command>` from any repository director
 | `deps` | Run `npm ci --ignore-scripts --no-audit --no-fund --prefer-offline` when the lock hash/installation is stale; record the hash in `node_modules/.context-memory-ops-lock`. |
 | `build` | deps, duplicate check, model data, stamp, fingerprint gate, `npm run build:offline`. |
 | `verify` | build, `context-memory-check.mjs`, `security-regression-check.mjs`. |
-| `preview` | build, preview build, isolated official Pi 1.1.0 install if needed, acceptance, release-check tests, release `--prepare`. |
+| `preview` | build, preview build, Pi 1.1.0, acceptance, Pi 1.0.4, default-settings scenarios, release checks, release `--prepare`. |
 | `eval [--full] [--keep]` | build, network-blocked reduced evaluation; `--full` uses `eval/check.mjs`; remove scratch artifacts unless `--keep`. |
 | `ci` | build, both acceptance checks, all preview steps, full offline evaluation, in CI order. |
 
@@ -28,6 +28,9 @@ and report the discrepancy. Preview install/acceptance commands come from
 All child commands receive `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and
 `EVAL_MODEL_CALL_BUDGET=0`. Stock-Pi acceptance uses its existing isolated loopback
 services and synthetic credentials; it is not a real-provider result.
+Both official Pi versions are installed only when their isolated cache is absent
+or incomplete. Scenarios report listed known gaps; new failures or a listed gap
+that starts passing fail the step until the gap becomes a required regression.
 
 Dependency and official Pi installation may download packages. As in CI, build
 runs `node scripts/context-memory-model-data.mjs` directly: on a cold cache it

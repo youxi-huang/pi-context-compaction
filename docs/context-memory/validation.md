@@ -1,5 +1,51 @@
 # Validation record
 
+## Default-settings scenarios, 2026-10-11 UTC
+
+`scripts/context-memory-preview-scenarios.mjs` ran the v0.3.1 candidate
+`stock-preview+src.6c2f3745fb7c2fbe` on official npm Pi 1.1.0, and on 1.0.4 for
+the version case, with default Pi and extension settings. Each case ran beside a
+control without the extension. The loopback provider returned ordinary replies,
+one transient 503, one dropped connection, one context-overflow error or
+threshold-level usage. 22 checks passed and 23 are recorded as known gaps;
+every control run behaved as stock Pi.
+
+| Scenario | Current preview | Control without the extension |
+| --- | --- | --- |
+| Documented first compaction | With default settings, `/compact` after one turn is rejected by Pi's 20,000-token keep-recent gate before any extension hook. With about 31k estimated tokens of later history it writes an extension checkpoint. | Not applicable |
+| Transient 503 or dropped connection | Pi's default retry appends a `context_edit`. The preview treats it as unsupported, blocks the retry and writes a marker; `/compact` and `/reload` do not recover. | The retry completes |
+| Context-overflow error | Blocked in the same way, with no recovery through `/compact`. No native summary is requested. | Native compaction recovers |
+| Threshold-level usage, 115,000 of 128,000 | Native compaction is cancelled and requests are blocked; manual `/compact` recovers. Each blocked input shows four identical `CONTEXT_PREVIEW_UNSUPPORTED` notices. | Native compaction runs |
+| One image attachment | The request is not sent and the session stays blocked, including after `/compact` and `/reload`. | The image request is sent |
+| Session with a native checkpoint | Opening it writes a `CONTEXT_MIGRATION_REQUIRED` marker before any input. | Usable |
+| Session created with the extension, then compacted natively | Blocked when the extension returns. | Not applicable |
+| In-memory session | Every request is blocked. | Usable |
+| Pi 1.0.4, fresh session | Every request is blocked and a marker is written. | Usable |
+| Misquoting writer | Rejected and blocked; an explicit retry recovers. The failure shows two notices, and each blocked input two more. | Not applicable |
+| Long session | Extension overhead per model request is about 310 ms at 10 checkpoints (3.0 MB) and 960 ms at 20 (5.9 MB). | About 3 ms on the same file |
+
+A separate manual run reached 60 checkpoints (17.9 MB) at about 7.1 seconds of
+overhead per model request. In an earlier attempt, the loopback server closed an
+idle connection at checkpoint 36; Pi retried the connection error and the session
+was blocked as in the dropped-connection case.
+
+The runner loads a copy of the package from outside the repository. Inside it,
+after `npm run build:offline`, the package's `@earendil-works/pi-coding-agent`
+import resolves to the repository's workspace build rather than the host under
+test; on Pi 1.0.4 the preview then read version 1.1.0 and did not block. The
+`verify` workflow runs the acceptance runner after that build with the package
+under `.artifacts/`, so its CI acceptance links the preview against the
+workspace build. The publication workflow does not run that build before
+acceptance.
+
+The automatic-compaction case of the v0.3.1 acceptance reports 200,000 input
+tokens in a 128,000-token window. Stock Pi handles that on its silent-overflow
+branch, not the threshold branch; the threshold scenario covers the threshold
+branch itself.
+
+These are deterministic loopback results. They do not measure real-provider
+behavior or recovery quality.
+
 ## Independent stock-Pi candidate, 2026-10-11 UTC
 
 The v0.3.1 preview candidate `stock-preview+src.6c2f3745fb7c2fbe` was bundled as an

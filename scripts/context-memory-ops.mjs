@@ -56,6 +56,7 @@ const root = realpathSync(rootResult.stdout.trim());
 const extension = "packages/coding-agent/src/extensions/context-memory";
 const fingerprintFile = `${extension}/build.ts`;
 const stockRoot = join(root, ".artifacts/context-memory-preview-stock");
+const otherStockRoot = join(root, ".artifacts/context-memory-preview-stock-1.0.4");
 const lockMarker = join(root, "node_modules/.context-memory-ops-lock");
 const identity = userInfo();
 const uid = process.getuid?.() ?? identity.username.replace(/[^\w-]/g, "_");
@@ -169,17 +170,17 @@ function dependencyState(hash) {
 	return { installed, marked };
 }
 
-function officialPiReady() {
+function officialPiReady(directory = stockRoot, version = "1.1.0") {
 	try {
-		const packageRoot = join(stockRoot, "node_modules/@earendil-works/pi-coding-agent");
+		const packageRoot = join(directory, "node_modules/@earendil-works/pi-coding-agent");
 		const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-		const lock = JSON.parse(readFileSync(join(stockRoot, "node_modules/.package-lock.json"), "utf8"));
+		const lock = JSON.parse(readFileSync(join(directory, "node_modules/.package-lock.json"), "utf8"));
 		const provenance = lock.packages["node_modules/@earendil-works/pi-coding-agent"];
 		return (
-			manifest.version === "1.1.0" &&
-			provenance?.version === "1.1.0" &&
+			manifest.version === version &&
+			provenance?.version === version &&
 			!!provenance.integrity &&
-			realpathSync(packageRoot).startsWith(`${realpathSync(stockRoot)}${sep}`) &&
+			realpathSync(packageRoot).startsWith(`${realpathSync(directory)}${sep}`) &&
 			["dist/index.js", "dist/bundle/cli.js"].every((file) => existsSync(join(packageRoot, file)))
 		);
 	} catch (error) {
@@ -210,6 +211,9 @@ async function doctor() {
 			`dependencies: ${installed ? "installed" : "missing/incomplete"}; lock marker: ${marked ? "current" : "missing/stale (deps will install)"}\n`,
 		);
 		write(`official Pi 1.1.0: ${officialPiReady() ? "ready" : "not ready (preview will install)"}\n`);
+		write(
+			`official Pi 1.0.4 scenario control: ${officialPiReady(otherStockRoot, "1.0.4") ? "ready" : "not ready (preview will install)"}\n`,
+		);
 		write(
 			`pinned model-data archive: ${existsSync(join(root, ".artifacts/pi-1.1.0-source.tar.gz")) ? "cached" : "missing (build downloads the pinned archive and verifies SHA-256)"}\n`,
 		);
@@ -264,11 +268,10 @@ async function checks() {
 	await nodeStep("security-regression-check", ["scripts/security-regression-check.mjs"]);
 }
 
-async function preview() {
-	await nodeStep("preview-build", ["scripts/context-memory-preview-build.mjs"]);
-	await step("official-pi", async (write) => {
-		if (officialPiReady()) {
-			write("Isolated official Pi 1.1.0 is ready; no installation needed.\n");
+async function installOfficialPi(name, directory, version) {
+	await step(name, async (write) => {
+		if (officialPiReady(directory, version)) {
+			write(`Isolated official Pi ${version} is ready; no installation needed.\n`);
 			return;
 		}
 		await execute(
@@ -276,18 +279,24 @@ async function preview() {
 			[
 				"install",
 				"--prefix",
-				".artifacts/context-memory-preview-stock",
+				relative(root, directory),
 				"--ignore-scripts",
 				"--no-audit",
 				"--no-fund",
 				"--package-lock=false",
 				"--save-exact",
-				"@earendil-works/pi-coding-agent@1.1.0",
+				`@earendil-works/pi-coding-agent@${version}`,
 			],
 			write,
 		);
-		if (!officialPiReady()) throw new StepError("Official Pi 1.1.0 installation is incomplete");
+		if (!officialPiReady(directory, version))
+			throw new StepError(`Official Pi ${version} installation is incomplete`);
 	});
+}
+
+async function preview() {
+	await nodeStep("preview-build", ["scripts/context-memory-preview-build.mjs"]);
+	await installOfficialPi("official-pi", stockRoot, "1.1.0");
 	await nodeStep("preview-acceptance", [
 		"scripts/context-memory-preview-acceptance.mjs",
 		"--package-dir",
@@ -296,6 +305,18 @@ async function preview() {
 		".artifacts/context-memory-preview-stock",
 		"--output-dir",
 		".artifacts/context-memory-preview-acceptance",
+	]);
+	await installOfficialPi("official-pi-1.0.4", otherStockRoot, "1.0.4");
+	await nodeStep("preview-scenarios", [
+		"scripts/context-memory-preview-scenarios.mjs",
+		"--package-dir",
+		".artifacts/context-memory-preview-package",
+		"--stock-root",
+		".artifacts/context-memory-preview-stock",
+		"--other-stock-root",
+		".artifacts/context-memory-preview-stock-1.0.4",
+		"--output-dir",
+		".artifacts/context-memory-preview-scenarios",
 	]);
 	await nodeStep("preview-release-checks", ["--test", "scripts/context-memory-preview-release-checks.test.mjs"]);
 	await nodeStep("preview-release-prepare", ["scripts/context-memory-preview-release.mjs", "--prepare"]);

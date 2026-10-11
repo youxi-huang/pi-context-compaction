@@ -668,7 +668,8 @@ describe("measurement revision and judge isolation", () => {
 		expect(run.checkpoints[0].requests).toHaveLength(2);
 		expect(ledger.fatal).toBeUndefined();
 	});
-	it.each([2, 4] as const)(
+	// Temporary bounded CI diagnosis: retain the original cases and every assertion.
+	it.each([2, 4, 2, 4, 2, 4, 2, 4, 2, 4, 2, 4] as const)(
 		"runs 18 paired chains and option-C judges at judge concurrency %i",
 		async (judgeConcurrency) => {
 			const responses = new Map<string, { text: string; cap: number; purpose: string }>();

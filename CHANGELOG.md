@@ -10,6 +10,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - Extension publication recognizes GitHub's default CodeQL scans with a `dynamic` event. Reviewed publication tooling can retry an existing immutable source tag without replacing its contents or release assets.
 
+### Maintenance
+
+- Add a shared operations runbook and script that connects existing verification commands, retains CI's pinned model-data download and checksum check, and documents private vulnerability reporting. Runtime behavior, build fingerprints, and evaluation contracts are unchanged.
+- Select scripted writer evidence from fixture user messages in the offline paired-plan test, avoiding accidental matches in randomized directory metadata. A deterministic directory-name collision covers both existing judge concurrency cases with every assertion retained.
+
 ## [v0.3.1] — 2026-10-11
 
 The maintainer selected a patch-version increment for this new capability, as an explicit version-policy exception. v0.3.1 delivers the first independent extension preview for official Pi 1.1.0, through a package-only Git branch and immutable package tag. It covers manual compaction of fresh persistent text sessions. The resident build keeps its v0.3.0 fingerprint and evaluation identity; its broader guarantees and historical live results are separate.

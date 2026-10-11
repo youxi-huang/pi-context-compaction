@@ -29,11 +29,9 @@ All child commands receive `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and
 `EVAL_MODEL_CALL_BUDGET=0`. Stock-Pi acceptance uses its existing isolated loopback
 services and synthetic credentials; it is not a real-provider result.
 
-Only dependency and official Pi installation may download through this wrapper.
-The existing model-data helper downloads its pinned source archive on a cold
-cache: prepare that cache separately with the CI command
-`node scripts/context-memory-model-data.mjs`. Ops build fails clearly if the
-archive is missing; the helper still verifies its checksum before extraction.
+Dependency and official Pi installation may download packages. As in CI, build
+runs `node scripts/context-memory-model-data.mjs` directly: on a cold cache it
+downloads the pinned source archive and verifies SHA-256 before extraction.
 
 Normal output is two lines per step plus the final log-directory location.
 Full logs live under `os.tmpdir()`, separated by user uid and invocation.
@@ -61,6 +59,10 @@ Stop maintenance decisions at either gate and wait for the maintainer:
 
 ## Routine tasks
 
+- **Unfixed vulnerabilities:** follow [SECURITY.md](../../SECURITY.md) for private
+  vulnerability reporting. Stop and notify the maintainer first; until the fix
+  is released, do not disclose details in public PRs, issues, commit messages,
+  or this runbook.
 - **Dependabot security PRs:** npm version-update PRs are disabled; review the
   remaining security updates individually. First establish whether the affected
   package is loaded by this project: sandbox examples do not enter the bundle.

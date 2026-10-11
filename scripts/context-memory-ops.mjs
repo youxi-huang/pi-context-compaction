@@ -211,7 +211,7 @@ async function doctor() {
 		);
 		write(`official Pi 1.1.0: ${officialPiReady() ? "ready" : "not ready (preview will install)"}\n`);
 		write(
-			`pinned model-data archive: ${existsSync(join(root, ".artifacts/pi-1.1.0-source.tar.gz")) ? "cached" : "missing (build stays offline)"}\n`,
+			`pinned model-data archive: ${existsSync(join(root, ".artifacts/pi-1.1.0-source.tar.gz")) ? "cached" : "missing (build downloads the pinned archive and verifies SHA-256)"}\n`,
 		);
 		const untracked = git(["ls-files", "--others", "-z", "--", extension])
 			.split("\0")
@@ -239,14 +239,7 @@ async function deps() {
 async function build() {
 	await deps();
 	await step("duplicate-files", assertNoDuplicates);
-	await step("model-data", async (write) => {
-		if (!existsSync(join(root, ".artifacts/pi-1.1.0-source.tar.gz"))) {
-			throw new StepError(
-				"Pinned model-data archive is missing. Prepare the cache separately with the CI command: node scripts/context-memory-model-data.mjs. The ops build will not download it.",
-			);
-		}
-		await execute(process.execPath, ["scripts/context-memory-model-data.mjs"], write);
-	});
+	await nodeStep("model-data", ["scripts/context-memory-model-data.mjs"]);
 	await nodeStep("stamp", ["scripts/stamp-context-memory.mjs"]);
 	await step("fingerprint", (write) => {
 		const diff = spawnSync("git", ["diff", "--quiet", "--", fingerprintFile], { cwd: root, env, encoding: "utf8" });

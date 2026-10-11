@@ -12,7 +12,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
-- Add a shared operations runbook and script that connects existing verification commands without changing runtime behavior, build fingerprints, or evaluation contracts.
+- Add a shared operations runbook and script that connects existing verification commands, retains CI's pinned model-data download and checksum check, and documents private vulnerability reporting. Runtime behavior, build fingerprints, and evaluation contracts are unchanged.
 
 ## [v0.3.1] — 2026-10-11
 

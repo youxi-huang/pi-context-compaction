@@ -51,6 +51,18 @@ jobs:
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
           --output-dir .artifacts/context-memory-preview-acceptance
+      - name: Install a second official Pi version for scenario checks
+        run: >-
+          npm install --prefix "${{ runner.temp }}/context-preview-other"
+          --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact
+          @earendil-works/pi-coding-agent@1.0.4
+      - name: Run default-settings scenarios (known gaps reported; regressions and unlisted fixes fail)
+        run: >-
+          node scripts/context-memory-preview-scenarios.mjs
+          --package-dir .artifacts/context-memory-preview-package
+          --stock-root "${{ runner.temp }}/context-preview-stock"
+          --other-stock-root "${{ runner.temp }}/context-preview-other"
+          --output-dir .artifacts/context-memory-preview-scenarios
       - name: Prepare release archives without publishing
         run: |
           node --test scripts/context-memory-preview-release-checks.test.mjs

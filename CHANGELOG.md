@@ -10,6 +10,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - Extension publication recognizes GitHub's default CodeQL scans with a `dynamic` event. Reviewed publication tooling can retry an existing immutable source tag without replacing its contents or release assets.
 
+### Maintenance
+
+- Add a default-settings scenario runner for the stock-Pi preview. Each case runs beside a control without the extension: transient provider failures, context overflow, the compaction threshold, image input, sessions with native checkpoints, in-memory sessions, another Pi version, failed-compaction notices and long-session overhead. Checks state the intended behavior; the 23 that the current candidate does not meet are tracked as known gaps that do not fail CI, and a gap that starts passing fails the run until it becomes a required check. The `verify` workflow runs it after acceptance. Findings are in the [validation record](docs/context-memory/validation.md#default-settings-scenarios-2026-10-11-utc). The acceptance runner now disables provider retries through Pi's actual `retry.provider.maxRetries` setting.
+
 ## [v0.3.1] — 2026-10-11
 
 The maintainer selected a patch-version increment for this new capability, as an explicit version-policy exception. v0.3.1 delivers the first independent extension preview for official Pi 1.1.0, through a package-only Git branch and immutable package tag. It covers manual compaction of fresh persistent text sessions. The resident build keeps its v0.3.0 fingerprint and evaluation identity; its broader guarantees and historical live results are separate.

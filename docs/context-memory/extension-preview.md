@@ -157,6 +157,30 @@ real-provider compatibility, semantic recovery quality, compaction latency or
 Windows behavior. No official Pi source, real account, existing user settings
 or session is modified by these isolated checks.
 
+The scenario runner checks the same artifact under default Pi and extension
+settings, each case beside a control run without the extension. The second
+installation is optional and only serves the other-version case:
+
+```sh
+npm install --prefix ./.artifacts/context-memory-preview-stock-1.0.4 \
+  --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact \
+  @earendil-works/pi-coding-agent@1.0.4
+node scripts/context-memory-preview-scenarios.mjs \
+  --package-dir ./.artifacts/context-memory-preview-package \
+  --stock-root ./.artifacts/context-memory-preview-stock \
+  --other-stock-root ./.artifacts/context-memory-preview-stock-1.0.4 \
+  --output-dir ./.artifacts/context-memory-preview-scenarios
+```
+
+Every scenario check states intended behavior. Checks in the script's
+`KNOWN_GAPS` list describe behavior this candidate does not provide yet, such
+as surviving Pi's automatic retry after a transient provider failure or
+leaving sessions it never enrolled usable. They are reported without failing
+the run. A listed check that starts passing fails the run until it is removed
+from the list, so each fix becomes a required regression. The long-session case
+uses 20 checkpoints by default; `--perf-checkpoints 60` runs the full
+measurement, which takes several minutes.
+
 ## Maintainer publication
 
 Merge the reviewed source through a PR and confirm `verify` and all three

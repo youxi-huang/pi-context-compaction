@@ -1,0 +1,63 @@
+{
+  "build": "stock-preview+src.6c2f3745fb7c2fbe",
+  "version": "0.3.1",
+  "sourceCommit": "534c8994ed17539ac97ed5712c36efe01268dffb",
+  "supportedPi": "1.1.0",
+  "checkpointSchema": 1,
+  "sourceHash": "6c2f3745fb7c2fbe2bd55e39f63b72f5978ce1bc6546cb896b2aa638ff616b89",
+  "sources": [
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
+      "sha256": "fc727e8301d1d9e59ab01aa481e96a1a62bf70a8e2b039adb234317dbc3b049a"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/events.ts",
+      "sha256": "3a8fb89cc04cfa7cebb9a7b7cca0cdd186808faabc211bcf587de0a21cc06e5f"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/history.ts",
+      "sha256": "5671a7bde5916a8f227dea799089036252cb87979290c150ef63736ec5b60f3a"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/identity.ts",
+      "sha256": "6e3dddba5f12acb109b15db0a51494bf731d16715e986f6dfe71d6f5a2e3f908"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/notes.ts",
+      "sha256": "5d0a980955d3bf706defd7ea1d9bfb688855c6031b0297f2ff5bb1e6158fffd9"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/build.ts",
+      "sha256": "24f21b49c57452956d11a1a0354f2aaa9817def001b7905e917c1a8150b840dd"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/controller.ts",
+      "sha256": "6b037daa66db4dd492796e696fd7599e7d2308db5739ef2a2f9b54bfa10234c0"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
+      "sha256": "da92701b3bc882c4217376cf631eb394e9b002843feced46332356262e4f442c"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts",
+      "sha256": "8c4098e4b9b5df1ee4d95f51ed6bad6e9ddb5eae19542364fcf137d7ca96c4bc"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts",
+      "sha256": "14f3bf6f54d6eff7612546f76aa912628ff875cf37bd28417244c140bc866dde"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/writer.ts",
+      "sha256": "65c1fcdef9da567dba79e801f0407894ef3d16c206b933a0b40fb70e63130b35"
+    }
+  ],
+  "externalImports": [
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-coding-agent",
+    "node:crypto",
+    "node:fs",
+    "node:path",
+    "typebox",
+    "typebox/value"
+  ]
+}

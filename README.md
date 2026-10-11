@@ -44,6 +44,8 @@ Pi's native compaction retains session history on disk and rebuilds the model's 
   <img alt="A draft handover note enters a commit gate with three checks: every source reference must belong to the selected session branch, every quotation must occur verbatim in the record it cites, and the note must be valid and the write must succeed. If all three pass, the checkpoint is published and the session continues. If any check fails, whether a changed source, an invalid note or a failed write, the checkpoint is not published, further requests are blocked until recovery allowed by the loaded implementation, and no other writer is silently substituted." src="docs/context-memory/assets/commit-gate.png">
 </picture>
 
+*This diagram shows the resident build's failure reset. In the stock-Pi preview, new input keeps the block; only a disk-confirmed retry or `/compaction-recover` can resume requests.*
+
 These checks establish reference consistency, not semantic completeness or guaranteed model adherence. Original records can remain retrievable even when a note omits a detail; the agent still has to find and interpret the relevant evidence.
 
 The scope is **task continuity across compaction**. The stock preview limits history access to the current session branch; explicit parent-history grants belong to the resident build. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
@@ -123,7 +125,7 @@ v0.3.0 reads existing valid checkpoints without rewriting them and preserves tra
 
 The v0.2.3 note-budget behavior remains unchanged. New checkpoints carry a bounded budget decision so publication and reopening agree even above 6,000 estimated tokens; lowering generation settings does not invalidate stored notes. **Older binaries cannot read new notes above their 6,000-token limit.** Keep those sessions on v0.2.3 or newer; a binary rollback is not a session-format downgrade. A changed model still must fit the final recovery payload.
 
-This release contains the host and compaction modules. Locally adapted BTW, subagent and provider packages are not bundled. Integrators can use the exported `contextMemory` API; unmodified third-party packages should not be assumed compatible. Windows persistence, long-running semantic quality and repeated incremental-note comparisons are not validated.
+The resident source build contains the host and compaction modules. Locally adapted BTW, subagent and provider packages are not bundled. Integrators can use the exported `contextMemory` API; unmodified third-party packages should not be assumed compatible. Windows persistence, long-running semantic quality and repeated incremental-note comparisons are not validated.
 
 The project was initially named Pi Context Memory. Existing `context-memory` source paths, the `pi-context-memory.json` configuration file, the `contextMemory` API and stored checkpoint identifiers retain their original names. The project rename does not require configuration or session migration.
 

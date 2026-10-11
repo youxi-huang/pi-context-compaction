@@ -140,6 +140,17 @@ if (!publish) {
 			});
 		}
 		let release = await api(`releases/tags/${tag}`);
+		if (!release) {
+			// The by-tag endpoint only finds published releases. Authenticated listing also finds drafts.
+			const matching = [];
+			for (let page = 1; ; page++) {
+				const releases = await api(`releases?per_page=100&page=${page}`);
+				matching.push(...releases.filter((entry) => entry.tag_name === tag));
+				if (releases.length < 100) break;
+			}
+			assert(matching.length <= 1, "Multiple release records for the tag; resolve without overwriting assets");
+			release = matching[0] ?? null;
+		}
 		if (!release) release = await api("releases", "POST", { tag_name: tag, target_commitish: sourceCommit, name: `${tag} — Independent extension preview for Pi 1.1.0`, body: notes, draft: true, prerelease: true, make_latest: "false" });
 		assert.equal(release.prerelease, true);
 		for (const file of assets) {

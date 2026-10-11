@@ -50,7 +50,9 @@ jobs:
           node scripts/context-memory-preview-acceptance.mjs
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
-          --output-dir "${{ runner.temp }}/context-preview-acceptance"
+          --output-dir .artifacts/context-memory-preview-acceptance
+      - name: Prepare release archives without publishing
+        run: node scripts/context-memory-preview-release.mjs --prepare
       - name: Verify synthetic evaluation (network blocked, zero model budget)
         env:
           EVAL_ARTIFACT_DIR: ${{ runner.temp }}/context-eval

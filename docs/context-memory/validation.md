@@ -1,5 +1,52 @@
 # Validation record
 
+## Independent stock-Pi candidate, 2026-10-11 UTC
+
+The v0.3.1 preview candidate `stock-preview+src.6c2f3745fb7c2fbe` was bundled as an
+extension-only package and tested on an isolated official npm Pi 1.1.0
+installation. The package graph contains eleven preview/shared primitive source
+files and external public Pi/TypeBox imports; it contains no resident lifecycle
+or host source. The existing resident runtime fingerprint and six host files
+were unchanged. Publication uses the same runtime fingerprint with release metadata; the Git branch and package tag are separate from the source tag.
+
+| Check | Result and scope |
+| --- | --- |
+| Focused context checks | 131 passed: the existing 94 resident cases and 37 independent-preview cases. Static, dependency, import-graph, install-lock and TypeScript checks also passed. |
+| Host security and compatibility | 461 passed, in groups of 107, 240, 3 and 111; synthetic inputs and mocked providers. |
+| Frozen resident evaluation | 89 passed with network denied and zero model budget: the existing 81 cases plus eight Git-backed checks that preview-only files are separate while host/shared code and fixtures remain frozen. The runtime pin did not move. |
+| Official Pi acceptance | All 26 checks passed using the actual built artifact, a loopback Git server and a loopback HTTP provider. No real provider credentials or remote model service were used. |
+| Distribution lifecycle | Official CLI downloaded the standalone package, updated that package, selected a compatible prior tag, and removed it. Existing dummy extension declarations and third-party settings survived. Rollback used the same checkpoint schema and code with synthetic distribution metadata, not a historical released preview. |
+| Compaction and continuation | A valid checkpoint was saved and confirmed through JSONL readback; current-branch original evidence was retrieved through `context_history`, including after reopening in a fresh process. |
+| Failures and recovery | Wrong quotations, fabricated/unreadable citations, malformed notes, unavailable writers, changed sources, cancelled generation, failed checkpoint append and marker IO stopped the workflow. Blocked prompts and reload/reopen attempts sent no additional HTTP requests. Explicit retry retained unfinished user input; explicit recovery confirmed an already staged/saved checkpoint without a model call. |
+| Other request paths | A real stock threshold event was cancelled with zero writer/native-summary calls. Stock cache warming was stopped through the public decision event after compaction failure, without changing the cache-warming setting. |
+| Official host identity | npm package integrity was recorded. SHA256 values for the manifest, CLI bundle, public index, SDK, extension runner and session manager matched before and after acceptance. |
+
+Independent review found and reproduced two recovery defects: a blocked prompt
+left an aborted tail that made manual retry impossible, and a directory-sync
+failure after marker deletion lost staged recovery evidence. The former was
+fixed by retaining the whole unfinished input turn during explicit retry; the
+latter by preserving the staged attempt/hash during failed confirmation.
+Both corrections were tested again in the final candidate. An interrupted
+commit-observation scenario used the actual marker captured at Pi's append
+boundary, then reopened in a fresh process for explicit recovery.
+
+Scope remains the [candidate contract](extension-preview.md): official Pi 1.1.0,
+one writer process, persistent text sessions, manual completed-turn compaction
+and the declared explicit-recovery exceptions. Background warming is paused;
+automatic scheduling, attachments, parent-history grants, old checkpoint
+migration, other context-transforming compactors and Windows are not supported
+by this candidate. JSONL readback is bounded to 64 MiB/250,000 records. A first
+marker that cannot write any bytes only establishes a current-process block;
+cross-process persistence after that storage fault is repaired is not claimed.
+Real-provider behavior, semantic recovery quality and long-session request
+overhead were not measured. Existing live results below remain resident-build
+evidence and are not relabeled as preview results.
+
+The reproducible checks are the package builder and independent acceptance
+runner documented in the candidate guide. Temporary Git servers, package
+checkouts, caches, synthetic credentials/configuration and session files were
+removed after acceptance; compact result/provenance metadata was retained.
+
 ## v0.3.0: Pi v1.1.0 port, 2026-10-09 UTC
 
 v0.3.0 moves the host baseline to upstream Pi v1.1.0, commit `abe508e1b89912adde45528136c3221eb69acdd7`. The project delta was replayed onto that source; conflicts in the six compaction host files were resolved against the v0.99.2 port recorded below. Upstream did not change `session-manager.ts` or `agent-session-runtime.ts` between v0.99.2 and v1.1.0; those two files match the v0.99.2 candidate apart from formatting, and the other four carry the same integration changes on the newer upstream code.

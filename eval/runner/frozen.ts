@@ -39,16 +39,26 @@ export function runnerFingerprint(): string {
 	}
 	return hash.digest("hex");
 }
-export function assertFrozenInputs(): void {
-	const cwd = fileURLToPath(new URL("../../", import.meta.url));
-	const runtimeFiles = ["packages/coding-agent/src", "packages/ai/src", "packages/agent/src"];
-	const diff = execFileSync("git", ["diff", EVALUATED_RUNTIME_PIN, "--", ...runtimeFiles], { cwd, encoding: "utf8" });
+/** The evaluated resident runtime never imports the separately packaged preview. */
+export function assertFrozenRuntime(cwd: string, revision = EVALUATED_RUNTIME_PIN): void {
+	const runtimeFiles = [
+		"packages/coding-agent/src",
+		"packages/ai/src",
+		"packages/agent/src",
+		":(exclude)packages/coding-agent/src/extensions/context-memory/preview/**",
+	];
+	const diff = execFileSync("git", ["diff", revision, "--", ...runtimeFiles], { cwd, encoding: "utf8" });
 	const untracked = execFileSync(
 		"git",
 		["ls-files", "--others", "--exclude-standard", "--", ...runtimeFiles, "eval/fixtures"],
 		{ cwd, encoding: "utf8" },
 	);
-	if (diff || untracked) throw new Error(`EVAL_FROZEN_INPUT_CHANGED:${EVALUATED_RUNTIME_PIN}`);
+	if (diff || untracked) throw new Error(`EVAL_FROZEN_INPUT_CHANGED:${revision}`);
+}
+
+export function assertFrozenInputs(): void {
+	const cwd = fileURLToPath(new URL("../../", import.meta.url));
+	assertFrozenRuntime(cwd);
 	// Content lock survives a later squash merge of the accepted implementation commits.
 	const currentFiles = execFileSync(
 		"git",

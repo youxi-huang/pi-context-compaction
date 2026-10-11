@@ -6,13 +6,27 @@ This repository is a snapshot of upstream Pi plus one new extension directory, a
 | --- | --- |
 | Upstream baseline | Pi `v1.1.0`, commit `abe508e1b89912adde45528136c3221eb69acdd7`, imported as a clean snapshot without upstream history |
 | New implementation | `packages/coding-agent/src/extensions/context-memory/` |
-| Project tests | `packages/coding-agent/test/context-memory.test.ts`, `packages/coding-agent/test/fixtures/context-memory-*` |
+| Project tests | `packages/coding-agent/test/context-memory*.test.ts`, `packages/coding-agent/test/fixtures/context-memory-*` |
 | Project scripts | `scripts/context-memory-*.mjs`, `scripts/stamp-context-memory.mjs`, `scripts/security-regression-check.mjs` |
 | Project documentation and CI | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `AGENTS.md`, `docs/context-memory/`, `.github/` |
 | Host source files changed | Six, listed below |
 | Everything else | Upstream Pi code plus previously reviewed dependency/security hardening retained by this distribution |
 
 The upstream `README.md`, `CONTRIBUTING.md` and `AGENTS.md` are kept as `UPSTREAM_README.md`, `UPSTREAM_CONTRIBUTING.md` and `UPSTREAM_AGENTS.md`. They describe upstream Pi, not this distribution.
+
+## Independent preview
+
+`context-memory/preview/` is a separate ordinary extension using public imports
+from official Pi 1.1.0. Its package builder rejects runtime imports of resident
+lifecycle or host source code, bundles only preview code and shared note/history
+primitives, and gives that artifact its own source fingerprint. None of the six
+resident host files or their existing fingerprint changes for the v0.3.1 preview.
+
+The preview uses Pi's public canonical session projection, cancellation results
+and `ctx.abort()` request guards instead of host exception propagation. Its
+operational failure markers are checked against the actual session JSONL before
+recovery. The [declared scope](extension-preview.md) excludes resident write
+ordering, all-write leases and protection after deliberate extension removal.
 
 ## Why the host is changed at all
 

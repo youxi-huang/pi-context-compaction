@@ -38,6 +38,19 @@ jobs:
       - run: npm run build:offline
       - run: node scripts/context-memory-check.mjs
       - run: node scripts/security-regression-check.mjs
+      - name: Build independent extension candidate
+        run: node scripts/context-memory-preview-build.mjs
+      - name: Install isolated official Pi baseline
+        run: >-
+          npm install --prefix "${{ runner.temp }}/context-preview-stock"
+          --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact
+          @earendil-works/pi-coding-agent@1.1.0
+      - name: Verify candidate on official Pi with loopback provider and Git source
+        run: >-
+          node scripts/context-memory-preview-acceptance.mjs
+          --package-dir .artifacts/context-memory-preview-package
+          --stock-root "${{ runner.temp }}/context-preview-stock"
+          --output-dir "${{ runner.temp }}/context-preview-acceptance"
       - name: Verify synthetic evaluation (network blocked, zero model budget)
         env:
           EVAL_ARTIFACT_DIR: ${{ runner.temp }}/context-eval

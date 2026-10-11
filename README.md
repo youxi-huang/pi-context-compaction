@@ -7,9 +7,9 @@ Source-linked context compaction for [Pi](https://github.com/earendil-works/pi).
 
 A compaction note should carry the task forward and provide an index back to the original transcript.
 
-**Status:** experimental source build based on Pi v1.1.0; latest release [v0.3.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.0) is a pre-release. Includes required host changes; it cannot be added to stock Pi with `pi install`.
+**Status:** [v0.3.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.1) is an independent extension preview for unmodified official Pi **1.1.0**. Its supported workflow is manual compaction of fresh persistent text sessions. The older [v0.3.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.0) resident source build remains available for development and comparison.
 
-[Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Build and run](#build-and-run) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
+[Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Install the extension](#install-the-extension) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/source-linked-compaction-dark.png">
@@ -36,27 +36,28 @@ The example below follows the values in the [documented provider scenario](docs/
 Pi's native compaction retains session history on disk and rebuilds the model's active context from a summary and retained recent messages. This project adds source-linked handover notes, reference checks and a branch-scoped history tool to the continuation workflow.
 
 1. **Write a handover.** The current session model writes the note by default; a fixed writer is optional. The note records task state, next steps and references to original entries.
-2. **Check before committing.** Three checks run at this commit gate: source references must belong to the selected branch, quotations must occur verbatim in their cited records, and the note must be valid and the write must succeed. Changed sources, invalid notes and failed writes prevent checkpoint publication. Failed compaction blocks further requests until explicit retry or new input; no other writer is silently substituted.
+2. **Check before committing.** Three checks run at this commit gate: source references must belong to the selected branch, quotations must occur verbatim in their cited records, and the note must be valid and the write must succeed. Changed sources, invalid notes and failed writes prevent checkpoint publication. In the stock-Pi preview, failed compaction blocks further requests across new input, reload and reopening until a retry or recovery confirms a valid checkpoint on disk; no other writer is silently substituted.
 3. **Continue and check details.** The agent resumes from the handover and can search or read original records through `context_history`; those records stay in the session JSONL on disk, and a checkpoint indexes them rather than replacing them. Earlier-checkpoint anchors help locate phases that the newest note no longer describes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/commit-gate-dark.png">
-  <img alt="A draft handover note enters a commit gate with three checks: every source reference must belong to the selected session branch, every quotation must occur verbatim in the record it cites, and the note must be valid and the write must succeed. If all three pass, the checkpoint is published and the session continues. If any check fails, whether a changed source, an invalid note or a failed write, the checkpoint is not published, further requests are blocked until an explicit retry or new user input, and no other writer is silently substituted." src="docs/context-memory/assets/commit-gate.png">
+  <img alt="A draft handover note enters a commit gate with three checks: every source reference must belong to the selected session branch, every quotation must occur verbatim in the record it cites, and the note must be valid and the write must succeed. If all three pass, the checkpoint is published and the session continues. If any check fails, whether a changed source, an invalid note or a failed write, the checkpoint is not published, further requests are blocked until recovery allowed by the loaded implementation, and no other writer is silently substituted." src="docs/context-memory/assets/commit-gate.png">
 </picture>
 
 These checks establish reference consistency, not semantic completeness or guaranteed model adherence. Original records can remain retrievable even when a note omits a detail; the agent still has to find and interpret the relevant evidence.
 
-The scope is **task continuity across compaction**. History access follows the current session branch and explicit parent-history grants. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
+The scope is **task continuity across compaction**. The stock preview limits history access to the current session branch; explicit parent-history grants belong to the resident build. General cross-session memory and user-preference storage are outside this design. This repository explores source-linked compaction in Pi; portability to other hosts is a future direction.
 
 The planned direction keeps the session record as the durable source of truth and treats notes and indexes as derived projections: increments prepared while the task runs, instruction-authority checks and typed retrieval are planned steps on the [roadmap](docs/context-memory/roadmap.md), and every candidate still passes the same commit gate.
 
-See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the six host files this distribution adapts.
+See the [architecture](docs/context-memory/architecture.md) for persistence, continuation protections and history authorization, and the [upstream delta](docs/context-memory/upstream-delta.md) for the six host files used only by the resident build.
 
 ## Evidence and limits
 
 | Evidence | What it supports |
 | --- | --- |
 | **94 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
+| **Stock-Pi extension preview** | 37 preview regressions and 26 checks on official Pi 1.1.0 cover package lifecycle, source-linked continuation and explicit failure recovery. Uses loopback Git/HTTP, with no real-provider quality claim. See the [candidate validation](docs/context-memory/validation.md#independent-stock-pi-candidate-2026-10-11-utc). |
 | **461 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery evaluation and bounded live checks** | [Fixtures, probes, scoring and runners](eval/README.md) are implemented. Luna/max checks produced partial native results; the final project attempt recovered the task after one checkpoint, then rejected a second note with a misattributed quotation. The full two-arm baseline is deferred under the reduced evaluation budget. |
@@ -67,7 +68,21 @@ The final minimal project check used a 600-second writer deadline and a 32,768-t
 
 The [validation record](docs/context-memory/validation.md) separates offline regressions, real-provider runs, failures and unmeasured cases. The [roadmap](docs/context-memory/roadmap.md) tracks recovery accuracy, compaction pause, token overhead and host footprint. Multi-day quality, near-window behavior and systematic provider comparisons remain unmeasured.
 
-## Build and run
+## Install the extension
+
+Official Pi **1.1.0**, Node.js 22.19 or newer and a fresh persistent text session are required.
+
+```sh
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi remove git:github.com/youxi-huang/pi-context-compaction@extension-preview
+```
+
+Restart Pi after installing or updating. Finish a text turn, use `/compact`, then inspect `/compaction-status` and continue. This branch is the extension-only download channel; it leaves the official Pi executable in place. To pin this version, use `@extension-v0.3.1` instead. Git tags stay pinned; branch updates follow newer preview releases.
+
+The [preview guide](docs/context-memory/extension-preview.md) covers configuration, explicit failure recovery and unsupported workflows. Automatic compaction is cancelled and background cache warming is paused while the preview is enabled. Real-provider quality, interactive TUI behavior and Windows persistence have not been validated. Older resident/native checkpoints are not migrated.
+
+## Build the resident source for comparison
 
 Requirements: Node.js 22.19 or newer, npm, Git, curl and tar. Persistent sessions currently support macOS and Linux.
 
@@ -96,9 +111,9 @@ The **current session model writes the note by default**, so no second model con
 
 ## Status and compatibility
 
-This is an independently maintained experimental Pi distribution, built from source. Its upstream baseline is Pi **v1.1.0** (`abe508e1`), imported as a clean snapshot. The extension and its required host changes ship together; a publicly installable stock-Pi extension is a [planned pre-1.0 delivery](docs/context-memory/roadmap.md), followed by the mature compatibility and recovery contract at 1.0. That package is not yet implemented. The root `package.json` carries upstream workspace metadata and is not this project's version.
+The v0.3.1 preview is an ordinary extension with no private host patches. It targets official Pi **1.1.0** and manual compaction of fresh persistent text sessions, with its own blocking and recovery scope. The root `package.json` carries upstream workspace metadata; the package-only `extension-preview` branch and `extension-v0.3.1` tag carry the Pi extension manifest. The [roadmap](docs/context-memory/roadmap.md) separates this first public preview from the mature compatibility contract at 1.0.
 
-The latest tagged release, **v0.3.0**, moves the host baseline to Pi v1.1.0 and ships the recovery evaluation described above, with its partial live results and the full baseline still deferred. The [changelog](CHANGELOG.md) separates released changes from updates on `main`; the build instructions above use the release tag.
+The v0.3.0 resident source build uses Pi **v1.1.0** (`abe508e1`) and six host integrations. Its fingerprint and historical live evidence remain unchanged by the preview release. The source-build instructions above deliberately select v0.3.0. The [changelog](CHANGELOG.md) separates each released change and the [validation record](docs/context-memory/validation.md) keeps resident and preview evidence distinct.
 
 Notes, tool results and history can contain sensitive information. They remain in local session files, but relevant source content is sent to the writer during compaction and to the selected model when retrieved. History grants restrict this API; they are not an operating-system sandbox for agents with shell access.
 

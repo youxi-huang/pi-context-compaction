@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertFinalMainWorkflows } from "./context-memory-preview-release-checks.mjs";
 
-const root = fileURLToPath(new URL("../", import.meta.url));
+const sourceRoot = process.env.PI_CONTEXT_RELEASE_ROOT;
+assert(!sourceRoot || isAbsolute(sourceRoot), "Release source root must be absolute");
+const root = realpathSync(sourceRoot ?? fileURLToPath(new URL("../", import.meta.url)));
 const artifacts = join(root, ".artifacts");
 const packageDir = join(artifacts, "context-memory-preview-package");
 const repository = "youxi-huang/pi-context-compaction";
@@ -33,6 +36,8 @@ const version = manifest.version;
 const tag = `v${version}`;
 const packageTag = `extension-v${version}`;
 const sourceCommit = git("rev-parse", "HEAD");
+assert.equal(git("rev-parse", "--show-toplevel"), root, "Release source root must be the Git worktree root");
+const publicationToolingCommit = process.env.PI_CONTEXT_RELEASE_TOOLING_COMMIT ?? sourceCommit;
 assert.equal(git("status", "--porcelain"), "", "Release source must be clean");
 assert.equal(build.sourceCommit, sourceCommit, "Rebuild from the final clean source commit");
 assert.equal(pack.sourceCommit, sourceCommit);
@@ -68,7 +73,7 @@ const notes = `Pi Context Compaction ${tag} supplies an ordinary extension for *
 	+ `### Changes\n${section.replace(/^ —[^\n]*\n/, "").trim()}\n`;
 writeFileSync(join(artifacts, "context-memory-preview-release-notes.md"), notes);
 const provenance = {
-	version, sourceCommit, sourceTag: tag, packageTag, packageBranch: branch,
+	version, sourceCommit, publicationToolingCommit, sourceTag: tag, packageTag, packageBranch: branch,
 	build: build.build, sourceHash: build.sourceHash, sources: build.sources,
 	supportedPi: build.supportedPi, checkpointSchema: build.checkpointSchema,
 	packageFiles, stockAcceptance: { passed: acceptance.assertions.length, providers: "synthetic loopback only" },
@@ -87,20 +92,20 @@ async function api(path, method = "GET", body) {
 
 if (publish) {
 	assert.equal(process.env.GITHUB_REPOSITORY, repository);
-	assert.equal(process.env.GITHUB_REF_NAME, tag);
+	assert.equal(process.env.PI_CONTEXT_RELEASE_TAG ?? process.env.GITHUB_REF_NAME, tag);
 	assert(process.env.GH_TOKEN, "GitHub Actions publication token required");
-	assert.equal(git("rev-parse", `${tag}^{commit}`), sourceCommit);
+	assert.equal(git("rev-parse", `refs/tags/${tag}^{commit}`), sourceCommit);
 	git("fetch", "origin", "main");
 	git("merge-base", "--is-ancestor", sourceCommit, "origin/main");
+	assert(/^[0-9a-f]{40}$/.test(publicationToolingCommit), "Expected a publication tooling commit SHA");
+	git("merge-base", "--is-ancestor", publicationToolingCommit, "origin/main");
 	const checks = await api(`commits/${sourceCommit}/check-runs?per_page=100`);
 	for (const name of ["verify", "Analyze (actions)", "Analyze (c-cpp)", "Analyze (javascript-typescript)"]) {
 		const check = checks.check_runs.find((entry) => entry.name === name && entry.app.slug === "github-actions");
 		assert(check?.status === "completed" && check.conclusion === "success", `Final-commit check has not passed: ${name}`);
 	}
-	const runs = await api(`actions/runs?head_sha=${sourceCommit}&event=push&per_page=100`);
-	for (const path of [".github/workflows/context-memory.yml", "dynamic/github-code-scanning/codeql"]) {
-		assert(runs.workflow_runs.some((run) => run.head_branch === "main" && run.path === path && run.status === "completed" && run.conclusion === "success"), `Final main workflow has not passed: ${path}`);
-	}
+	const runs = await api(`actions/runs?head_sha=${sourceCommit}&per_page=100`);
+	assertFinalMainWorkflows(runs.workflow_runs, sourceCommit);
 	provenance.checks = checks.check_runs.filter((entry) => entry.app.slug === "github-actions" && ["verify", "Analyze (actions)", "Analyze (c-cpp)", "Analyze (javascript-typescript)"].includes(entry.name))
 		.map(({ name, conclusion, html_url }) => ({ name, conclusion, url: html_url }));
 }

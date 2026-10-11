@@ -167,3 +167,11 @@ those checks, rebuilds and tests the package on official Pi, creates the matchin
 push, and publishes a pre-release after all assets are uploaded. Existing public
 assets and tags are never overwritten. The resident runtime retains its
 v0.3.0 fingerprint because this release changes only the ordinary extension.
+
+If publication tooling needs a fix after a source tag was created, merge the
+fix through the normal PR checks. Retry **Publish extension preview** from that
+main commit using its `source_tag` workflow input, or push that commit to
+`release/publish-v<version>`. The job uses the reviewed tooling while rebuilding
+and testing the immutable source tag; provenance records both commits. No tag
+or existing public asset is replaced, and uploaded assets are not downloaded
+again for verification.

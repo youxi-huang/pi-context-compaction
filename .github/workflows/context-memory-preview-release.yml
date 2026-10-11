@@ -3,6 +3,13 @@ name: Publish extension preview
 on:
   push:
     tags: ['v*']
+    branches: ['release/publish-v*']
+  workflow_dispatch:
+    inputs:
+      source_tag:
+        description: Existing immutable source tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,6 +27,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
+      - name: Select source tag and preserve reviewed publication tooling
+        id: source
+        env:
+          PI_CONTEXT_TRIGGER_REF: ${{ github.ref_name }}
+          PI_CONTEXT_REQUESTED_TAG: ${{ inputs.source_tag }}
+        run: |
+          selected_tag="${PI_CONTEXT_REQUESTED_TAG:-${PI_CONTEXT_TRIGGER_REF#release/publish-}}"
+          [[ "$selected_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch origin main
+          tooling_commit="$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+          git merge-base --is-ancestor "$tooling_commit" origin/main
+          mkdir -p "$RUNNER_TEMP/context-preview-publisher"
+          cp scripts/context-memory-preview-release.mjs scripts/context-memory-preview-release-checks.mjs "$RUNNER_TEMP/context-preview-publisher/"
+          printf 'source_tag=%s\n' "$selected_tag" >> "$GITHUB_OUTPUT"
+          printf 'tooling_commit=%s\n' "$tooling_commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: refs/tags/${{ steps.source.outputs.source_tag }}
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
@@ -41,4 +68,7 @@ jobs:
       - name: Publish checked package and source archives
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/context-memory-preview-release.mjs --publish
+          PI_CONTEXT_RELEASE_ROOT: ${{ github.workspace }}
+          PI_CONTEXT_RELEASE_TAG: ${{ steps.source.outputs.source_tag }}
+          PI_CONTEXT_RELEASE_TOOLING_COMMIT: ${{ steps.source.outputs.tooling_commit }}
+        run: node "$RUNNER_TEMP/context-preview-publisher/context-memory-preview-release.mjs" --publish

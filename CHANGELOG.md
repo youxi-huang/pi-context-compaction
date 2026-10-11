@@ -6,6 +6,20 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.3.1] — 2026-10-11
+
+The maintainer selected a patch-version increment for this new capability, as an explicit version-policy exception. v0.3.1 delivers the first independent extension preview for official Pi 1.1.0, through a package-only Git branch and immutable package tag. It covers manual compaction of fresh persistent text sessions. The resident build keeps its v0.3.0 fingerprint and evaluation identity; its broader guarantees and historical live results are separate.
+
+### Added
+
+- Add an independent-extension preview for unmodified official Pi 1.1.0: manual compaction of completed persistent text turns, public-registry writers, validated source-linked checkpoints and current-branch history retrieval. A minimal extension-only package builder and isolated stock-Pi acceptance runner cover package downloads and lifecycle behavior. Distribute the five-file extension package through `extension-preview` and `extension-v0.3.1`, with GitHub Release archives, provenance and SHA256 checksums; no Pi executable or installed host file is replaced. See the [scope and recovery guide](docs/context-memory/extension-preview.md).
+- Persist pending and blocked preview attempts before writer calls; abort subsequent requests across new input, reload and reopening when a marker exists. Only an explicit manual retry with a matching checkpoint confirmed in the session JSONL clears the block. If initial marker storage cannot write any bytes, the failure is sticky in the current process but cannot be promised after restart once the storage fault is repaired. Preview guarantees are separate from resident disk-before-memory writes and cooperative leases.
+- Add `/compaction-recover` to confirm an already staged and saved checkpoint whose commit observation was interrupted; unmatched or unstaged failures remain blocked. Pause stock Pi background cache warming through its public decision event while the preview is enabled, because that transport bypasses agent request guards. User cache-warming settings remain intact.
+
+### Maintenance
+
+- Keep the recovery evaluator pinned to its existing resident runtime while excluding only the separately packaged `context-memory/preview/` directory from that runtime's file check. Shared note/history code, host files and fixture inputs remain frozen; focused Git-backed regressions verify those boundaries. The stock-Pi package has its own source fingerprint and acceptance evidence, and no historical evaluation result is relabeled as preview validation.
+
 ### Security
 
 - Update shell-quote from 1.10.0 to 1.12.0 in the sandbox example extension's standalone lockfile for GHSA-pqg4-j6r4-53mv, matching the root workspace lock. The sandbox example is not part of the coding-agent package or its bundle; a standalone `npm ci` and `npm audit` of that example report no vulnerabilities.
@@ -203,7 +217,8 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.0...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.1...main
+[v0.3.1]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...v0.3.0
 [v0.2.3]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3
 [v0.2.3 changes]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.2...v0.2.3

@@ -1,6 +1,6 @@
 # Agent instructions for this repository
 
-This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. It is not the Pi monorepo and it is not a Pi package. Upstream release, publishing, labeling and changelog rules do not apply here.
+This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. Its root is not a Pi package. A separate stock-Pi extension preview lives in `context-memory/preview/`; its package builder emits only the independent extension. Upstream release, publishing, labeling and changelog rules do not apply here.
 
 The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UPSTREAM_AGENTS.md). Their code-quality rules for TypeScript still hold in this repository: no `any`, top-level imports only, erasable TypeScript syntax only, no hardcoded key checks. Their commands, release process and issue conventions do not apply. Where this file and [CONTRIBUTING.md](CONTRIBUTING.md) say something different from the upstream file, this file wins.
 
@@ -9,9 +9,10 @@ The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UP
 | Location | Contents |
 | --- | --- |
 | `packages/coding-agent/src/extensions/context-memory/` | The compaction runtime: writer, notes, storage, leases, history retrieval, grants, events, policy. |
-| `packages/coding-agent/test/context-memory.test.ts` and `test/fixtures/context-memory-*` | The focused regressions for the runtime. |
+| `packages/coding-agent/test/context-memory*.test.ts` and `test/fixtures/context-memory-*` | The focused regressions for the resident runtime and independent preview. |
 | `scripts/context-memory-*.mjs`, `scripts/stamp-context-memory.mjs`, `scripts/security-regression-check.mjs` | Build stamping, model data, checks, migration and the event-log report. |
 | `docs/context-memory/` | Architecture, validation record, roadmap and the upstream delta. |
+| `eval/` | Project recovery fixtures, scoring and isolated evaluation runners. The independent preview has separate stock-Pi acceptance and is not part of the frozen resident-runtime comparison. |
 | Six host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
 | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `.github/` | Project documentation and CI. |
 
@@ -29,6 +30,12 @@ node scripts/security-regression-check.mjs
 ```
 
 The last two commands are the acceptance bar and are what CI runs. `context-memory-check.mjs` runs static checks and the context-memory regressions without calling a model. `security-regression-check.mjs` runs the host security regressions with synthetic input. Neither needs provider credentials.
+
+For changes to the independent preview, also build with
+`node scripts/context-memory-preview-build.mjs` and run
+`scripts/context-memory-preview-acceptance.mjs` against a clean official Pi
+1.1.0 npm installation. See [the preview guide](docs/context-memory/extension-preview.md).
+Do not use this repository's patched host as evidence of stock-Pi compatibility.
 
 Do not run the full upstream vitest suite or `npm test`; they include end-to-end tests that activate when provider credentials are present. Do not run live provider tests with credentials that are not yours. Simulated results and provider runs are reported as different things.
 

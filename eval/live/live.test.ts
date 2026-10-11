@@ -668,8 +668,7 @@ describe("measurement revision and judge isolation", () => {
 		expect(run.checkpoints[0].requests).toHaveLength(2);
 		expect(ledger.fatal).toBeUndefined();
 	});
-	// Temporary bounded CI diagnosis: retain the original cases and every assertion.
-	it.each([2, ...Array.from({ length: 40 }, () => 4 as const)] as const)(
+	it.each([2, 4] as const)(
 		"runs 18 paired chains and option-C judges at judge concurrency %i",
 		async (judgeConcurrency) => {
 			const responses = new Map<string, { text: string; cap: number; purpose: string }>();
@@ -684,7 +683,7 @@ describe("measurement revision and judge isolation", () => {
 			const result = await runLivePlan({
 				restartFrom,
 				judgeConcurrency,
-				outputDirectory: artifactDirectory("stage3-full-plan-"),
+				outputDirectory: artifactDirectory("stage3-full-plan-f3-99999-"),
 				approvalReference: "offline-preflight-only",
 				transport: {
 					mode: "scripted",

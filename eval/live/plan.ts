@@ -219,6 +219,14 @@ export async function runLivePlan(options: {
 				maxCalls: slot.limits.calls,
 				timeoutMs: slot.limits.milliseconds,
 			});
+			if (options.transport.mode === "scripted" && run.checkpoints.some((checkpoint) => checkpoint.error)) {
+				console.error("EVAL_BASELINE_CHECKPOINT_FAILURE", {
+					fixture: run.fixture,
+					arm: run.arm,
+					replicate: run.replicate,
+					checkpoints: run.checkpoints.map(({ id, status, error }) => ({ id, status, error })),
+				});
+			}
 			runs.push(run);
 			if (
 				[...run.checkpoints, ...run.probes].some((item) =>

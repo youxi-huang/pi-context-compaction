@@ -72,7 +72,7 @@ explicit support boundary, not an automatic recovery operation.
 
 ## Session protection
 
-Added after v0.3.2. A session is protected once this package holds a durable
+Added in v0.3.3. A session is protected once this package holds a durable
 claim on it: a checkpoint written by the preview (`details.kind` is
 `pi-context-memory` and `details.build` starts with `stock-preview`) anywhere in
 the session file, or a pending or blocked marker, or a same-process sticky

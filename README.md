@@ -8,7 +8,7 @@ Pi Context Compaction explores a more traceable handover for [Pi](https://github
 
 The goal is **continuity with a route back to the source**, not perfect memory.
 
-**Current release:** [v0.3.2](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.2) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It compacts on request (`/compact`) in persistent, text-only sessions. It does **not** compact automatically.
+**Current release:** [v0.3.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It compacts on request (`/compact`) in persistent, text-only sessions, and leaves sessions it cannot check to Pi. It does **not** compact automatically.
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
 
@@ -20,29 +20,27 @@ You need:
 - **Node.js 22.19 or newer**.
 - macOS or Linux. Windows has not been validated.
 
-Install the **fixed v0.3.2 extension package** from your terminal:
+Install the **fixed v0.3.3 extension package** from your terminal:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3
 ```
 
 That is the whole installation. You don't need to clone this repository, rebuild Pi or configure a second model. Restart Pi afterwards.
 
-**Why `extension-v0.3.2` and not `v0.3.2`?** They are different Git tags. `extension-v0.3.2` holds the small installable package. `v0.3.2` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
+**Why `extension-v0.3.3` and not `v0.3.3`?** They are different Git tags. `extension-v0.3.3` holds the small installable package. `v0.3.3` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
 
 The extension does not replace Pi's executable or copy its credentials. Authentication stays in Pi's own configuration.
 
 ## Your first session
 
-Start a **new, persistent, text-only** Pi session. Don't begin with an older session that already has native compaction checkpoints or image attachments. Those are outside this preview's scope, and v0.3.2 may block requests in such a session.
-
-In Pi, enter:
+Start a **new, persistent, text-only** Pi session. Pi shows one short line saying the preview is active. Then enter:
 
 ```text
-/compaction-status
+/compaction-doctor
 ```
 
-You should see the extension build, the writer it selected and a `state`. Nothing is sent to a model. `ready` means the extension found nothing blocking; **it does not mean the conversation is long enough to compact yet**.
+It checks, without calling a model or changing anything, that the extension loaded, that this is Pi 1.1.0, that the session is one the preview can handle, which writer it will use, and whether anything is blocking requests. `Result: ready` means nothing is in the way; **it does not mean the conversation is long enough to compact yet**, which is why the manual `/compact` line reads `unknown`.
 
 Keep working normally. Once the session has accumulated enough completed text history, ask for a checkpoint:
 
@@ -52,15 +50,11 @@ Keep working normally. Once the session has accumulated enough completed text hi
 
 Pi decides first whether there is anything to compact. By default it keeps the most recent 20,000 estimated tokens as they are (Pi's `compaction.keepRecentTokens` setting) and only compacts what lies before them. In a short session Pi answers `Nothing to compact (session too small)` before the extension is called. That is Pi saying "not yet", not a failed installation, and you don't need an artificial long conversation just to check that the extension loaded.
 
-After a successful checkpoint, check again:
+After a successful checkpoint, `/compaction-status` shows the checkpoint and reports the session as `protected`. From then on the agent can use `context_history` to search or read the original entries on the **current session branch**. Those entries stay in the session's JSONL file.
 
-```text
-/compaction-status
-```
+**One change to ordinary Pi behavior:** in the sessions the preview handles, Pi's automatic compaction is cancelled. When a long session reaches Pi's compaction point, requests pause until you run `/compact` yourself. The extension also pauses background cache warming there; normal provider prompt caching is unaffected.
 
-From then on the agent can use `context_history` to search or read the original entries on the **current session branch**. Those entries stay in the session's JSONL file.
-
-**One change to ordinary Pi behavior:** while the preview is enabled, Pi's automatic compaction is cancelled. When a long session reaches Pi's compaction point, requests pause until you run `/compact` yourself. The extension also pauses background cache warming; normal provider prompt caching is unaffected.
+**Older sessions are left alone.** If you open a session the preview never handled and cannot check, such as one with Pi's own checkpoints or with images, the preview says so once and stands aside. It records nothing, stops no request, and Pi's own compaction applies as before.
 
 ## Why keep the original evidence?
 
@@ -103,7 +97,7 @@ The [architecture](docs/context-memory/architecture.md) covers the note format, 
 
 The scope is deliberately narrow, so that its behavior can be tested and explained.
 
-**Supported in v0.3.2**
+**Supported in v0.3.3**
 
 - Official Pi **1.1.0**, with the extension installed independently of Pi.
 - Persistent, text-only sessions, either new or already handled by this preview, with one Pi process writing each session.
@@ -119,20 +113,20 @@ The scope is deliberately narrow, so that its behavior can be tested and explain
 - Concurrent writers, competing compactors, other context-rewriting extensions, or any Pi version other than 1.1.0.
 - Windows, long-running real-provider reliability, and recovery quality with real models.
 
-In v0.3.2, an unsupported session may have its **requests blocked** rather than fall back to Pi's native compactor. That is intended for sessions the extension is protecting, but it can also affect older sessions it never handled. Improving that is the main open item for the next preview. If you are evaluating the preview, start a fresh text session.
+What happens in an unsupported session depends on whether the preview already protects it. A session becomes **protected** once the preview has written a checkpoint for it or recorded a pending or failed attempt. A session it never protected and cannot check is left to Pi, as described above. A protected session that later gains an image or a checkpoint from another compactor, or is opened on another Pi version, keeps its **requests blocked** rather than fall back to Pi's native compactor; continue that work in a new text session and keep the old file.
 
 ## When something goes wrong
 
-Start with `/compaction-status`. It reports the extension build, the selected writer, checkpoint information, and whether requests are `ready`, `pending` or `blocked`, with a controlled error code.
+Start with `/compaction-doctor` for a plain-language check, or `/compaction-status` for the same findings as JSON: the extension build, the selected writer, checkpoint information, the session's protection, and whether requests are `ready`, `pending` or `blocked`, with a controlled error code. Each failure and each blocked input shows one notice that names the code, says whether requests are paused and gives the next step.
 
 If a compaction attempt fails because the note, its sources, the writer or the on-disk state could not be checked, **the extension does not publish an unchecked summary or quietly switch to another writer**. Requests stay paused across new input, `/reload` and reopening the session.
 
 Two commands do different jobs:
 
 - **`/compact`** retries the checkpoint once you have fixed the cause. The block clears only after the new checkpoint has been checked and found in the session file.
-- **`/compaction-recover`** is narrower. It confirms a checkpoint that Pi **already saved** after the extension staged it, when the final confirmation was interrupted. It cannot turn an unstaged writer failure into a success. In v0.3.2, use it only when `/compaction-status` reports `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED` or `CONTEXT_PREVIEW_PENDING`: run with nothing staged, it records a block of its own that only a successful `/compact` clears.
+- **`/compaction-recover`** is narrower. It confirms a checkpoint that Pi **already saved** after the extension staged it, when the final confirmation was interrupted. It cannot turn an unstaged writer failure into a success, and when there is nothing to confirm it says so and changes nothing.
 
-Sessions with old checkpoints from another compactor, image content or an unsupported Pi version usually need a new session; neither command migrates them. Please keep the original session file. Disabling or removing the extension ends its protection, but it is **not** a verified way to recover a blocked checkpoint.
+A protected session that gained old checkpoints from another compactor, image content or an unsupported Pi version needs a new session; neither command migrates it. Please keep the original session file. Disabling or removing the extension ends its protection, but it is **not** a verified way to recover a blocked checkpoint.
 
 [Usage and recovery](docs/context-memory/extension-preview.md) lists the exact supported cases, the configuration file and the special recovery conditions.
 
@@ -140,7 +134,7 @@ Sessions with old checkpoints from another compactor, image content or an unsupp
 
 Pi records one source per package repository. Installing the same repository with a different tag or branch **replaces** the recorded source; it never adds a second copy. Restart Pi after any install or update.
 
-The installation above is **pinned** to `extension-v0.3.2` and stays there until you install a different package tag.
+The installation above is **pinned** to `extension-v0.3.3` and stays there until you install a different package tag.
 
 To follow later previews automatically instead, install the **moving `extension-preview` branch**, which replaces the pinned tag:
 
@@ -164,23 +158,23 @@ pi remove git:github.com/youxi-huang/pi-context-compaction
 
 Updating or removing the package does not migrate, rewrite or delete sessions, and it leaves other packages and Pi's credentials alone.
 
-The [v0.3.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.2) also carries the extension archive, a source archive, checksums and provenance. The preview is distributed through Git, not npm.
+The [v0.3.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3) also carries the extension archive, a source archive, checksums and provenance. The preview is distributed through Git, not npm.
 
 ## What has been tested
 
-The project publishes failures and limits next to the passing checks. For v0.3.2 the record includes:
+The project publishes failures and limits next to the passing checks. For v0.3.3 the record includes:
 
 | Evidence | Scope |
 | --- | --- |
-| 147 context checks | 94 resident checks and 53 independent-preview regressions |
+| 163 context checks | 94 resident checks and 69 independent-preview regressions |
 | 461 host security and compatibility checks | Synthetic inputs and mocked providers |
 | 89 offline evaluator checks | Scripted evaluation, not real-provider quality |
-| 26 stock-Pi package and lifecycle checks | Install, update, removal, checkpoint validation, failure and recovery on an isolated official Pi 1.1.0 |
-| 83 default-settings scenario checks | Passed, with **17 known gaps** listed openly, including older sessions, notices and long-session overhead |
+| 27 stock-Pi package and lifecycle checks | Install, update, removal, the read-only self-check, checkpoint validation, failure and recovery on an isolated official Pi 1.1.0 |
+| 125 default-settings scenario checks | Passed beside stock-Pi controls, including older sessions, Pi 1.0.4 and notices; **2 known gaps** remain, both long-session request overhead |
 
 None of this shows better recovery than native Pi. The preview's acceptance and scenario runs use isolated synthetic and loopback services; they say nothing about real-provider latency, interactive TUI behavior or everyday robustness. Earlier live results belong to the resident build and are not preview results.
 
-The [validation record](docs/context-memory/validation.md) has the scenarios, methods, failed attempts and measured costs. The [roadmap](docs/context-memory/roadmap.md) says what remains open, and the [changelog](CHANGELOG.md) lists unreleased work on the default branch.
+The [validation record](docs/context-memory/validation.md) has the scenarios, methods, failed attempts and measured costs. The [roadmap](docs/context-memory/roadmap.md) says what remains open, and the [changelog](CHANGELOG.md) lists each release.
 
 ## For maintainers and contributors
 

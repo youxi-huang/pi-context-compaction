@@ -1,11 +1,12 @@
 # Validation record
 
-## Unreleased preview candidate: sessions it does not protect, 2026-10-12 UTC
+## v0.3.3 existing-session compatibility, 2026-10-12 UTC
 
-The candidate `stock-preview+src.9ca9dd2123d49293` (working tree after v0.3.2,
-package version string still 0.3.2) was tested on official npm Pi 1.1.0, with
-Pi 1.0.4 only for the other-version case. All services were synthetic and
-loopback; no real provider was contacted. It is not a release.
+The v0.3.3 preview runtime `stock-preview+src.9ca9dd2123d49293` was tested on
+official npm Pi 1.1.0, with Pi 1.0.4 only for the other-version case. All
+services were synthetic and loopback; no real provider was contacted. The source
+fingerprint does not include the package version, so the same runtime ID was
+measured before and after the version change to 0.3.3.
 
 | Command | Result |
 | --- | --- |
@@ -13,10 +14,12 @@ loopback; no real provider was contacted. It is not a release.
 | `node scripts/context-memory-preview-build.mjs` | Exit 0: five package files, no host runtime. The bundle adds one preview source file (`notices.ts`); `dist/extension.js` grows from 87 KB to 108 KB. |
 | `node scripts/context-memory-preview-acceptance.mjs` | Exit 0: 27 of 27, run from a temporary copy outside any Node project. The new case checks that `/compaction-doctor` and `/compaction-status` send no request and write no marker; removal uses the repository source without a ref. |
 | `node scripts/context-memory-preview-scenarios.mjs` with both official installations | Exit 0: 125 passed, 2 known gaps, no failures, no unexpectedly passing gaps, no skips; all 18 control checks behaved as stock Pi. |
-| `node --test scripts/context-memory-preview-release-checks.test.mjs` | Exit 0: 4 of 4. |
+| `node --test scripts/context-memory-preview-release-checks.test.mjs` | Exit 0: 7 of 7, including three checks that release notes install the fixed package tag alone and never put two Pi commands, or the fixed tag and the moving branch, in one copyable block. |
 | `node scripts/context-memory-ops.mjs eval --full` | Exit 0: 89 of 89 offline evaluator tests; the frozen-input gate did not trigger. |
 
-`preview --prepare` was not run: it requires a clean committed checkout.
+`node scripts/context-memory-ops.mjs preview`, including the local `--prepare`
+step that builds release archives and notes without publishing, exited 0 on the
+committed source.
 
 Fifteen of the 17 known gaps listed for v0.3.2 are now required checks. Sessions
 on Pi 1.0.4, in-memory sessions, sessions with a native checkpoint and sessions
@@ -36,6 +39,14 @@ unreadable configuration left `CONTEXT_CONFIG` markers that survived the fix, an
 blocked inputs showed two to four identical notices. Re-running the unchanged v0.3.2
 package through the isolated acceptance runner passed all 26 legacy checks; only
 the new self-check case failed, as expected.
+
+The new marker code was checked in both directions on official Pi 1.1.0. A
+`CONTEXT_PREVIEW_COMPACT_REQUIRED` marker written by v0.3.3 and opened with the
+v0.3.2 package kept requests blocked (v0.3.2 reads it as invalid), stayed on
+disk, and was cleared by an explicit `/compact` that wrote a checked
+checkpoint, after which requests were sent. A `CONTEXT_PREVIEW_UNSUPPORTED`
+marker written by v0.3.2 for the same threshold event and opened with v0.3.3
+showed one notice asking for `/compact` and recovered the same way.
 
 A probe package placed inside this repository and loaded by official Pi 1.0.4 read
 `VERSION` 1.1.0 from the patched workspace build; outside any Node project it read

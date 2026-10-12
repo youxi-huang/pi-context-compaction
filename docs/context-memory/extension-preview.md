@@ -1,19 +1,15 @@
-# Independent extension preview
+# Independent extension preview — v0.3.3
 
 This preview runs on unmodified official Pi **1.1.0** as an ordinary Pi package.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-This guide follows the repository's default branch. The latest release is
-**v0.3.2**. Passages marked **Unreleased** describe changes made after v0.3.2;
-the v0.3.2 package does not contain them.
-
 ## Install, update and remove
 
-With official Pi 1.1.0 already installed, install the pinned v0.3.2 package:
+With official Pi 1.1.0 already installed, install the pinned v0.3.3 package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -46,7 +42,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.3.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.2)
+The [v0.3.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3)
 also provides the extension `.tgz`, source archive, provenance and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
 published to npm; `private: true` prevents accidental registry publication and
@@ -55,25 +51,24 @@ preserves Pi credentials, other package registrations and session files.
 
 ## First use
 
-Start a new, persistent, text-only session and run:
+Start a new, persistent, text-only session. After Pi starts or reloads its
+extensions, the preview shows one short line saying it is active. Then run:
 
 ```text
-/compaction-status
+/compaction-doctor
 ```
 
-It prints JSON without calling a model or changing the session. `state: "ready"`
-means nothing is blocking requests; it does not mean Pi will accept `/compact`
-yet.
+It prints a short checklist: extension loaded, host version, session support,
+writer, manual `/compact` eligibility and any durable block. It calls no model,
+writes no failure record and does not change the session. Because Pi's own
+compaction settings are not visible to extensions, it reports Pi's side of
+`/compact` eligibility as `unknown` instead of guessing; `Result: ready` means
+nothing is blocking requests, not that Pi will accept `/compact` yet.
 
-**Unreleased:** `/compaction-doctor` prints the same findings as a short
-checklist: extension loaded, host version, session support, writer, manual
-`/compact` eligibility and any durable block. It calls no model and writes no
-failure record. Because Pi's own compaction settings are not visible to
-extensions, it reports Pi's side of `/compact` eligibility as `unknown` instead
-of guessing. `/compaction-status` keeps its earlier fields and adds `host`,
-`supportedHost`, `protection`, `reason` and `manualCompaction`; a pending
-attempt now reads `pending` rather than `blocked`. After Pi starts or reloads
-its extensions, the preview shows one short line saying it is active.
+`/compaction-status` prints the same findings as JSON. It keeps the fields of
+earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
+`reason` and `manualCompaction`; a pending attempt reads `pending` rather than
+`blocked`.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -84,7 +79,7 @@ about 31,000 estimated tokens of history.
 
 ## Which sessions the preview handles
 
-**Unreleased.** The preview distinguishes three kinds of session:
+The preview distinguishes three kinds of session:
 
 - **Protected:** the session has a checkpoint written by this preview, or a
   pending or failed attempt recorded by it. Every check below is strict, and a
@@ -108,9 +103,9 @@ supported session and keep the old file. An unreadable `pi-context-memory.json` 
 in an eligible session without recording a durable block, so fixing the file
 and restarting Pi is enough; in a protected session the block is recorded.
 
-v0.3.2 treats every session as protected: an unsupported session has its
-requests blocked, and a failure record is written wherever the session has a
-file.
+v0.3.2 and earlier treated every session as protected: an unsupported session
+had its requests blocked, and a failure record was written wherever the session
+had a file.
 
 ## Build from source
 
@@ -205,12 +200,10 @@ without calling a model.
 If Pi saved the checkpoint but the commit confirmation was interrupted, use
 `/compaction-recover`. It only confirms a current-leaf checkpoint with the exact
 staged candidate hash and unchanged sources, after note and disk validation.
-It cannot clear a writer failure or a checkpoint that was never staged.
-**Unreleased:** a refused `/compaction-recover` changes nothing. In v0.3.2,
-running it with nothing staged, including on a healthy session or right after a
-successful checkpoint, recorded a `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED` block that
-only a successful `/compact` cleared; with v0.3.2, use it only when
-`/compaction-status` reports that code or `CONTEXT_PREVIEW_PENDING`.
+It cannot clear a writer failure or a checkpoint that was never staged, and a
+refusal changes nothing. In v0.3.2 and earlier, running it with nothing staged,
+including on a healthy session, recorded a `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED`
+block that only a successful `/compact` cleared.
 
 If a blocked session ends exactly at an older successful checkpoint without a
 staged attempt, stock Pi may report `Already compacted` before invoking the
@@ -220,14 +213,14 @@ Initialization failures before any completed source turn, unsupported session
 formats and incompatible hosts require a fresh supported session after fixing
 the cause. Neither recovery command forces those cases through validation.
 
-**Unreleased:** each failure and each blocked input produces one notice, where
-v0.3.2 could repeat the same notice two to four times. The notice names the
-controlled error code, says what happened and whether requests are paused, and
-gives the next step; `/compact` is suggested only where it can help. Pi's
-automatic compaction request is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED`
-(earlier `CONTEXT_PREVIEW_UNSUPPORTED`). An older preview that reads this new
-code treats the record as invalid, which stays blocked until an explicit
-`/compact`.
+Each failure and each blocked input produces one notice (v0.3.2 could repeat
+the same notice two to four times). The notice names the controlled error code,
+says what happened and whether requests are paused, and gives the next step;
+`/compact` is suggested only where it can help. Pi's automatic compaction
+request is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
+`CONTEXT_PREVIEW_UNSUPPORTED`). After a rollback to v0.3.2, that record reads
+as invalid and stays blocked until an explicit `/compact`, which recovers it;
+a v0.3.2 record opened by v0.3.3 recovers the same way.
 
 Markers contain identifiers, hashes and controlled error codes, never note
 text, transcript content or credentials. Marker IO errors block the current
@@ -277,12 +270,12 @@ real-provider compatibility, semantic recovery quality, compaction latency or
 Windows behavior. No official Pi source, real account, existing user settings
 or session is modified by these isolated checks.
 
-**Unreleased:** acceptance copies the package to a temporary directory outside
+Acceptance copies the package to a temporary directory outside
 any Node project and runs every case there, keeping only `report.json` and
 per-case results in `--output-dir`. Inside this repository, once
 `npm run build:offline` has run, a package's Pi imports resolve to the
-repository's patched workspace build instead of the host under test; earlier
-acceptance runs from `.artifacts/` were exposed to that. The runner stops if
+repository's patched workspace build instead of the host under test; acceptance
+runs before v0.3.3 were exposed to that. The runner stops if
 its temporary directory sits inside a Node project.
 
 The scenario runner checks the same artifact under default Pi and extension

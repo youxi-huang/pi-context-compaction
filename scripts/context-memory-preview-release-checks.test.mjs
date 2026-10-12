@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertFinalMainWorkflows } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, releaseNotes } from "./context-memory-preview-release-checks.mjs";
 
 const sourceCommit = "534c8994ed17539ac97ed5712c36efe01268dffb";
 // GitHub's default CodeQL setup reports event=dynamic, including scans of main.
@@ -30,4 +30,24 @@ test("a missing, failed or unfinished main workflow blocks publication", () => {
 
 test("manual verification cannot replace the final main push verification", () => {
 	assert.throws(() => assertFinalMainWorkflows([{ ...mainRuns[0], event: "workflow_dispatch" }, mainRuns[1]], sourceCommit));
+});
+
+const repository = "youxi-huang/pi-context-compaction";
+const noteOptions = { repository, packageTag: "extension-v0.3.3", branch: "extension-preview" };
+const notes = releaseNotes({ ...noteOptions, tag: "v0.3.3", sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "### Fixed\n\n- Synthetic entry." });
+
+test("generated release notes install the fixed package tag alone in their first block", () => {
+	assert.doesNotThrow(() => assertReleaseNotes(notes, noteOptions));
+	assert.match(notes, /```sh\npi install git:github\.com\/youxi-huang\/pi-context-compaction@extension-v0\.3\.3\n```/);
+	assert.doesNotMatch(notes, /147 context checks|83 scenario checks/);
+});
+
+test("install, update and remove commands may not share a copyable block", () => {
+	const combined = "```sh\npi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3\npi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview\n```\n";
+	assert.throws(() => assertReleaseNotes(combined, noteOptions));
+});
+
+test("the first copyable block may not install the moving branch", () => {
+	const moving = "```sh\npi install git:github.com/youxi-huang/pi-context-compaction@extension-preview\n```\n";
+	assert.throws(() => assertReleaseNotes(moving, noteOptions));
 });

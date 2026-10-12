@@ -1,12 +1,13 @@
 # Diagram sources
 
-Three explanatory diagrams for the project [README](../../../README.md). Each one is hand-authored SVG; the PNG beside it is a 1600px-wide render and is what the README embeds. They are drawings, not screenshots or benchmark output.
+An introductory hero and three explanatory diagrams for the project [README](../../../README.md). They are drawings, not screenshots or benchmark output. The hero is supplied as a light and dark PNG pair. Each of the three explanatory diagrams is hand-authored SVG; the PNG beside it is a 1600px-wide render and is what the README embeds.
 
+- `pi-context-compaction-hero-editorial`: the introductory illustration, focused on tracing a checked handover back to the original failure and later user decision. Its short-handover comparison illustrates what could be lost; it is not a measured comparison with another compactor.
 - `source-linked-compaction`: the two layers, the active context after compaction and the session record on disk, with the write path and the `context_history` retrieval path between them.
 - `commit-gate`: the three checks that run before a checkpoint is published, and what happens on each outcome.
 - `recovery-example`: the values in the [documented provider scenario](../validation.md#real-provider-scenario), presented as an illustrative sequence in which one question needs two retrievals from two points in time.
 
-Every figure has a dark counterpart, `*-dark.svg` and `*-dark.png`, with identical geometry and wording and a palette picked for a dark canvas. The README selects between the two with a `<picture>` element and `prefers-color-scheme`. Descriptive alt text lives on the `<img>` tag in the README.
+Every figure has a dark PNG counterpart with identical geometry and wording and a palette picked for a dark canvas. The three explanatory diagrams also have `*-dark.svg` sources. The README selects between the two themes with a `<picture>` element and `prefers-color-scheme`. Descriptive alt text lives on the `<img>` tag in the README.
 
 ## Revising a diagram
 

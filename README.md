@@ -12,6 +12,11 @@ The goal is **continuity with a route back to the source**, not perfect memory.
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/pi-context-compaction-hero-editorial-dark.png">
+  <img src="docs/context-memory/assets/pi-context-compaction-hero-editorial.png" alt="An illustrative handover cites a port failure and a later user decision. The citations lead back to original session entries retained on disk, which the agent can read again on the current session branch.">
+</picture>
+
 ## Install in Pi
 
 You need:

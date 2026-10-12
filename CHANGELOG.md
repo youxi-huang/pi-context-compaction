@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- Add a light and dark introductory README illustration showing how a source-linked handover leads back to original session entries. The illustration follows the documented port example and is not a screenshot or benchmark comparison.
+
 ## [v0.3.3] — 2026-10-12
 
 v0.3.3 leaves sessions the independent preview never protected to Pi, reports each failure once with a next step, and adds a read-only first-use check. The maintainer selected a patch release for these corrections and the diagnostic additions that accompany them. The resident runtime, its fingerprint, the checkpoint schema and the evaluation pin are unchanged; the preview build ID changes with its sources.

@@ -2,15 +2,19 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection,
 	type CompactionEntry,
+	type ExtensionAPI,
+	type ExtensionContext,
 	estimateTokens,
 	type SessionEntry,
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
 import { freezeHistory, queryHistory } from "../src/extensions/context-memory/history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries } from "../src/extensions/context-memory/identity.ts";
 import {
@@ -21,8 +25,15 @@ import {
 	validateNote,
 } from "../src/extensions/context-memory/notes.ts";
 import type { PreviewCompaction, PreviewSession } from "../src/extensions/context-memory/preview/contracts.ts";
-import { assertPreviewSession, chooseCut } from "../src/extensions/context-memory/preview/controller.ts";
+import {
+	assertPreviewSession,
+	chooseCut,
+	PreviewMemoryController,
+	unsupportedReason,
+} from "../src/extensions/context-memory/preview/controller.ts";
+import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
+import { doctorReport } from "../src/extensions/context-memory/preview/notices.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -715,5 +726,350 @@ describe("independent extension preview: Pi recovery edits", () => {
 			.flatMap((entry) => entry.messages)
 			.reduce((sum, message) => sum + estimateTokens(message), 0);
 		expect(chooseCut(branch, budget)).toBe(branch.findIndex((entry) => entry.id === "retry-input"));
+	});
+});
+
+describe("independent extension preview: sessions it does not protect", () => {
+	type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
+	let root: string;
+	let agentDir: string;
+	let session: SyntheticSession;
+	let warnings: string[];
+	let previousAgentDir: string | undefined;
+	const model = {
+		id: "preview-test",
+		name: "Preview test",
+		provider: "preview-test",
+		api: "openai-completions",
+		baseUrl: "http://127.0.0.1:9/v1",
+		reasoning: false,
+		input: ["text"],
+		contextWindow: 128_000,
+		maxTokens: 8192,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	};
+	beforeEach(() => {
+		root = fs.mkdtempSync(join(tmpdir(), "pi-preview-protection-"));
+		agentDir = join(root, "agent");
+		fs.mkdirSync(agentDir);
+		session = new SyntheticSession(root);
+		warnings = [];
+		vi.spyOn(console, "warn").mockImplementation((text: unknown) => {
+			warnings.push(String(text));
+		});
+		previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+	});
+	afterEach(() => {
+		vi.restoreAllMocks();
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+	function context(abort = vi.fn()): ExtensionContext {
+		const value = {
+			sessionManager: session,
+			hasUI: false,
+			ui: { notify: vi.fn() },
+			abort,
+			model,
+			modelRegistry: { find: () => undefined, hasConfiguredAuth: () => false },
+			thinkingLevel: "off",
+			getSystemPrompt: () => "Synthetic system prompt.",
+			getContextUsage: () => ({ tokens: 1234, contextWindow: 128_000, percent: 1 }),
+			hasPendingMessages: () => false,
+			waitForIdle: async () => {},
+		};
+		return value as unknown as ExtensionContext;
+	}
+	function controller(options: { configError?: string; hostVersion?: string } = {}) {
+		return new PreviewMemoryController({
+			config: options.configError ? undefined : DEFAULT_MEMORY_CONFIG,
+			configError: options.configError,
+			failureStore: new PreviewFailureStore(agentDir),
+			hostVersion: options.hostVersion,
+		});
+	}
+	function markerPath(): string {
+		return join(
+			agentDir,
+			"context-memory-preview",
+			"failures",
+			`${createHash("sha256").update(session.getSessionId()).digest("hex")}.json`,
+		);
+	}
+	function messages(): AgentMessage[] {
+		return session.buildSessionProjection().messages;
+	}
+	function addImage(): void {
+		session.append({
+			type: "message",
+			id: "image-input",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: {
+				role: "user",
+				content: [
+					{ type: "text", text: "What does this show?" },
+					{ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+				],
+				timestamp: 3,
+			},
+		});
+	}
+	function addNativeCheckpoint(): void {
+		session.append({
+			type: "compaction",
+			id: "native-checkpoint",
+			parentId: session.getLeafId(),
+			timestamp,
+			summary: "Synthetic native summary.",
+			firstKeptEntryId: "source-1",
+			tokensBefore: 100,
+		});
+	}
+	function protect(): void {
+		const value = candidate(session);
+		value.details!.build = "stock-preview+test";
+		session.append(saved(session, value));
+	}
+	function loadPreview(): Map<string, Handler[]> {
+		const handlers = new Map<string, Handler[]>();
+		const pi = {
+			registerCommand: () => {},
+			registerTool: () => {},
+			on: (event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+			getActiveTools: () => [],
+			getAllTools: () => [],
+			appendEntry: () => {},
+		};
+		contextMemoryPreview(pi as unknown as ExtensionAPI);
+		return handlers;
+	}
+	async function emit(handlers: Map<string, Handler[]>, event: string, value: unknown, ctx: ExtensionContext) {
+		let result: unknown;
+		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
+		return result;
+	}
+
+	it("classifies host, persistence and content it cannot check", () => {
+		expect(unsupportedReason(session)).toBeUndefined();
+		expect(unsupportedReason(session, "1.0.4")).toBe("host");
+		const file = session.file;
+		session.file = undefined;
+		expect(unsupportedReason(session)).toBe("in-memory");
+		session.file = file;
+		addImage();
+		expect(unsupportedReason(session)).toBe("image");
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("classifies a native checkpoint as foreign and keeps the migration error", () => {
+		addNativeCheckpoint();
+		expect(unsupportedReason(session)).toBe("foreign-checkpoint");
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_MIGRATION_REQUIRED/);
+	});
+	it("stands aside in an image session it never enrolled: no abort, no marker, one notice", () => {
+		addImage();
+		const preview = controller();
+		const abort = vi.fn();
+		const ctx = context(abort);
+		const input = messages();
+		expect(preview.context(input, ctx)).toBe(input);
+		preview.context(input, ctx);
+		preview.beforeRequest({ messages: [] }, ctx);
+		preview.notices.nextEpisode();
+		preview.context(input, ctx);
+		expect(abort).not.toHaveBeenCalled();
+		expect(fs.existsSync(markerPath())).toBe(false);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("image");
+		expect(warnings[0]).not.toContain("/compact");
+		expect(preview.status(ctx)).toMatchObject({ state: "inactive", protection: "not-protected", reason: "image" });
+	});
+	it("does not write a marker when Pi compacts a session it does not protect", () => {
+		addNativeCheckpoint();
+		const preview = controller();
+		const ctx = context();
+		preview.committed(
+			{
+				type: "session_compact",
+				compactionEntry: session.getLeafEntry() as CompactionEntry,
+				fromExtension: false,
+				reason: "manual",
+				willRetry: false,
+			},
+			ctx,
+		);
+		expect(fs.existsSync(markerPath())).toBe(false);
+		expect(preview.protected(ctx)).toBe(false);
+	});
+	it("keeps a protected session strict when an image appears, with one notice per input", () => {
+		protect();
+		addImage();
+		const preview = controller();
+		const abort = vi.fn();
+		const ctx = context(abort);
+		preview.context(messages(), ctx);
+		preview.context(messages(), ctx);
+		preview.beforeRequest({ messages: [] }, ctx);
+		expect(abort).toHaveBeenCalledTimes(3);
+		expect(JSON.parse(fs.readFileSync(markerPath(), "utf8"))).toMatchObject({
+			state: "blocked",
+			code: "CONTEXT_PREVIEW_UNSUPPORTED",
+		});
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("image");
+		expect(warnings[0]).not.toContain("/compact");
+		preview.notices.nextEpisode();
+		preview.context(messages(), ctx);
+		expect(warnings).toHaveLength(2);
+		expect(preview.status(ctx)).toMatchObject({ state: "blocked", protection: "protected", reason: "image" });
+	});
+	it("an unsupported host leaves unenrolled sessions alone but keeps a recorded block", () => {
+		const preview = controller({ hostVersion: "1.0.4" });
+		const abort = vi.fn();
+		const ctx = context(abort);
+		preview.context(messages(), ctx);
+		expect(abort).not.toHaveBeenCalled();
+		expect(fs.existsSync(markerPath())).toBe(false);
+		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		preview.context(messages(), ctx);
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(new PreviewFailureStore(agentDir).status(session).code).toBe("CONTEXT_NOTE_QUOTE");
+	});
+	it("an unreadable configuration stops requests without durably blocking an unenrolled session", () => {
+		const preview = controller({ configError: "CONTEXT_CONFIG" });
+		const abort = vi.fn();
+		const ctx = context(abort);
+		preview.context(messages(), ctx);
+		preview.beforeRequest({ messages: [] }, ctx);
+		expect(abort).toHaveBeenCalledTimes(2);
+		expect(fs.existsSync(markerPath())).toBe(false);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("pi-context-memory.json");
+		expect(warnings[0]).toContain("no lasting block is recorded");
+	});
+	it("fails closed when the session cannot be classified during a failed guard", () => {
+		const preview = controller({ configError: "CONTEXT_CONFIG" });
+		const abort = vi.fn();
+		session.getEntries = () => {
+			throw new Error("synthetic classification failure");
+		};
+		preview.context(messages(), context(abort));
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(fs.readFileSync(markerPath(), "utf8"))).toMatchObject({ code: "CONTEXT_CONFIG" });
+	});
+	it("/compaction-recover with nothing staged never creates a block", () => {
+		const preview = controller();
+		const ctx = context();
+		expect(() => preview.recover(ctx)).toThrow(/CONTEXT_PREVIEW_COMMIT_UNCONFIRMED/);
+		expect(fs.existsSync(markerPath())).toBe(false);
+		protect();
+		expect(() => preview.recover(ctx)).toThrow(/CONTEXT_PREVIEW_COMMIT_UNCONFIRMED/);
+		expect(fs.existsSync(markerPath())).toBe(false);
+		expect(preview.status(ctx)).toMatchObject({ state: "ready", protection: "protected" });
+	});
+	it("a refused /compaction-recover keeps the earlier failure and its code", () => {
+		const preview = controller();
+		const ctx = context();
+		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		expect(() => preview.recover(ctx)).toThrow(/CONTEXT_PREVIEW_COMMIT_UNCONFIRMED/);
+		expect(JSON.parse(fs.readFileSync(markerPath(), "utf8"))).toMatchObject({
+			state: "blocked",
+			code: "CONTEXT_NOTE_QUOTE",
+		});
+		expect(preview.status(ctx)).toMatchObject({ state: "blocked", code: "CONTEXT_NOTE_QUOTE" });
+	});
+	it("an unreadable configuration still records a durable block in a protected session", () => {
+		protect();
+		const preview = controller({ configError: "CONTEXT_CONFIG" });
+		const abort = vi.fn();
+		preview.context(messages(), context(abort));
+		expect(abort).toHaveBeenCalledTimes(1);
+		expect(JSON.parse(fs.readFileSync(markerPath(), "utf8"))).toMatchObject({ code: "CONTEXT_CONFIG" });
+	});
+	it("status keeps its fields and reports Pi's manual gate as unknown; a pending attempt reads as pending", () => {
+		const preview = controller();
+		const ctx = context();
+		expect(preview.status(ctx)).toMatchObject({
+			state: "ready",
+			enabled: true,
+			writerModel: "session",
+			writer: "preview-test/preview-test",
+			noteBudgetMode: "tiered",
+			manualOnly: true,
+			protection: "eligible",
+			manualCompaction: { preview: "ready", pi: "unknown", contextTokens: 1234 },
+		});
+		new PreviewFailureStore(agentDir).begin(session);
+		expect(preview.status(ctx)).toMatchObject({
+			state: "pending",
+			code: "CONTEXT_PREVIEW_PENDING",
+			protection: "protected",
+		});
+	});
+	it("the doctor reads without creating marker state and states each condition separately", () => {
+		const preview = controller();
+		const report = doctorReport(preview.diagnose(context()), { disabled: false, writerModel: "session" });
+		expect(fs.existsSync(join(agentDir, "context-memory-preview"))).toBe(false);
+		for (const label of ["extension: ok", "host: ok", "session: ok", "writer: ok", "durable block: ok"])
+			expect(report).toContain(label);
+		expect(report).toMatch(/manual \/compact: unknown/);
+		expect(report).toContain("Nothing to compact (session too small)");
+		expect(report).toContain("Result: ready");
+	});
+	it("does not latch a damaged session file into the process when only inspected", () => {
+		fs.writeFileSync(session.file!, `${JSON.stringify(session.header)}\n{truncated original`);
+		const store = new PreviewFailureStore(agentDir);
+		expect(store.inspect(session).state).toBe("blocked");
+		fs.writeFileSync(session.file!, "");
+		session.persist();
+		expect(store.inspect(session).state).toBe("ready");
+	});
+	it("automatic compaction is cancelled with an actionable code and reported once per input", async () => {
+		const handlers = loadPreview();
+		const abort = vi.fn();
+		const ctx = context(abort);
+		const event = {
+			type: "session_before_compact",
+			preparation: { tokensBefore: 115_000 },
+			branchEntries: session.getBranch(),
+			reason: "threshold",
+			willRetry: false,
+			signal: new AbortController().signal,
+		};
+		await emit(handlers, "input", { type: "input", text: "Continue.", source: "interactive" }, ctx);
+		expect(await emit(handlers, "session_before_compact", event, ctx)).toEqual({ cancel: true });
+		await emit(handlers, "session_compact_failed", { type: "session_compact_failed", aborted: true }, ctx);
+		await emit(handlers, "context", { type: "context", messages: messages() }, ctx);
+		await emit(handlers, "context_with_system", { type: "context_with_system", messages: messages() }, ctx);
+		expect(JSON.parse(fs.readFileSync(markerPath(), "utf8"))).toMatchObject({
+			state: "blocked",
+			code: "CONTEXT_PREVIEW_COMPACT_REQUIRED",
+		});
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("/compact");
+		expect(warnings[0]).not.toContain("UNSUPPORTED");
+		await emit(handlers, "input", { type: "input", text: "Continue again.", source: "interactive" }, ctx);
+		await emit(handlers, "context", { type: "context", messages: messages() }, ctx);
+		expect(warnings).toHaveLength(2);
+	});
+	it("leaves compaction and cache warming to Pi only where it does not protect the session", async () => {
+		const handlers = loadPreview();
+		const ctx = context();
+		const event = {
+			type: "session_before_compact",
+			preparation: { tokensBefore: 115_000 },
+			branchEntries: session.getBranch(),
+			reason: "threshold",
+			willRetry: false,
+			signal: new AbortController().signal,
+		};
+		const warming = { type: "cache_warming_decision", action: "warm" };
+		expect(await emit(handlers, "cache_warming_decision", warming, ctx)).toEqual({ action: "stop" });
+		addNativeCheckpoint();
+		expect(await emit(handlers, "cache_warming_decision", warming, ctx)).toBeUndefined();
+		expect(await emit(handlers, "session_before_compact", event, ctx)).toBeUndefined();
+		expect(fs.existsSync(markerPath())).toBe(false);
 	});
 });

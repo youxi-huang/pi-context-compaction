@@ -14,27 +14,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // preview: they are reported and do not fail the run. A listed check that starts passing fails the run
 // until it is removed from KNOWN_GAPS, so a fix cannot land without becoming a required regression.
 const KNOWN_GAPS = new Set([
-	"documented-first-compaction/ready-notice",
-	"threshold/notice-asks-for-compact",
-	"threshold/one-notice-per-input",
-	"image-input/text-after-image-sent",
-	"image-input/no-marker",
-	"image-input/notice-explains-image",
-	"native-checkpoint-session/no-marker-on-open",
-	"native-checkpoint-session/prompt-sent",
-	"enrolled-then-native/prompt-sent",
-	"enrolled-then-native/one-notice",
-	"in-memory-session/prompt-sent",
-	"other-pi-version/fresh-session-usable",
-	"other-pi-version/no-marker",
-	"failed-compaction-notices/one-notice-for-failure",
-	"failed-compaction-notices/one-notice-per-blocked-input",
 	"long-session-overhead/per-request-budget",
 	"long-session-overhead/bounded-growth",
 ]);
 
 const CASES = [
 	{ name: "documented-first-compaction", variants: ["extension"] },
+	{ name: "invalid-config", variants: ["extension"] },
 	{ name: "provider-retry", variants: ["extension", "control"] },
 	{ name: "provider-connection-drop", variants: ["extension", "control"] },
 	{ name: "provider-partial-drop", variants: ["extension", "control"] },
@@ -45,8 +31,10 @@ const CASES = [
 	{ name: "context-overflow", variants: ["extension", "control"] },
 	{ name: "threshold", variants: ["extension", "control"] },
 	{ name: "image-input", variants: ["extension", "control"] },
+	{ name: "protected-image", variants: ["extension"] },
 	{ name: "native-checkpoint-session", variants: ["extension"] },
 	{ name: "enrolled-then-native", variants: ["extension"] },
+	{ name: "protected-then-native", variants: ["extension"] },
 	{ name: "in-memory-session", variants: ["extension", "control"] },
 	{ name: "other-pi-version", variants: ["extension", "control"], otherHost: true },
 	{ name: "failed-compaction-notices", variants: ["extension"] },
@@ -100,11 +88,14 @@ async function worker() {
 
 	// The SDK has no UI here, so the extension's notices go to the console.
 	const notices = [];
+	// Command output (status JSON, doctor text) is collected separately while a command runs.
+	let commandOutput;
 	for (const level of ["log", "warn", "error"]) {
 		const original = console[level].bind(console);
 		console[level] = (...parts) => {
 			const text = parts.map(String).join(" ");
-			if (text.includes("context-memory preview")) notices.push(text);
+			if (commandOutput) commandOutput.push(text);
+			else if (text.includes("context-memory preview")) notices.push(text);
 			else original(...parts);
 		};
 	}
@@ -293,6 +284,17 @@ async function worker() {
 			return { ok: false, error: String(cause?.message ?? cause).slice(0, 200), sent: requests.slice(before).map((r) => r.kind), marker: marker(), notices: notices.slice(noticesBefore) };
 		}
 	}
+	// Runs one extension command and returns its own output; commands never reach the provider.
+	async function command(text) {
+		const before = requests.length;
+		commandOutput = [];
+		try {
+			await session.prompt(text);
+			return { output: commandOutput.join("\n"), sent: requests.slice(before).map((r) => r.kind), marker: marker() };
+		} finally {
+			commandOutput = undefined;
+		}
+	}
 	async function seed() {
 		const first = await prompt(SOURCE_TEXT);
 		const second = await prompt(BIG_LOG);
@@ -311,16 +313,134 @@ async function worker() {
 				const opened = await open(newSession());
 				observe("open fresh session", opened);
 				check("ready-notice", "A fresh session shows a ready notice that is not a failure", opened.notices.some((text) => !text.includes("blocked")), opened.notices);
+				check("one-open-notice", "Opening a fresh session shows a single preview notice", opened.notices.length === 1, opened.notices);
 				observe("turn 1", await prompt(SOURCE_TEXT));
-				// Pi's own 20k keep-recent gate rejects this before any extension hook; recorded, not asserted.
-				observe("one-turn /compact (host gate)", await compact());
+				const doctor = await command("/compaction-doctor");
+				observe("/compaction-doctor after one turn", doctor);
+				check("doctor-read-only", "The self-check calls no model and writes no failure marker", doctor.sent.length === 0 && doctor.marker === null, doctor);
+				check(
+					"doctor-separates-checks",
+					"The self-check reports extension, host, session, writer, manual-compaction and durable-block lines",
+					["extension", "host", "session", "writer", "manual /compact", "durable block"].every((label) => doctor.output.includes(label)),
+					doctor.output,
+				);
+				check("doctor-eligibility-unknown", "The self-check does not promise /compact will run; Pi's own history gate is reported as unknown", /manual \/compact[^\n]*unknown/.test(doctor.output), doctor.output);
+				// A curious user may try the recovery command on a healthy session; it must change nothing.
+				const recover = await command("/compaction-recover");
+				observe("/compaction-recover on a healthy session", recover);
+				const afterRecover = await prompt("Continue after trying the recovery command.");
+				check(
+					"recover-harmless",
+					"/compaction-recover on a session with nothing staged records no block, and the next prompt is sent",
+					recover.sent.length === 0 && recover.marker === null && afterRecover.reached && afterRecover.marker === null,
+					{ recover, afterRecover },
+				);
+				check("recover-not-circular", "Its refusal does not send the user back to /compaction-recover", recover.output.length > 0 && !/run \/compaction-recover/.test(recover.output), recover.output);
+				const status = await command("/compaction-status");
+				let parsed;
+				try {
+					parsed = JSON.parse(status.output);
+				} catch {
+					parsed = undefined;
+				}
+				observe("/compaction-status after one turn", { status: parsed ?? status.output });
+				check(
+					"status-compatible",
+					"/compaction-status keeps its JSON fields and states protection and manual-compaction eligibility separately",
+					parsed !== undefined &&
+						["build", "enabled", "state", "writerModel", "writer", "noteBudgetMode", "manualOnly"].every((key) => key in parsed) &&
+						parsed.state === "ready" &&
+						parsed.protection === "eligible" &&
+						parsed.manualCompaction?.pi === "unknown" &&
+						status.sent.length === 0 &&
+						status.marker === null,
+					parsed ?? status.output,
+				);
+				// Pi's own 20k keep-recent gate rejects this before any extension hook.
+				const short = await compact();
+				observe("one-turn /compact (host gate)", short);
+				check(
+					"short-compact-harmless",
+					"A one-turn /compact is declined by Pi itself, with no preview error notice and no failure marker",
+					!short.ok && /Nothing to compact/.test(short.error) && short.marker === null && short.notices.length === 0,
+					short,
+				);
 				observe("turn 2 (large log)", await prompt(BIG_LOG));
 				const compacted = await compact();
 				observe("/compact", compacted);
 				check("extension-checkpoint", "With default settings and the documented history, /compact writes an extension checkpoint", compacted.ok && compacted.kind === "pi-context-memory", compacted);
+				const historyTool = session.agent.state.tools.find((tool) => tool.name === "context_history");
+				const history = await historyTool?.execute("synthetic-history-check", { operation: "read", entryId: sourceId() });
+				check("history-readable", "After the first checkpoint, the original user entry is readable from the same branch", JSON.stringify(history)?.includes("Do not deploy this synthetic service.") === true);
 				const next = await prompt("Which port did I approve?");
 				observe("turn 3", next);
 				check("next-prompt-sent", "The next prompt reaches the provider", next.reached, next);
+				await open(stock.SessionManager.open(manager.getSessionFile()));
+				const reopened = await prompt("Continue after reopening.");
+				check("reopen-usable", "The compacted session continues after reopening", reopened.completed && reopened.marker === null, reopened);
+				break;
+			}
+			case "invalid-config": {
+				// An unreadable configuration file must not leave durable marks on sessions the preview never enrolled.
+				writeSettings(true);
+				writeFileSync(join(agentDir, "pi-context-memory.json"), "{ synthetic invalid configuration");
+				await open(newSession());
+				const first = await prompt(SOURCE_TEXT);
+				observe("prompt with an unreadable configuration", first);
+				check("fails-closed", "An unreadable configuration stops the request instead of guessing the user's intent", !first.reached, first);
+				check("no-marker", "An unreadable configuration leaves no persistent marker on a session the preview never enrolled", first.marker === null, first.marker);
+				check("one-notice", "The blocked input shows one notice that names pi-context-memory.json and a restart", first.notices.length === 1 && first.notices[0].includes("pi-context-memory.json") && first.notices[0].includes("restart"), first.notices);
+				rmSync(join(agentDir, "pi-context-memory.json"));
+				await open(stock.SessionManager.open(manager.getSessionFile()));
+				const fixed = await prompt("Continue after fixing the configuration.");
+				observe("prompt after fixing the configuration and restarting", fixed);
+				check("usable-after-fix", "After the file is fixed and Pi restarts, the same session works without a recovery step", fixed.completed && fixed.marker === null, fixed);
+				break;
+			}
+			case "protected-image": {
+				// A session with a preview checkpoint stays strictly protected; an image cannot be checked.
+				writeSettings(true);
+				await open(newSession());
+				await seed();
+				const compacted = await compact();
+				check("fixture-protected", "The fixture session holds a preview checkpoint", compacted.ok && compacted.kind === "pi-context-memory", compacted);
+				const image = await prompt("What does this screenshot show?", { images: [{ type: "image", data: PNG, mimeType: "image/png" }] });
+				observe("image in a protected session", image);
+				check("image-blocked", "An image in a protected session is not sent", !image.reached, image);
+				check("marker-kept", "The protected session records a durable block", image.marker !== null, image.marker);
+				check("one-notice", "The blocked image input shows one notice", image.notices.length === 1, image.notices);
+				check("notice-explains-image", "The notice names the image and does not suggest a /compact retry that cannot help", image.notices.length === 1 && image.notices[0].includes("image") && !image.notices[0].includes("/compact"), image.notices);
+				const text = await prompt("Ignore the image and continue.");
+				observe("text after the image", text);
+				check("stays-blocked", "Later text input stays blocked; a protected session is never quietly released", !text.reached && text.marker !== null, text);
+				break;
+			}
+			case "protected-then-native": {
+				// A session with a preview checkpoint, compacted natively while the extension was removed.
+				writeSettings(true);
+				await open(newSession());
+				await seed();
+				const compacted = await compact();
+				check("fixture-protected", "The fixture session holds a preview checkpoint", compacted.ok && compacted.kind === "pi-context-memory", compacted);
+				const file = manager.getSessionFile();
+				writeSettings(false, { compaction: { keepRecentTokens: 1 } });
+				await open(stock.SessionManager.open(file));
+				await prompt("Keep checking without the extension.");
+				await prompt("Keep checking once more.");
+				observe("native /compact without the extension", await compact());
+				check("fixture-native-checkpoint", "The fixture session also holds a later native checkpoint", nativeCheckpoint(), entryTypes());
+				writeSettings(true);
+				const reopened = await open(stock.SessionManager.open(file));
+				const next = await prompt("Continue with the extension again.");
+				observe("reopen with the extension and prompt", { open: reopened, next });
+				check("stays-blocked", "A protected session that was compacted natively stays blocked instead of adopting the unchecked summary", !next.reached && next.marker !== null, next);
+				check("one-notice-per-input", "Opening and the blocked input each show at most one notice", reopened.notices.length <= 1 && next.notices.length <= 1, [...reopened.notices, ...next.notices]);
+				check(
+					"notice-points-to-new-session",
+					"The notice says checkpoints are not migrated and points to a new session instead of a /compact retry",
+					next.notices.length === 1 && next.notices[0].includes("new session") && !next.notices[0].includes("/compact"),
+					next.notices,
+				);
 				break;
 			}
 			case "provider-retry":
@@ -475,13 +595,18 @@ async function worker() {
 				observe("native /compact without the extension", await compact());
 				check("fixture-native-checkpoint", "The fixture session holds a native checkpoint", nativeCheckpoint(), entryTypes());
 				const file = manager.getSessionFile();
-				writeSettings(true);
+				// The user's own Pi compaction settings stay as they were.
+				writeSettings(true, { compaction: { keepRecentTokens: 1 } });
 				const reopened = await open(stock.SessionManager.open(file));
 				observe("reopen with the extension", { ...reopened, marker: marker() });
 				check("no-marker-on-open", "Opening a session the extension never enrolled writes no failure marker", marker() === null, marker());
+				check("one-notice-on-open", "Opening it says once that the preview is not active in this session", reopened.notices.length === 1 && !reopened.notices[0].includes("/compact"), reopened.notices);
 				const next = await prompt("Continue the old task.");
 				observe("turn 3", next);
 				check("prompt-sent", "The old session stays usable", next.reached, next);
+				const compacted = await compact();
+				observe("/compact in a session the preview does not protect", compacted);
+				check("compact-left-to-pi", "/compact in a session the preview does not protect is left to Pi and writes no marker", compacted.ok && compacted.kind === "native" && compacted.marker === null, compacted);
 				break;
 			}
 			case "enrolled-then-native": {

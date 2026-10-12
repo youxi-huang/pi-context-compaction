@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createConnection, createServer as createTcpServer } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -21,6 +22,8 @@ function fileHash(path) { return createHash("sha256").update(readFileSync(path))
 const packageDir = resolve(argument("--package-dir"));
 const stockRoot = resolve(argument("--stock-root"));
 const outputDir = resolve(argument("--output-dir"));
+// Workers receive the isolated working root as their --output-dir; the parent keeps only evidence in outputDir.
+let workDir = outputDir;
 const stockPackage = join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent");
 const workerCase = argument("--runtime-case", true);
 const installedPackage = resolve(argument("--installed-package-dir", true) ?? packageDir);
@@ -35,20 +38,20 @@ function environment(agentDir) {
 		PI_OFFLINE: "0", // Loopback Git and HTTP require transport; catalogs are separately disabled.
 		PI_TELEMETRY: "0",
 		PI_SKIP_VERSION_CHECK: "1",
-		npm_config_cache: join(outputDir, "npm-cache"),
+		npm_config_cache: join(workDir, "npm-cache"),
 		npm_config_offline: "true",
 		npm_config_audit: "false",
 		npm_config_fund: "false",
 		GIT_TERMINAL_PROMPT: "0",
 		GIT_CONFIG_NOSYSTEM: "1",
-		GIT_CONFIG_GLOBAL: join(outputDir, "empty-git-config"),
+		GIT_CONFIG_GLOBAL: join(workDir, "empty-git-config"),
 	};
 	if (process.env.SystemRoot) value.SystemRoot = process.env.SystemRoot;
 	return value;
 }
 
 async function command(program, parameters, options = {}) {
-	const child = spawn(program, parameters, { cwd: outputDir, env: environment(join(outputDir, "package-agent")), ...options, stdio: ["ignore", "pipe", "pipe"] });
+	const child = spawn(program, parameters, { cwd: workDir, env: environment(join(workDir, "package-agent")), ...options, stdio: ["ignore", "pipe", "pipe"] });
 	let stdout = "";
 	let stderr = "";
 	child.stdout.on("data", (data) => { stdout += data; });
@@ -98,7 +101,7 @@ function responseEvent(response, modelId, text, toolCall, promptTokens = 100) {
 }
 
 async function runtimeAcceptance() {
-	const caseDir = join(outputDir, "runtime", workerCase);
+	const caseDir = join(workDir, "runtime", workerCase);
 	mkdirSync(caseDir, { recursive: true });
 	const reuseAgentDir = argument("--reuse-agent-dir", true);
 	const agentDir = reuseAgentDir ?? join(caseDir, "agent");
@@ -204,6 +207,23 @@ async function runtimeAcceptance() {
 			assert.equal(requests.length, beforeRecovery, "Commit confirmation unexpectedly invoked a model");
 			await session.prompt("Continue checking the service locally.");
 			assert(requests.length > beforeRecovery, "Confirmed interrupted commit did not restore sending");
+		} else if (workerCase === "doctor-read-only") {
+			// First-use self-check: no provider, no marker, and no promise that Pi will accept /compact yet.
+			async function commandOutput(text) {
+				const printed = [];
+				const original = console.log;
+				console.log = (...parts) => { printed.push(parts.map(String).join(" ")); };
+				try { await session.prompt(text); } finally { console.log = original; }
+				return printed.join("\n");
+			}
+			const doctor = await commandOutput("/compaction-doctor");
+			const status = JSON.parse(await commandOutput("/compaction-status"));
+			assert.equal(requests.length, 0, "The self-check reached the local HTTP provider");
+			assert(!existsSync(marker), "The self-check wrote a failure marker");
+			for (const line of ["extension: ok", "host: ok - Pi 1.1.0", "session: ok", "writer: ok", "manual /compact: unknown", "durable block: ok - none"]) assert(doctor.includes(line), `Doctor output lacks "${line}"`);
+			assert.equal(status.state, "ready", "A fresh session did not report ready");
+			assert.equal(status.protection, "eligible", "A fresh session did not report eligible protection");
+			assert.equal(status.manualCompaction?.pi, "unknown", "Status claimed to know Pi's own compaction gate");
 		} else if (workerCase === "reopen-blocked") {
 			assert(existsSync(marker), "Reopen fixture did not contain persistent failure state");
 			await assertBlocked();
@@ -291,7 +311,27 @@ async function runtimeAcceptance() {
 	}
 }
 
+// Inside a Node project, the package's Pi imports can resolve to that project's own Pi build instead of the
+// host under test (here, the repository's patched workspace once `npm run build:offline` has run).
+function assertNoShadowingHost(directory) {
+	for (let current = directory; ; current = dirname(current)) {
+		for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "typebox"]) {
+			if (existsSync(join(current, "node_modules", name))) {
+				throw new Error(`${join(current, "node_modules", name)} would shadow the host under test; point TMPDIR outside any Node project`);
+			}
+		}
+		if (dirname(current) === current) return;
+	}
+}
+
 async function parentAcceptance() {
+	// Install, load and run the package from a directory outside any Node project, so only the official host is linked.
+	const isolatedRoot = realpathSync(mkdtempSync(join(tmpdir(), "pi-preview-acceptance-")));
+	const candidate = join(isolatedRoot, "package");
+	cpSync(packageDir, candidate, { recursive: true });
+	assertNoShadowingHost(candidate);
+	workDir = isolatedRoot;
+	const isolation = { packageCopy: "temporary directory outside any Node project", shadowingHost: "none" };
 	const report = { host: "official npm Pi 1.1.0", providers: "loopback HTTP synthetic only", assertions: [], limitations: ["A filesystem that cannot persist even the first marker cannot preserve that failure across restart; same-process fail-closed behavior is verified.", "Compatible rollback uses the same preview schema and code with temporary distribution metadata, not a historical released preview."] };
 	const stockFiles = ["package.json", "dist/bundle/cli.js", "dist/index.js", "dist/core/sdk.js", "dist/core/extensions/runner.js", "dist/core/session-manager.js"];
 	const originalStockHashes = Object.fromEntries(stockFiles.map((file) => [file, fileHash(join(stockPackage, file))]));
@@ -305,11 +345,11 @@ async function parentAcceptance() {
 			assert.equal(JSON.parse(readFileSync(join(stockPackage, "package.json"), "utf8")).version, "1.1.0");
 			assert(realpathSync(stockPackage).startsWith(`${realpathSync(stockRoot)}${sep}`), "Official host resolves outside the clean installation");
 			for (const file of ["core/sdk.js", "core/extensions/runner.js", "core/session-manager.js"]) assert(!readFileSync(join(stockPackage, "dist", file), "utf8").includes("CONTEXT_RESIDENT_REQUIRED"), "The supposedly stock runtime contains resident host changes");
-			const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+			const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
 			assert(Array.isArray(manifest.pi?.extensions) && manifest.pi.extensions.length === 1, "Candidate must expose one default extension entry");
 			for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "typebox"]) assert(!manifest.dependencies?.[name], `Host dependency ${name} was bundled as a runtime dependency`);
-			assert(!existsSync(join(packageDir, "node_modules")), "Candidate carries a second host dependency tree");
-			const build = JSON.parse(readFileSync(join(packageDir, "preview-build.json"), "utf8"));
+			assert(!existsSync(join(candidate, "node_modules")), "Candidate carries a second host dependency tree");
+			const build = JSON.parse(readFileSync(join(candidate, "preview-build.json"), "utf8"));
 			assert.equal(build.supportedPi, "1.1.0");
 			assert(build.build.startsWith("stock-preview+src."), "Candidate has no independent preview build identity");
 			assert.equal(build.sourceHash.slice(0, 16), build.build.split(".").at(-1), "Candidate build ID does not match its source fingerprint");
@@ -318,11 +358,11 @@ async function parentAcceptance() {
 			const lock = JSON.parse(readFileSync(join(stockRoot, "node_modules", ".package-lock.json"), "utf8"));
 			const provenance = lock.packages["node_modules/@earendil-works/pi-coding-agent"];
 			report.stockProvenance = { version: provenance.version, resolved: provenance.resolved, integrity: provenance.integrity, fileHashesBefore: originalStockHashes };
-			report.candidate = { build: build.build, sourceHash: build.sourceHash, manifestHash: fileHash(join(packageDir, "package.json")), entryHash: fileHash(join(packageDir, manifest.pi.extensions[0])), buildMetadataHash: fileHash(join(packageDir, "preview-build.json")), sources: build.sources, externalImports: build.externalImports };
+			report.candidate = { build: build.build, sourceHash: build.sourceHash, manifestHash: fileHash(join(candidate, "package.json")), entryHash: fileHash(join(candidate, manifest.pi.extensions[0])), buildMetadataHash: fileHash(join(candidate, "preview-build.json")), sources: build.sources, externalImports: build.externalImports };
 		});
-		const packageAgent = join(outputDir, "package-agent");
+		const packageAgent = join(workDir, "package-agent");
 		mkdirSync(packageAgent, { recursive: true });
-		const dummy = join(outputDir, "existing-dummy-package");
+		const dummy = join(workDir, "existing-dummy-package");
 		mkdirSync(dummy, { recursive: true });
 		writeFileSync(join(dummy, "package.json"), JSON.stringify({ name: "synthetic-existing-extension", type: "module", pi: { extensions: ["./extension.js"] } }));
 		writeFileSync(join(dummy, "extension.js"), "export default function existingExtension() {}\n");
@@ -335,11 +375,11 @@ async function parentAcceptance() {
 			assert(disk.packages.includes(dummy), "Package operation removed an unrelated existing extension");
 			assert.deepEqual(Object.fromEntries(Object.keys(dummyHashes).map((file) => [file, fileHash(join(dummy, file))])), dummyHashes, "Package operation changed the unrelated existing extension files");
 		}
-		const gitRoot = join(outputDir, "git-server");
+		const gitRoot = join(workDir, "git-server");
 		const remote = join(gitRoot, "owner", "preview.git");
-		const work = join(outputDir, "git-source");
+		const work = join(workDir, "git-source");
 		mkdirSync(dirname(remote), { recursive: true });
-		cpSync(packageDir, work, { recursive: true });
+		cpSync(candidate, work, { recursive: true });
 		await command("git", ["init", "-b", "extension-preview", work]);
 		await command("git", ["-C", work, "config", "user.name", "Synthetic acceptance"]);
 		await command("git", ["-C", work, "config", "user.email", "synthetic@example.invalid"]);
@@ -371,8 +411,8 @@ async function parentAcceptance() {
 		const stockCli = join(stockPackage, "dist", "bundle", "cli.js");
 		const cli = (parameters) => command(process.execPath, [stockCli, ...parameters], { env: environment(packageAgent) });
 		const stock = await import(pathToFileURL(join(stockPackage, "dist", "index.js")).href);
-		const settings = stock.SettingsManager.create(outputDir, packageAgent);
-		const pm = new stock.DefaultPackageManager({ cwd: outputDir, agentDir: packageAgent, settingsManager: settings });
+		const settings = stock.SettingsManager.create(workDir, packageAgent);
+		const pm = new stock.DefaultPackageManager({ cwd: workDir, agentDir: packageAgent, settingsManager: settings });
 		let downloaded;
 		const installedHead = () => command("git", ["-C", downloaded, "rev-parse", "HEAD"]).then((value) => value.trim());
 		await check("stock CLI downloads and persists the explicit extension-preview branch", async () => {
@@ -420,24 +460,25 @@ async function parentAcceptance() {
 			assertExistingSettingsPreserved();
 			return { ref: "preview-compatible-initial", commit };
 		});
-		const runtimeCases = ["success", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
+		const runtimeCases = ["doctor-read-only", "success", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
 		const results = new Map();
 		for (const name of runtimeCases) {
 			const value = await check(`official host runtime: ${name}`, async () => {
-				await command(process.execPath, [script, "--package-dir", packageDir, "--stock-root", stockRoot, "--output-dir", outputDir, "--installed-package-dir", downloaded ?? packageDir, "--runtime-case", name], { env: environment(join(outputDir, "runtime", name, "agent")) });
-				return JSON.parse(readFileSync(join(outputDir, "runtime", name, "result.json"), "utf8"));
+				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded ?? candidate, "--runtime-case", name], { env: environment(join(workDir, "runtime", name, "agent")) });
+				return JSON.parse(readFileSync(join(workDir, "runtime", name, "result.json"), "utf8"));
 			});
 			if (value) results.set(name, value);
 		}
 		for (const [name, fixture] of [["reopen-success", results.get("success")], ["reopen-blocked", results.get("bad-source")], ["recover-unobserved", results.get("unobserved-commit")]]) {
 			await check(`fresh process ${name}`, async () => {
 				assert(fixture, "Required runtime fixture did not pass");
-				await command(process.execPath, [script, "--package-dir", packageDir, "--stock-root", stockRoot, "--output-dir", outputDir, "--installed-package-dir", downloaded, "--runtime-case", name, "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
-				return JSON.parse(readFileSync(join(outputDir, "runtime", name, "result.json"), "utf8"));
+				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", name, "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
+				return JSON.parse(readFileSync(join(workDir, "runtime", name, "result.json"), "utf8"));
 			});
 		}
-		await check("stock CLI removes the package and future loader discovery", async () => {
-			await cli(["remove", source]);
+		await check("stock CLI removes the package by repository, whichever ref is installed", async () => {
+			// The documented command names only the repository; a pinned tag is installed at this point.
+			await cli(["remove", repositorySource]);
 			await settings.reload();
 			assert.deepEqual(settings.getGlobalSettings().packages, [dummy], "Remove did not preserve only the unrelated original package");
 			assert(!existsSync(downloaded), "Remove left the managed Git checkout installed");
@@ -450,19 +491,20 @@ async function parentAcceptance() {
 		if (report.stockProvenance) report.stockProvenance.fileHashesAfter = finalStockHashes;
 		await check("official CLI, SDK, runner and session storage bytes stayed unchanged", () => assert.deepEqual(finalStockHashes, originalStockHashes));
 		report.passed = report.assertions.length > 0 && report.assertions.every((value) => value.passed);
-		report.cleanup = { retained: ["report.json", "runtime/*/result.json"], removed: ["loopback Git server and source checkout", "managed test installation", "synthetic session/config/auth files", "temporary npm cache"] };
+		report.isolation = isolation;
+		report.cleanup = { retained: ["report.json", "runtime/*/result.json"], removed: ["isolated package copy", "loopback Git server and source checkout", "managed test installation", "synthetic session/config/auth files", "temporary npm cache"] };
 		writeFileSync(join(outputDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
-		for (const name of ["git-server", "git-source", "package-agent", "existing-dummy-package", "npm-cache"]) rmSync(join(outputDir, name), { recursive: true, force: true });
-		const runtimeDir = join(outputDir, "runtime");
+		const runtimeDir = join(workDir, "runtime");
+		rmSync(join(outputDir, "runtime"), { recursive: true, force: true });
 		if (existsSync(runtimeDir)) {
 			for (const name of readdirSync(runtimeDir)) {
-				const directory = join(runtimeDir, name);
-				const resultPath = join(directory, "result.json");
-				const result = existsSync(resultPath) ? readFileSync(resultPath) : undefined;
-				rmSync(directory, { recursive: true, force: true });
-				if (result) { mkdirSync(directory); writeFileSync(resultPath, result); }
+				const resultPath = join(runtimeDir, name, "result.json");
+				if (!existsSync(resultPath)) continue;
+				mkdirSync(join(outputDir, "runtime", name), { recursive: true });
+				writeFileSync(join(outputDir, "runtime", name, "result.json"), readFileSync(resultPath));
 			}
 		}
+		rmSync(isolatedRoot, { recursive: true, force: true });
 	}
 	if (!report.passed) process.exitCode = 1;
 }

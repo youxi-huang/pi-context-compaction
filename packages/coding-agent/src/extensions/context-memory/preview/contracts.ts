@@ -12,6 +12,36 @@ export interface PreviewAttempt {
 	sourceHash: string;
 }
 
+/** Why the preview stands aside in a session it never enrolled. Controlled values only. */
+export type InactiveReason = "host" | "in-memory" | "foreign-checkpoint" | "image" | "non-text" | "context-edit";
+
+export type Protection = "protected" | "eligible" | "not-protected";
+
+/** Pi's own manual-compaction gate is not visible through the public extension API. */
+export interface ManualCompaction {
+	/** What this preview requires: a completed turn, no queued input and no durable block. */
+	preview: "ready" | "waiting-for-turn" | "blocked" | "not-active";
+	/** Pi decides from its own settings whether enough older history exists. */
+	pi: "unknown";
+	contextTokens: number | null;
+	piDefaultKeepRecentTokens: number;
+}
+
+/** Read-only findings shared by /compaction-status and /compaction-doctor. */
+export interface PreviewDiagnosis {
+	build: string;
+	host: string;
+	supportedHost: string;
+	protection: Protection;
+	reason?: InactiveReason;
+	state: "ready" | "pending" | "blocked" | "inactive";
+	code?: string;
+	writer?: string;
+	writerError?: string;
+	checkpointId?: string;
+	manualCompaction: ManualCompaction;
+}
+
 export interface PreviewStatus {
 	state: "ready" | "pending" | "blocked";
 	code?: string;
@@ -21,6 +51,10 @@ export interface PreviewStatus {
 export interface PreviewFailureStoreContract {
 	assertReady(session: PreviewSession): void;
 	status(session: PreviewSession): PreviewStatus;
+	/** Like status, without latching a newly observed failure. */
+	inspect(session: PreviewSession): PreviewStatus;
+	/** Whether a pending/blocked record, or an unreadable one, exists for this session. Writes nothing. */
+	markerPresent(session: PreviewSession): boolean;
 	/** Only an explicit manual compaction may replace a previous failure marker. */
 	begin(session: PreviewSession, explicitRetry?: boolean): PreviewAttempt;
 	stage(session: PreviewSession, attempt: PreviewAttempt, candidate: PreviewCompaction): void;

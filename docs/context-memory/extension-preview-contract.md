@@ -1,7 +1,7 @@
 # Stock-Pi extension preview: implementation contract
 
-This is the implementation contract for the v0.3.1 independent-extension
-preview. The [installation guide](extension-preview.md) owns public usage and
+This is the implementation contract for the independent-extension preview,
+first delivered in v0.3.1. The [installation guide](extension-preview.md) owns public usage and
 publication instructions. Resident build fingerprints and the six host
 integration files remain unchanged; provider-quality validation is separate.
 
@@ -55,7 +55,9 @@ failure only after a newly validated checkpoint is confirmed on disk. A pending
 attempt whose commit outcome was not observed also requires explicit recovery.
 `/compaction-recover` may confirm an already staged checkpoint only when it is
 the current leaf, its note passes validation, and its candidate/source hashes
-match the marker and actual disk records. It never clears an unstaged failure.
+match the marker and actual disk records. It never clears an unstaged failure,
+and a refusal never creates or rewrites a marker; only a confirmation attempt
+on an existing record lets the failure store record its outcome.
 
 Config/IO/invalid-marker errors fail closed. Error markers store controlled codes,
 IDs and hashes, never model output, transcript text, note text or credentials.
@@ -67,6 +69,38 @@ refused by the initial candidate. The extension does not claim resident
 disk-before-memory ordering or leases covering writes by nonparticipating Pi.
 Deliberately disabling/removing the extension ends its protection; that is an
 explicit support boundary, not an automatic recovery operation.
+
+## Session protection
+
+Added after v0.3.2. A session is protected once this package holds a durable
+claim on it: a checkpoint written by the preview (`details.kind` is
+`pi-context-memory` and `details.build` starts with `stock-preview`) anywhere in
+the session file, or a pending or blocked marker, or a same-process sticky
+failure or active attempt. Content alone never removes protection.
+
+A session without such a claim is eligible when the host is official Pi 1.1.0,
+the session is persistent, its branch has only preview checkpoints, text
+content and validated failed-response omissions. Eligible sessions get the full
+request guards and manual compaction. A compaction attempt, including the
+cancellation of Pi's automatic compaction, writes a marker and makes the
+session protected. A request-guard failure that is not a support
+classification (for example an unreadable configuration) aborts that request
+and reports it, but writes no marker; it is checked again on the next request.
+
+A session without a claim that is not eligible is not protected. The preview
+stands aside: request hooks return the context unchanged and abort nothing,
+`session_before_compact` returns no result so Pi's own compaction runs, a
+`session_compact` of Pi's own summary is not treated as a commit of this
+package, cache warming follows Pi's setting, and `/compaction-recover` writes
+nothing. One informational notice per session and process explains why.
+
+In a protected session every existing rule holds: unsupported content, a
+foreign checkpoint or an unsupported host blocks requests and records a
+marker; recovery still requires a disk-confirmed checkpoint. If classifying a
+session fails, the request path falls back to the ordinary guards, which fail
+closed. `/compaction-status` and `/compaction-doctor` use a non-latching read of
+the marker and session file; neither creates marker state, calls a model or
+changes the session.
 
 ## Independent acceptance and integration
 

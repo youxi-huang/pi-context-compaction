@@ -3,10 +3,12 @@ import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
 import { freezeHistory, historyQuerySchema, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { noteSchema, validateNote } from "../notes.ts";
-import { PreviewMemoryController, previewErrorCode, reportPreviewError } from "./controller.ts";
+import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
+import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
 import { resolveWriterModel } from "./writer.ts";
 
+/** Output of a command the user asked for: the UI, or stdout without one. */
 function show(ctx: ExtensionContext, text: string, kind: "info" | "warning" = "info"): void {
 	try {
 		if (ctx.hasUI) ctx.ui.notify(text, kind);
@@ -32,8 +34,9 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		configError,
 		failureStore: new PreviewFailureStore(agentDir),
 	});
+	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
-		description: "Show the independent context-memory preview writer, checkpoint and persistent request state",
+		description: "Show the context-memory preview's writer, checkpoint, protection and request state as JSON",
 		handler: async (_args, ctx) => {
 			try {
 				show(ctx, JSON.stringify(controller.status(ctx), null, 2));
@@ -42,18 +45,45 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			}
 		},
 	});
+	pi.registerCommand("compaction-doctor", {
+		description: "Check whether the context-memory preview is loaded and usable here, without calling a model",
+		handler: async (_args, ctx) => {
+			try {
+				show(
+					ctx,
+					doctorReport(controller.diagnose(ctx), { disabled, configError, writerModel: config?.writerModel }),
+				);
+			} catch (error) {
+				reportPreviewError(ctx, previewErrorCode(error));
+			}
+		},
+	});
 	// Explicitly disabling this package ends its protection. Invalid config never takes this path.
-	if (config?.enabled === false) return;
+	if (disabled) return;
 
 	pi.registerCommand("compaction-recover", {
 		description: "Confirm an already saved, staged checkpoint after an interrupted commit observation",
 		handler: async (_args, ctx) => {
 			await ctx.waitForIdle();
+			const reason = controller.safeInactive(ctx);
+			if (reason) {
+				show(ctx, inactiveNotice(reason, controller.hostVersion));
+				return;
+			}
 			try {
 				controller.recover(ctx);
 				show(ctx, "context-memory preview: the staged checkpoint and its original sources were confirmed on disk.");
 			} catch (error) {
-				reportPreviewError(ctx, previewErrorCode(error));
+				const code = previewErrorCode(error);
+				show(
+					ctx,
+					recoverRefusedNotice(
+						code,
+						unsupportedReason(ctx.sessionManager, controller.hostVersion),
+						controller.hostVersion,
+					),
+					"warning",
+				);
 			}
 		},
 	});
@@ -65,20 +95,27 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			.filter((tool) => active.has(tool.name))
 			.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
 	});
+	// Each submitted input starts a new notice episode, so a blocked input is reported once.
+	pi.on("input", () => {
+		controller.notices.nextEpisode();
+	});
 	// Stock cache warming uses a separate registry stream and bypasses request guards.
-	// Explicitly stop it for this preview; throwing here would restore the stock decision.
-	pi.on("cache_warming_decision", () => ({ action: "stop" }));
+	// Stop it wherever this preview guards requests; throwing here would restore the stock decision.
+	pi.on("cache_warming_decision", (_event, ctx) =>
+		controller.safeInactive(ctx) ? undefined : { action: "stop" as const },
+	);
 	pi.on("session_start", (_event, ctx) => {
-		controller.guard(ctx, () => controller.assertReady(ctx));
-		if (config && config.writerModel !== SESSION_WRITER) {
+		controller.sessionStart(ctx);
+		if (config && config.writerModel !== SESSION_WRITER && !controller.safeInactive(ctx)) {
 			try {
 				resolveWriterModel(config, ctx.modelRegistry, ctx.model);
 			} catch (error) {
-				show(
-					ctx,
-					`context-memory preview: ${previewErrorCode(error)}. Correct the fixed writer before /compact.`,
-					"warning",
-				);
+				if (controller.notices.once("writer"))
+					notify(
+						ctx,
+						`context-memory preview: ${previewErrorCode(error)}. The fixed writer in pi-context-memory.json is not available; correct it and restart Pi before /compact.`,
+						"warning",
+					);
 			}
 		}
 	});
@@ -87,10 +124,17 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.on("before_provider_request", (event, ctx) => controller.beforeRequest(event.payload, ctx));
 	pi.on("session_before_compact", async (event, ctx) => {
 		try {
+			const reason = controller.safeInactive(ctx);
+			if (reason) {
+				// Not this package's session: leave manual and automatic compaction to Pi.
+				controller.standAside(ctx, reason);
+				return undefined;
+			}
+			if (event.reason === "manual") controller.notices.nextEpisode();
 			return { compaction: await controller.compact(event, ctx) };
 		} catch (error) {
 			// Cancellation is an explicit result because stock Pi swallows handler exceptions.
-			reportPreviewError(ctx, previewErrorCode(error, event.signal.aborted));
+			controller.reportBlocked(ctx, previewErrorCode(error, event.signal.aborted));
 			return { cancel: true };
 		}
 	});

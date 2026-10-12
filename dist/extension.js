@@ -273,11 +273,11 @@ var LINEAGE_SENTENCE_TOKENS = 50;
 function lineageSentence(text) {
   const flat = text.replace(/\s+/g, " ").trim();
   const cut = flat.search(/[.!?]\s|[.!?]$|[。！？]/u);
-  let sentence = cut >= 0 ? flat.slice(0, cut + 1) : flat;
-  if (textTokens(sentence) <= LINEAGE_SENTENCE_TOKENS) return sentence;
-  while (sentence.length > 1 && textTokens(`${sentence}\u2026`) > LINEAGE_SENTENCE_TOKENS)
-    sentence = sentence.slice(0, Math.floor(sentence.length * 0.8));
-  return `${sentence}\u2026`;
+  let sentence2 = cut >= 0 ? flat.slice(0, cut + 1) : flat;
+  if (textTokens(sentence2) <= LINEAGE_SENTENCE_TOKENS) return sentence2;
+  while (sentence2.length > 1 && textTokens(`${sentence2}\u2026`) > LINEAGE_SENTENCE_TOKENS)
+    sentence2 = sentence2.slice(0, Math.floor(sentence2.length * 0.8));
+  return `${sentence2}\u2026`;
 }
 function shrinkLineage(items) {
   if (items.length > 2) return [items[0], ...items.slice(2)];
@@ -462,6 +462,7 @@ import { getInitialSystemMessage } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
   convertToLlm,
+  DEFAULT_COMPACTION_SETTINGS,
   estimateTokens as estimateTokens2,
   VERSION
 } from "@earendil-works/pi-coding-agent";
@@ -538,7 +539,298 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.105cef2556da81ad";
+var PREVIEW_BUILD_ID = "stock-preview+src.9ca9dd2123d49293";
+
+// packages/coding-agent/src/extensions/context-memory/preview/notices.ts
+var SUPPORTED_PI = "1.1.0";
+var PREFIX = "context-memory preview";
+var RETRY = "run /compact to try again.";
+var NEW_SESSION = "keep this session file and continue in a new session.";
+var NEW_TEXT_SESSION = "keep this session file and continue in a new text-only session.";
+var NOTE_SIZE = {
+  what: "The handover note is larger than its allowed size, so no checkpoint was saved.",
+  next: RETRY
+};
+var CAPACITY = {
+  what: "The handover note and the retained context do not fit the model's context window.",
+  next: "run /compact again; if this repeats, use a model with a larger context window."
+};
+var MARKER = {
+  what: "The preview could not read or write its failure record in Pi's agent directory (context-memory-preview/).",
+  next: "check free space and permissions there, then run /compact."
+};
+var SESSION_FILE = {
+  what: "The session file could not be read back and checked.",
+  next: "keep the file and check the disk, then run /compact. If this repeats, continue in a new session."
+};
+var TOO_LARGE = { what: "The next request would exceed the model's input limit.", next: "run /compact." };
+var STORED = { what: "A checkpoint in this session no longer passes its checks.", next: NEW_SESSION };
+var ADVICE = {
+  CONTEXT_PREVIEW_COMPACT_REQUIRED: {
+    what: "Pi tried to compact this session automatically, but the preview only compacts when you ask.",
+    next: "run /compact."
+  },
+  CONTEXT_NOTE_QUOTE: {
+    what: "A quotation in the handover note does not appear in the entry it cites, so no checkpoint was saved.",
+    next: RETRY
+  },
+  CONTEXT_NOTE_SCOPE: {
+    what: "The handover note cites an entry that cannot be read on this branch, so no checkpoint was saved.",
+    next: RETRY
+  },
+  CONTEXT_NOTE_INVALID: {
+    what: "The handover note is not valid structured data, so no checkpoint was saved.",
+    next: RETRY
+  },
+  CONTEXT_NOTE_BUDGET: NOTE_SIZE,
+  CONTEXT_NOTE_FROZEN: NOTE_SIZE,
+  CONTEXT_NOTE_REPAIR_LOSS: NOTE_SIZE,
+  CONTEXT_WRITER_FAILED: {
+    what: "The note writer did not return a usable note, so no checkpoint was saved.",
+    next: RETRY
+  },
+  CONTEXT_WRITER_UNAVAILABLE: {
+    what: "The note writer set in pi-context-memory.json is not available.",
+    next: 'set writerModel to "session" or to a model Pi can reach, restart Pi, then run /compact.'
+  },
+  CONTEXT_WRITER_CAPACITY: CAPACITY,
+  CONTEXT_RECOVERY_TOO_LARGE: CAPACITY,
+  CONTEXT_CAPACITY: CAPACITY,
+  CONTEXT_COMPACTION_CANCELLED: { what: "Compaction was cancelled before a checkpoint was saved.", next: RETRY },
+  CONTEXT_SOURCE_CHANGED: {
+    what: "The session's original entries changed while they were being checked.",
+    next: "wait until Pi is idle and run /compact. If this repeats, keep the session file and continue in a new session."
+  },
+  CONTEXT_TOOL_BOUNDARY: {
+    what: "A turn or tool call is still unfinished.",
+    next: "let it finish, then run /compact."
+  },
+  CONTEXT_NO_CUT: {
+    what: "There is no completed history to compact yet.",
+    next: "continue working, then run /compact."
+  },
+  CONTEXT_NO_NEW_SOURCE: { what: "There is no new history to compact.", next: "continue working, then run /compact." },
+  CONTEXT_NO_MODEL_OR_SOURCE: {
+    what: "No model is selected, or there is no completed history to compact.",
+    next: "select a model and finish a turn, then run /compact."
+  },
+  CONTEXT_PREVIEW_PENDING: {
+    what: "An earlier compaction attempt did not finish.",
+    next: "run /compact to retry, or /compaction-recover if Pi already saved that checkpoint."
+  },
+  CONTEXT_PREVIEW_COMMIT_UNCONFIRMED: {
+    what: "Pi may have saved the checkpoint, but the preview could not confirm it on disk.",
+    next: "run /compaction-recover; if it is refused, run /compact."
+  },
+  CONTEXT_PREVIEW_MARKER_IO: MARKER,
+  CONTEXT_PREVIEW_MARKER_INVALID: MARKER,
+  CONTEXT_PREVIEW_SESSION_IO: SESSION_FILE,
+  CONTEXT_PREVIEW_SESSION_INVALID: SESSION_FILE,
+  CONTEXT_MIGRATION_REQUIRED: {
+    what: "This protected session now contains a checkpoint from another compactor, which the preview cannot check. Checkpoints are not migrated.",
+    next: NEW_SESSION
+  },
+  CONTEXT_CONFIG: {
+    what: "pi-context-memory.json in Pi's agent directory could not be read.",
+    next: "fix or remove that file, then restart Pi."
+  },
+  CONTEXT_INPUT_TOO_LARGE: TOO_LARGE,
+  CONTEXT_PAYLOAD_TOO_LARGE: TOO_LARGE,
+  CONTEXT_RECOVERY_MISSING: {
+    what: "The checked checkpoint is missing from the request, possibly because another extension changed the context.",
+    next: "disable extensions that rewrite the context, restart Pi, then run /compact."
+  },
+  CONTEXT_NOTE_VERSION: STORED,
+  CONTEXT_CONTINUATION_MISSING: STORED
+};
+function unsupportedAdvice(reason, version) {
+  switch (reason) {
+    case "host":
+      return {
+        what: `This protected session needs Pi ${SUPPORTED_PI}, and this is Pi ${version}.`,
+        next: `open this session with Pi ${SUPPORTED_PI} and run /compact there to clear the block, or ${NEW_SESSION}`
+      };
+    case "image":
+      return {
+        what: "This protected session now contains an image, which the preview cannot check.",
+        next: NEW_TEXT_SESSION
+      };
+    case "non-text":
+      return {
+        what: "This protected session now contains a non-text extension message, which the preview cannot check.",
+        next: NEW_TEXT_SESSION
+      };
+    case "context-edit":
+      return { what: "This protected session contains a context edit the preview cannot check.", next: NEW_SESSION };
+    default:
+      return {
+        what: "An earlier operation in this session was outside what the preview supports.",
+        next: "run /compact to confirm a new checkpoint."
+      };
+  }
+}
+function adviceFor(code, reason, version) {
+  if (code === "CONTEXT_PREVIEW_UNSUPPORTED") return unsupportedAdvice(reason, version);
+  return ADVICE[code] ?? {
+    what: "The preview could not confirm that it is safe to continue.",
+    next: "run /compaction-doctor for details."
+  };
+}
+function blockedNotice(code, durable, reason, version = SUPPORTED_PI) {
+  const advice = adviceFor(code, reason, version);
+  const impact = durable ? "Requests in this session are paused; new input, /reload and restarting Pi do not clear this." : "Requests stop until this is fixed; no lasting block is recorded.";
+  return `${PREFIX}: ${code}. ${advice.what} ${impact} Next: ${advice.next}`;
+}
+var INACTIVE = {
+  host: (version) => [
+    `it is validated only on Pi ${SUPPORTED_PI}, and this is Pi ${version}`,
+    `Use Pi ${SUPPORTED_PI} to try the preview.`
+  ],
+  "in-memory": () => ["this session has no session file", "Start Pi with a saved session to use the preview."],
+  "foreign-checkpoint": () => [
+    "this session already has a checkpoint from Pi's own compaction or another compactor, and checkpoints are not migrated",
+    "Start a new session to use source-linked compaction."
+  ],
+  image: () => [
+    "this session contains an image, and the preview supports text-only sessions",
+    "Start a new text-only session to use source-linked compaction."
+  ],
+  "non-text": () => [
+    "this session contains a non-text extension message, and the preview supports text-only sessions",
+    "Start a new text-only session to use source-linked compaction."
+  ],
+  "context-edit": () => [
+    "this session contains a context edit the preview does not support",
+    "Start a new session to use source-linked compaction."
+  ]
+};
+function inactiveNotice(reason, version) {
+  const [why, hint] = INACTIVE[reason](version);
+  return `${PREFIX} is not active in this session: ${why}. It has not changed this session, and Pi's own compaction applies here. ${hint}`;
+}
+function sentence(text) {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+function doctorReport(diagnosis, settings) {
+  const lines = [`${PREFIX} doctor (read-only: no model call, nothing written)`];
+  const line = (label, result, detail) => lines.push(`  ${label}: ${result} - ${detail}`);
+  const reason = diagnosis.reason;
+  const inactive = diagnosis.protection === "not-protected";
+  if (settings.disabled) {
+    line(
+      "extension",
+      "inactive",
+      `turned off by "enabled": false in pi-context-memory.json; Pi's own compaction applies`
+    );
+    lines.push("Result: inactive. Remove that setting and restart Pi to use the preview.");
+    return lines.join("\n");
+  }
+  line(
+    "extension",
+    settings.configError ? "blocked" : "ok",
+    settings.configError ? `pi-context-memory.json could not be read (${settings.configError}); fix or remove it, then restart Pi` : `loaded, build ${diagnosis.build}`
+  );
+  line(
+    "host",
+    diagnosis.host === diagnosis.supportedHost ? "ok" : inactive ? "inactive" : "blocked",
+    diagnosis.host === diagnosis.supportedHost ? `Pi ${diagnosis.host}, the validated release` : `Pi ${diagnosis.host}; this preview is validated only on Pi ${diagnosis.supportedHost}`
+  );
+  if (inactive && reason === "host") {
+    line("session", "inactive", "not checked on this Pi version; Pi's own compaction applies");
+  } else if (inactive && reason) {
+    line("session", "inactive", `${INACTIVE[reason](diagnosis.host)[0]}; Pi's own compaction applies`);
+  } else if (reason) {
+    line(
+      "session",
+      "blocked",
+      adviceFor(diagnosis.code ?? "CONTEXT_PREVIEW_UNSUPPORTED", reason, diagnosis.host).what
+    );
+  } else {
+    line(
+      "session",
+      "ok",
+      diagnosis.protection === "protected" ? "persistent text session, protected (it has a preview checkpoint or an attempt record)" : "persistent text session, eligible (protected from its first /compact)"
+    );
+  }
+  if (diagnosis.writerError) {
+    line(
+      "writer",
+      "blocked",
+      `${diagnosis.writerError}: ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`
+    );
+  } else if (diagnosis.writer) {
+    line(
+      "writer",
+      "ok",
+      settings.writerModel === "session" ? `the session model (${diagnosis.writer})` : `fixed writer ${diagnosis.writer}`
+    );
+  } else {
+    line(
+      "writer",
+      "unknown",
+      settings.configError ? "depends on pi-context-memory.json" : "no model is selected yet"
+    );
+  }
+  const manual = diagnosis.manualCompaction;
+  const tokens = manual.contextTokens === null || manual.contextTokens === 0 ? "" : ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`;
+  const gate = `Pi decides whether there is enough older history. It keeps the most recent ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} estimated tokens by default (compaction.keepRecentTokens) and answers "Nothing to compact (session too small)" until there is more, which is not a failure.${tokens}`;
+  if (manual.preview === "not-active")
+    line("manual /compact", "inactive", "handled by Pi's own compaction in this session");
+  else if (manual.preview === "blocked")
+    line("manual /compact", "blocked", `${diagnosis.code ?? "the block below"} has to be resolved first`);
+  else if (manual.preview === "waiting-for-turn")
+    line("manual /compact", "unknown", `the preview needs a finished turn with no queued input first; ${gate}`);
+  else line("manual /compact", "unknown", `the preview is ready; ${gate}`);
+  const durable = diagnosis.state === "pending" || diagnosis.state === "blocked" && diagnosis.protection === "protected";
+  if (durable && diagnosis.code) {
+    const advice = adviceFor(diagnosis.code, reason, diagnosis.host);
+    line("durable block", "blocked", `${diagnosis.code}. ${advice.what} Next: ${advice.next}`);
+  } else if (diagnosis.code) {
+    line("durable block", "ok", `none recorded; ${diagnosis.code} stops each request until its cause is fixed`);
+  } else {
+    line("durable block", "ok", "none");
+  }
+  if (inactive) lines.push("Result: inactive. Nothing was changed in this session; Pi's own compaction applies.");
+  else if (diagnosis.code)
+    lines.push(`Result: blocked. ${sentence(adviceFor(diagnosis.code, reason, diagnosis.host).next)}`);
+  else lines.push("Result: ready. Keep working, and run /compact once the conversation has grown.");
+  return lines.join("\n");
+}
+function recoverRefusedNotice(code, reason, version = SUPPORTED_PI) {
+  if (code === "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED") {
+    return `${PREFIX}: /compaction-recover found no checkpoint that Pi saved after the preview staged it (${code}), so there is nothing to confirm. It changed nothing. If requests are paused, run /compact to write a new checkpoint.`;
+  }
+  const advice = adviceFor(code, reason, version);
+  return `${PREFIX}: /compaction-recover could not confirm the staged checkpoint (${code}). ${advice.what} Next: ${advice.next}`;
+}
+function readyNotice(build) {
+  return `${PREFIX} is active (${build}). It compacts only when you run /compact; if Pi reaches its automatic compaction point, requests pause until you do. Run /compaction-doctor to check this session.`;
+}
+function notify(ctx, text, kind) {
+  try {
+    if (ctx.hasUI) ctx.ui.notify(text, kind);
+    else console.warn(text);
+  } catch {
+  }
+}
+var NoticeGate = class {
+  episode = 0;
+  blocked = /* @__PURE__ */ new Map();
+  shown = /* @__PURE__ */ new Set();
+  nextEpisode() {
+    this.episode++;
+  }
+  blockedOnce(sessionId) {
+    if (this.blocked.get(sessionId) === this.episode) return false;
+    this.blocked.set(sessionId, this.episode);
+    return true;
+  }
+  once(key) {
+    if (this.shown.has(key)) return false;
+    this.shown.add(key);
+    return true;
+  }
+};
 
 // packages/coding-agent/src/extensions/context-memory/preview/writer.ts
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
@@ -901,7 +1193,8 @@ var PREVIEW_CODES = /* @__PURE__ */ new Set([
   "CONTEXT_PREVIEW_MARKER_IO",
   "CONTEXT_PREVIEW_SESSION_INVALID",
   "CONTEXT_PREVIEW_SESSION_IO",
-  "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED"
+  "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED",
+  "CONTEXT_PREVIEW_COMPACT_REQUIRED"
 ]);
 function previewErrorCode(error, aborted = false) {
   const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -909,13 +1202,8 @@ function previewErrorCode(error, aborted = false) {
   if (matched && (PROJECT_CODES.has(matched) || PREVIEW_CODES.has(matched))) return matched;
   return aborted ? "CONTEXT_COMPACTION_CANCELLED" : "CONTEXT_WRITER_FAILED";
 }
-function reportPreviewError(ctx, code) {
-  const text = `context-memory preview: ${code}. Requests are blocked; use an explicit /compact retry after correcting the cause. New input and /reload do not clear this state.`;
-  try {
-    if (ctx.hasUI) ctx.ui.notify(text, "error");
-    else console.warn(text);
-  } catch {
-  }
+function reportPreviewError(ctx, code, durable = true, reason, version = VERSION) {
+  notify(ctx, blockedNotice(code, durable, reason, version), "error");
 }
 function assertToolPairs(messages) {
   const pending = /* @__PURE__ */ new Set();
@@ -996,33 +1284,43 @@ ${increments.map((note) => renderNote(note)).join("\n\n")}`;
   }
   return result;
 }
-function assertPreviewSession(session) {
-  if (VERSION !== "1.1.0") {
-    throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi 1.1.0");
-  }
-  if (!session.getSessionFile()) throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required");
+function isPreviewCheckpoint(entry) {
+  return entry.type === "compaction" && isRecord(entry.details) && entry.details.kind === CONTEXT_MEMORY_KIND && typeof entry.details.build === "string" && entry.details.build.startsWith("stock-preview");
+}
+function unsupportedReason(session, version = VERSION) {
+  if (version !== SUPPORTED_PI) return "host";
+  if (!session.getSessionFile()) return "in-memory";
   const branch = session.getBranch();
-  assertRecoveryEdits(branch);
-  for (const entry of branch) {
-    if (entry.type !== "compaction") continue;
-    if (!isRecord(entry.details) || entry.details.kind !== CONTEXT_MEMORY_KIND || typeof entry.details.build !== "string" || !entry.details.build.startsWith("stock-preview")) {
-      throw new Error(
-        "CONTEXT_MIGRATION_REQUIRED: start a new preview session; existing checkpoints are not migrated"
-      );
-    }
-    latestMemory(branch.slice(0, branch.indexOf(entry) + 1));
+  try {
+    assertRecoveryEdits(branch);
+  } catch {
+    return "context-edit";
   }
+  if (branch.some((entry) => entry.type === "compaction" && !isPreviewCheckpoint(entry))) return "foreign-checkpoint";
   for (const entry of branch) {
     if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-      if (entry.message.content.some((part) => part.type === "image")) {
-        throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview");
-      }
+      if (entry.message.content.some((part) => part.type === "image")) return "image";
     }
     if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-      if (entry.content.some((part) => part.type !== "text")) {
-        throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported");
-      }
+      if (entry.content.some((part) => part.type !== "text")) return "non-text";
     }
+  }
+  return void 0;
+}
+var UNSUPPORTED_ERRORS = {
+  host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi ${SUPPORTED_PI}`,
+  "in-memory": "CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required",
+  "context-edit": "CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported",
+  "foreign-checkpoint": "CONTEXT_MIGRATION_REQUIRED: start a new preview session; existing checkpoints are not migrated",
+  image: "CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview",
+  "non-text": "CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported"
+};
+function assertPreviewSession(session, version = VERSION) {
+  const reason = unsupportedReason(session, version);
+  if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
+  const branch = session.getBranch();
+  for (const [index, entry] of branch.entries()) {
+    if (entry.type === "compaction") latestMemory(branch.slice(0, index + 1));
   }
 }
 var PreviewMemoryController = class {
@@ -1033,25 +1331,61 @@ var PreviewMemoryController = class {
   observedFailures = /* @__PURE__ */ new Map();
   activeCompactions = /* @__PURE__ */ new Set();
   stagedCompactions = /* @__PURE__ */ new Set();
+  hostVersion;
   activeTools = () => [];
   lastProgress;
+  notices = new NoticeGate();
   constructor(options) {
     this.config = options.config;
     this.store = options.failureStore;
     this.configError = options.configError;
+    this.hostVersion = options.hostVersion ?? VERSION;
   }
   bindTools(tools) {
     this.activeTools = tools;
   }
-  status(ctx) {
-    const state = this.store.status(ctx.sessionManager);
-    let checkpointId;
-    let code = this.configError ?? this.stickyFailures.get(ctx.sessionManager.getSessionId()) ?? state.code;
+  /**
+   * A session is protected once this package has written a checkpoint for it or recorded a pending
+   * or failed attempt. Those durable claims, never content alone, decide strict blocking.
+   */
+  protected(ctx) {
+    const session = ctx.sessionManager;
+    const sessionId = session.getSessionId();
+    return this.stickyFailures.has(sessionId) || this.activeCompactions.has(sessionId) || session.getEntries().some(isPreviewCheckpoint) || this.store.markerPresent(session);
+  }
+  /** The reason this preview stands aside, for a session it does not protect and cannot check. */
+  inactive(ctx) {
+    const reason = unsupportedReason(ctx.sessionManager, this.hostVersion);
+    return reason && !this.protected(ctx) ? reason : void 0;
+  }
+  /** Request paths fail closed: if classification itself fails, the ordinary guards decide. */
+  safeInactive(ctx) {
     try {
-      assertPreviewSession(ctx.sessionManager);
-      checkpointId = latestMemory(ctx.sessionManager.getBranch())?.entry.id;
-    } catch (error) {
-      code = previewErrorCode(error);
+      return this.inactive(ctx);
+    } catch {
+      return void 0;
+    }
+  }
+  /** Read-only: calls no model, writes no marker and latches no failure. */
+  diagnose(ctx) {
+    const session = ctx.sessionManager;
+    const reason = unsupportedReason(session, this.hostVersion);
+    const isProtected = this.protected(ctx);
+    const inactive = reason !== void 0 && !isProtected;
+    let checkpointId;
+    let state = "inactive";
+    let code;
+    if (!inactive) {
+      const stored = this.store.inspect(session);
+      state = stored.state;
+      code = this.configError ?? this.stickyFailures.get(session.getSessionId()) ?? stored.code;
+      try {
+        assertPreviewSession(session, this.hostVersion);
+        checkpointId = latestMemory(session.getBranch())?.entry.id;
+      } catch (error) {
+        code = previewErrorCode(error);
+      }
+      if (code && code !== stored.code) state = "blocked";
     }
     let writer;
     let writerError;
@@ -1062,24 +1396,58 @@ var PreviewMemoryController = class {
         writerError = previewErrorCode(error);
       }
     }
+    let contextTokens = null;
+    try {
+      contextTokens = ctx.getContextUsage()?.tokens ?? null;
+    } catch {
+    }
+    const last = [...session.buildSessionProjection().messages].reverse().find((message) => message.role !== "system");
+    const turnComplete = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length") && !ctx.hasPendingMessages();
     return {
       build: PREVIEW_BUILD_ID,
-      enabled: this.config?.enabled ?? true,
-      state: code ? "blocked" : state.state,
+      host: this.hostVersion,
+      supportedHost: SUPPORTED_PI,
+      protection: inactive ? "not-protected" : isProtected ? "protected" : "eligible",
+      ...reason ? { reason } : {},
+      state,
       ...code ? { code } : {},
-      writerModel: this.config?.writerModel,
       writer,
       writerError,
       checkpointId,
+      manualCompaction: {
+        preview: inactive ? "not-active" : state !== "ready" ? "blocked" : turnComplete ? "ready" : "waiting-for-turn",
+        pi: "unknown",
+        contextTokens,
+        piDefaultKeepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
+      }
+    };
+  }
+  /** Machine-readable status. Earlier fields keep their names; protection and eligibility are additions. */
+  status(ctx) {
+    const diagnosis = this.diagnose(ctx);
+    return {
+      build: diagnosis.build,
+      enabled: this.config?.enabled ?? true,
+      state: diagnosis.state,
+      ...diagnosis.code ? { code: diagnosis.code } : {},
+      writerModel: this.config?.writerModel,
+      writer: diagnosis.writer,
+      writerError: diagnosis.writerError,
+      checkpointId: diagnosis.checkpointId,
       noteBudgetMode: this.config?.noteTokens === void 0 ? "tiered" : "fixed",
       noteRepair: this.config?.noteRepair,
       manualOnly: true,
-      lastWriter: this.lastProgress
+      lastWriter: this.lastProgress,
+      host: diagnosis.host,
+      supportedHost: diagnosis.supportedHost,
+      protection: diagnosis.protection,
+      ...diagnosis.reason ? { reason: diagnosis.reason } : {},
+      manualCompaction: diagnosis.manualCompaction
     };
   }
   assertReady(ctx) {
     if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-    assertPreviewSession(ctx.sessionManager);
+    assertPreviewSession(ctx.sessionManager, this.hostVersion);
     const sticky = this.stickyFailures.get(ctx.sessionManager.getSessionId());
     if (sticky) throw new Error(sticky);
     this.store.assertReady(ctx.sessionManager);
@@ -1095,20 +1463,65 @@ var PreviewMemoryController = class {
       this.stickyFailures.set(sessionId, previewErrorCode(error));
     }
   }
-  /** Stock Pi catches extension exceptions: abort is necessary before reporting any guard failure. */
+  /** At most one blocking notice per session for each user input or manual compaction attempt. */
+  reportBlocked(ctx, code, durable = true) {
+    try {
+      if (!this.notices.blockedOnce(ctx.sessionManager.getSessionId())) return;
+      reportPreviewError(
+        ctx,
+        code,
+        durable,
+        unsupportedReason(ctx.sessionManager, this.hostVersion),
+        this.hostVersion
+      );
+    } catch {
+    }
+  }
+  /** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
+  sessionStart(ctx) {
+    const reason = this.safeInactive(ctx);
+    if (reason) {
+      this.standAside(ctx, reason);
+      return;
+    }
+    if (this.guard(ctx, () => this.assertReady(ctx)) && this.notices.once("ready")) {
+      notify(ctx, readyNotice(PREVIEW_BUILD_ID), "info");
+    }
+  }
+  /** The preview leaves this session to Pi; say so once per session and process. */
+  standAside(ctx, reason) {
+    if (this.notices.once(`inactive:${ctx.sessionManager.getSessionId()}:${reason}`)) {
+      notify(ctx, inactiveNotice(reason, this.hostVersion), "info");
+    }
+  }
+  /**
+   * Stock Pi catches extension exceptions: abort is necessary before reporting any guard failure.
+   * A protected session records the failure durably; for a session the preview has not enrolled,
+   * only the current request is stopped and the check runs again next time.
+   */
   guard(ctx, operation) {
     try {
       operation();
       return true;
     } catch (error) {
       const code = previewErrorCode(error);
-      this.fail(ctx, code);
+      let durable = true;
+      try {
+        durable = this.protected(ctx);
+      } catch {
+      }
+      if (durable) this.fail(ctx, code);
       ctx.abort();
-      reportPreviewError(ctx, code);
+      this.reportBlocked(ctx, code, durable);
       return false;
     }
   }
   context(messages, ctx) {
+    const reason = this.safeInactive(ctx);
+    if (reason) {
+      this.standAside(ctx, reason);
+      return messages;
+    }
     let result = messages;
     this.guard(ctx, () => {
       this.assertReady(ctx);
@@ -1130,6 +1543,7 @@ var PreviewMemoryController = class {
     return result;
   }
   beforeRequest(payload, ctx) {
+    if (this.safeInactive(ctx)) return;
     this.guard(ctx, () => {
       this.assertReady(ctx);
       if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
@@ -1148,9 +1562,9 @@ var PreviewMemoryController = class {
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-      assertPreviewSession(ctx.sessionManager);
+      assertPreviewSession(ctx.sessionManager, this.hostVersion);
       if (event.reason !== "manual" || event.willRetry) {
-        throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: use manual compaction at a completed turn");
+        throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: this preview compacts only on an explicit /compact");
       }
       event.signal.throwIfAborted();
       const branch = structuredClone(ctx.sessionManager.getBranch());
@@ -1263,10 +1677,11 @@ var PreviewMemoryController = class {
     }
   }
   committed(event, ctx) {
-    this.activeCompactions.delete(ctx.sessionManager.getSessionId());
+    const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
+    if (!ours && !this.protected(ctx)) return;
     try {
-      assertPreviewSession(ctx.sessionManager);
+      assertPreviewSession(ctx.sessionManager, this.hostVersion);
       const memory = latestMemory(ctx.sessionManager.getBranch());
       if (!event.fromExtension || memory?.entry.id !== event.compactionEntry.id) {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
@@ -1278,17 +1693,21 @@ var PreviewMemoryController = class {
       const code = previewErrorCode(error);
       this.fail(ctx, code);
       ctx.abort();
-      reportPreviewError(ctx, code);
+      this.reportBlocked(ctx, code);
     }
   }
-  /** Reconcile a staged checkpoint that Pi saved but whose commit observation was interrupted. */
+  /**
+   * Reconcile a staged checkpoint that Pi saved but whose commit observation was interrupted.
+   * Only an existing pending or blocked record can be confirmed; a refusal never creates one,
+   * and failures inside the confirmation are recorded by the failure store itself.
+   */
   recover(ctx) {
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-      assertPreviewSession(ctx.sessionManager);
+      assertPreviewSession(ctx.sessionManager, this.hostVersion);
       const leaf = ctx.sessionManager.getLeafEntry();
       const memory = latestMemory(ctx.sessionManager.getBranch());
-      if (leaf?.type !== "compaction" || memory?.entry.id !== leaf.id) {
+      if (leaf?.type !== "compaction" || memory?.entry.id !== leaf.id || !this.store.markerPresent(ctx.sessionManager)) {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       }
       this.store.recover(ctx.sessionManager, leaf);
@@ -1296,9 +1715,7 @@ var PreviewMemoryController = class {
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());
       this.observedFailures.delete(ctx.sessionManager.getSessionId());
     } catch (error) {
-      const code = previewErrorCode(error);
-      this.fail(ctx, code);
-      throw new Error(code);
+      throw new Error(previewErrorCode(error));
     }
   }
   compactionFailed(event, ctx) {
@@ -1307,12 +1724,13 @@ var PreviewMemoryController = class {
     const staged = this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
     const code = specific ?? (event.aborted ? "CONTEXT_COMPACTION_CANCELLED" : staged ? "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED" : previewErrorCode(event.errorMessage));
     this.fail(ctx, code);
-    reportPreviewError(ctx, code);
+    this.reportBlocked(ctx, code);
   }
 };
 
 // packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts
 import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
+import { lstatSync as lstatSync2 } from "node:fs";
 import { join as join3, resolve as resolve3 } from "node:path";
 
 // packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts
@@ -1519,7 +1937,8 @@ var CODES = /* @__PURE__ */ new Set([
   "CONTEXT_PREVIEW_MARKER_IO",
   "CONTEXT_PREVIEW_SESSION_INVALID",
   "CONTEXT_PREVIEW_SESSION_IO",
-  "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED"
+  "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED",
+  "CONTEXT_PREVIEW_COMPACT_REQUIRED"
 ]);
 function digest(value) {
   return createHash3("sha256").update(value).digest("hex");
@@ -1625,10 +2044,11 @@ var PreviewFailureStore = class {
       throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO"));
     }
   }
-  readMarker(identity) {
+  readMarker(identity, create = true) {
     let data;
     try {
-      data = readBoundedFile(this.path(identity), MAX_MARKER_BYTES, "CONTEXT_PREVIEW_MARKER_INVALID");
+      const file = create ? this.path(identity) : join3(this.agentDir, "context-memory-preview", "failures", `${digest(identity.sessionId)}.json`);
+      data = readBoundedFile(file, MAX_MARKER_BYTES, "CONTEXT_PREVIEW_MARKER_INVALID");
     } catch (error) {
       if (missing(error)) return void 0;
       throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO"));
@@ -1673,9 +2093,28 @@ var PreviewFailureStore = class {
     throw new PreviewStoreError(code);
   }
   status(session) {
+    return this.evaluate(session, true);
+  }
+  /** The same evaluation without latching a newly observed failure; for read-only diagnostics. */
+  inspect(session) {
+    return this.evaluate(session, false);
+  }
+  /** A durable or same-process claim on this session. Never creates directories or files. */
+  markerPresent(session) {
+    const sessionId = session.getSessionId();
+    if (this.latched.has(sessionId) || this.recoveryMarkers.has(sessionId)) return true;
+    const file = join3(this.agentDir, "context-memory-preview", "failures", `${digest(sessionId)}.json`);
+    try {
+      lstatSync2(file);
+      return true;
+    } catch (error) {
+      return !(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR"));
+    }
+  }
+  evaluate(session, latch) {
     try {
       const identity = this.identity(session);
-      const marker = this.readMarker(identity);
+      const marker = this.readMarker(identity, latch);
       if (marker) return { state: marker.state, code: marker.code };
       const latched = this.latched.get(identity.sessionId);
       if (latched) return { state: "blocked", code: latched };
@@ -1691,7 +2130,7 @@ var PreviewFailureStore = class {
       return { state: "ready" };
     } catch (error) {
       const code = storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO");
-      this.latched.set(session.getSessionId(), code);
+      if (latch) this.latched.set(session.getSessionId(), code);
       return { state: "blocked", code };
     }
   }
@@ -1827,8 +2266,9 @@ function contextMemoryPreview(pi) {
     configError,
     failureStore: new PreviewFailureStore(agentDir)
   });
+  const disabled = config?.enabled === false;
   pi.registerCommand("compaction-status", {
-    description: "Show the independent context-memory preview writer, checkpoint and persistent request state",
+    description: "Show the context-memory preview's writer, checkpoint, protection and request state as JSON",
     handler: async (_args, ctx) => {
       try {
         show(ctx, JSON.stringify(controller.status(ctx), null, 2));
@@ -1837,16 +2277,43 @@ function contextMemoryPreview(pi) {
       }
     }
   });
-  if (config?.enabled === false) return;
+  pi.registerCommand("compaction-doctor", {
+    description: "Check whether the context-memory preview is loaded and usable here, without calling a model",
+    handler: async (_args, ctx) => {
+      try {
+        show(
+          ctx,
+          doctorReport(controller.diagnose(ctx), { disabled, configError, writerModel: config?.writerModel })
+        );
+      } catch (error) {
+        reportPreviewError(ctx, previewErrorCode(error));
+      }
+    }
+  });
+  if (disabled) return;
   pi.registerCommand("compaction-recover", {
     description: "Confirm an already saved, staged checkpoint after an interrupted commit observation",
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
+      const reason = controller.safeInactive(ctx);
+      if (reason) {
+        show(ctx, inactiveNotice(reason, controller.hostVersion));
+        return;
+      }
       try {
         controller.recover(ctx);
         show(ctx, "context-memory preview: the staged checkpoint and its original sources were confirmed on disk.");
       } catch (error) {
-        reportPreviewError(ctx, previewErrorCode(error));
+        const code = previewErrorCode(error);
+        show(
+          ctx,
+          recoverRefusedNotice(
+            code,
+            unsupportedReason(ctx.sessionManager, controller.hostVersion),
+            controller.hostVersion
+          ),
+          "warning"
+        );
       }
     }
   });
@@ -1854,18 +2321,25 @@ function contextMemoryPreview(pi) {
     const active = new Set(pi.getActiveTools());
     return pi.getAllTools().filter((tool) => active.has(tool.name)).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
   });
-  pi.on("cache_warming_decision", () => ({ action: "stop" }));
+  pi.on("input", () => {
+    controller.notices.nextEpisode();
+  });
+  pi.on(
+    "cache_warming_decision",
+    (_event, ctx) => controller.safeInactive(ctx) ? void 0 : { action: "stop" }
+  );
   pi.on("session_start", (_event, ctx) => {
-    controller.guard(ctx, () => controller.assertReady(ctx));
-    if (config && config.writerModel !== SESSION_WRITER) {
+    controller.sessionStart(ctx);
+    if (config && config.writerModel !== SESSION_WRITER && !controller.safeInactive(ctx)) {
       try {
         resolveWriterModel(config, ctx.modelRegistry, ctx.model);
       } catch (error) {
-        show(
-          ctx,
-          `context-memory preview: ${previewErrorCode(error)}. Correct the fixed writer before /compact.`,
-          "warning"
-        );
+        if (controller.notices.once("writer"))
+          notify(
+            ctx,
+            `context-memory preview: ${previewErrorCode(error)}. The fixed writer in pi-context-memory.json is not available; correct it and restart Pi before /compact.`,
+            "warning"
+          );
       }
     }
   });
@@ -1874,9 +2348,15 @@ function contextMemoryPreview(pi) {
   pi.on("before_provider_request", (event, ctx) => controller.beforeRequest(event.payload, ctx));
   pi.on("session_before_compact", async (event, ctx) => {
     try {
+      const reason = controller.safeInactive(ctx);
+      if (reason) {
+        controller.standAside(ctx, reason);
+        return void 0;
+      }
+      if (event.reason === "manual") controller.notices.nextEpisode();
       return { compaction: await controller.compact(event, ctx) };
     } catch (error) {
-      reportPreviewError(ctx, previewErrorCode(error, event.signal.aborted));
+      controller.reportBlocked(ctx, previewErrorCode(error, event.signal.aborted));
       return { cancel: true };
     }
   });

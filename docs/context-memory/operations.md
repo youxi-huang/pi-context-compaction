@@ -28,6 +28,9 @@ and report the discrepancy. Preview install/acceptance commands come from
 All child commands receive `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and
 `EVAL_MODEL_CALL_BUDGET=0`. Stock-Pi acceptance uses its existing isolated loopback
 services and synthetic credentials; it is not a real-provider result.
+Both preview runners load a copy of the package from a temporary directory
+outside any Node project, so its Pi imports reach the official host under test
+rather than this repository's workspace build; do not bypass that check.
 Both official Pi versions are installed only when their isolated cache is absent
 or incomplete. Scenarios report listed known gaps; new failures or a listed gap
 that starts passing fail the step until the gap becomes a required regression.

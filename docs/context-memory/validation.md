@@ -1,5 +1,76 @@
 # Validation record
 
+## v0.3.3 existing-session compatibility, 2026-10-12 UTC
+
+The v0.3.3 preview runtime `stock-preview+src.9ca9dd2123d49293` was tested on
+official npm Pi 1.1.0, with Pi 1.0.4 only for the other-version case. All
+services were synthetic and loopback; no real provider was contacted. The source
+fingerprint does not include the package version, so the same runtime ID was
+measured before and after the version change to 0.3.3.
+
+| Command | Result |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0: 163 focused checks (94 resident and 69 preview) and 461 host security checks. The resident fingerprint is unchanged. |
+| `node scripts/context-memory-preview-build.mjs` | Exit 0: five package files, no host runtime. The bundle adds one preview source file (`notices.ts`); `dist/extension.js` grows from 87 KB to 108 KB. |
+| `node scripts/context-memory-preview-acceptance.mjs` | Exit 0: 27 of 27, run from a temporary copy outside any Node project. The new case checks that `/compaction-doctor` and `/compaction-status` send no request and write no marker; removal uses the repository source without a ref. |
+| `node scripts/context-memory-preview-scenarios.mjs` with both official installations | Exit 0: 125 passed, 2 known gaps, no failures, no unexpectedly passing gaps, no skips; all 18 control checks behaved as stock Pi. |
+| `node --test scripts/context-memory-preview-release-checks.test.mjs` | Exit 0: 7 of 7, including three checks that release notes install the fixed package tag alone and never put two Pi commands, or the fixed tag and the moving branch, in one copyable block. |
+| `node scripts/context-memory-ops.mjs eval --full` | Exit 0: 89 of 89 offline evaluator tests; the frozen-input gate did not trigger. |
+
+`node scripts/context-memory-ops.mjs preview`, including the local `--prepare`
+step that builds release archives and notes without publishing, exited 0 on the
+committed source.
+
+Fifteen of the 17 known gaps listed for v0.3.2 are now required checks. Sessions
+on Pi 1.0.4, in-memory sessions, sessions with a native checkpoint and sessions
+with an image keep working with no failure marker, and `/compact` in them is left
+to Pi. Threshold cancellation, a failed compaction and each blocked input show one
+notice. New required checks cover an unreadable configuration (requests stop, no
+marker, usable after the fix and a restart), an image in a protected session and a
+protected session later compacted natively (both stay blocked, with one notice
+pointing to a new session), and a first-use journey: one notice on opening, a
+read-only self-check, a declined one-turn `/compact` with no notice or marker, a
+harmless `/compaction-recover` on a healthy session, the first checkpoint, history
+retrieval and reopening.
+
+Before the fix, the same new checks failed on the v0.3.2 package: `/compaction-recover`
+on a healthy session left a `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED` marker, an
+unreadable configuration left `CONTEXT_CONFIG` markers that survived the fix, and
+blocked inputs showed two to four identical notices. Re-running the unchanged v0.3.2
+package through the isolated acceptance runner passed all 26 legacy checks; only
+the new self-check case failed, as expected.
+
+The new marker code was checked in both directions on official Pi 1.1.0. A
+`CONTEXT_PREVIEW_COMPACT_REQUIRED` marker written by v0.3.3 and opened with the
+v0.3.2 package kept requests blocked (v0.3.2 reads it as invalid), stayed on
+disk, and was cleared by an explicit `/compact` that wrote a checked
+checkpoint, after which requests were sent. A `CONTEXT_PREVIEW_UNSUPPORTED`
+marker written by v0.3.2 for the same threshold event and opened with v0.3.3
+showed one notice asking for `/compact` and recovered the same way.
+
+A probe package placed inside this repository and loaded by official Pi 1.0.4 read
+`VERSION` 1.1.0 from the patched workspace build; outside any Node project it read
+1.0.4. Acceptance therefore now runs from a temporary copy and stops if a Pi
+installation could shadow the host under test.
+
+Long-session overhead is unchanged and remains a known gap: 358 ms per request at
+10 checkpoints (3.0 MB) and 1,153 ms at 20 (5.9 MB), against 370 ms and 1,104 ms
+for v0.3.2 in the same environment and about 4 ms without the extension. Profiling
+five requests on the 10-checkpoint session attributes about 80% of the time to
+`hashEntries` (JSON serialization): re-validating every stored checkpoint's source
+prefix accounts for most of it and the failure store's disk readback for the rest,
+and each runs in three request hooks. The new classification adds about 1 ms. Caching
+serializations or skipping readbacks would weaken tamper detection, and one-pass
+prefix hashing needs a change to shared note code that both the resident fingerprint
+and the frozen evaluation cover, so no optimization is included.
+
+A walkthrough drove the official Pi 1.1.0 CLI as a new user would: `pi install`
+from a loopback Git server, RPC sessions for `/compaction-doctor`, a declined
+short `/compact`, a first checkpoint after about 31,000 estimated tokens,
+`context_history` retrieval, a misquoting writer with one notice per blocked input
+across a restart, recovery through `/compact`, an older natively compacted session
+left to Pi, and `pi remove` by repository with session files unchanged.
+
 ## v0.3.2 retry compatibility, 2026-10-11
 
 The independent retry runtime `stock-preview+src.105cef2556da81ad` preserves

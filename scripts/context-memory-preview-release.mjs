@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertFinalMainWorkflows } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, releaseNotes } from "./context-memory-preview-release-checks.mjs";
 
 const sourceRoot = process.env.PI_CONTEXT_RELEASE_ROOT;
 assert(!sourceRoot || isAbsolute(sourceRoot), "Release source root must be absolute");
@@ -63,15 +63,11 @@ const packageFiles = expectedFiles.map((file) => ({ file, sha256: digest(readFil
 const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
 const section = changelog.split(`## [${tag}]`)[1]?.split("\n## [")[0];
 assert(section, "Release requires its own changelog section");
-const notes = `Pi Context Compaction ${tag} supplies an ordinary extension for **unmodified official Pi 1.1.0**.\n\n`
-	+ `Install or update the extension independently of Pi:\n\n\`\`\`sh\npi install git:github.com/${repository}@${branch}\npi update --extension git:github.com/${repository}@${branch}\n\`\`\`\n\n`
-	+ `Pin the package with \`@${packageTag}\`; source tag \`${tag}\` selects the development monorepo. Restart Pi and start a fresh persistent text session.\n\n`
-	+ `This pre-release supports manual compaction of completed text turns, source-linked history retrieval and explicit disk-confirmed failure recovery. Automatic compaction is cancelled and background cache warming is paused while enabled. Other checkpoint formats, parent-history grants, attachments, concurrent writers and Windows are outside its verified scope.\n\n`
-	+ `Ordinary Agent retries after transient provider failures are supported, including partial-response connection drops. Existing retry-related blocks and text-only context-overflow failures can use explicit /compact recovery when sufficient completed source history exists. Arbitrary context edits and unfinished tool-call omissions remain unsupported.\n\n`
-	+ `Validation: 147 context checks (94 resident + 53 preview), 461 host security checks, 89 offline evaluator tests, ${acceptance.assertions.length} actual stock-Pi package/lifecycle checks, and 83 scenario checks passed with 17 existing known gaps. Services are synthetic and loopback only. No real-provider quality, latency or interactive TUI claim is made.\n\n`
-	+ `Source commit: ${sourceCommit}. Preview runtime: \`${build.build}\`. Resident runtime keeps its v0.3.0 fingerprint.\n\n`
-	+ `[Usage and recovery](https://github.com/${repository}/blob/${tag}/docs/context-memory/extension-preview.md) · [Validation](https://github.com/${repository}/blob/${tag}/docs/context-memory/validation.md)\n\n`
-	+ `### Changes\n${section.replace(/^ —[^\n]*\n/, "").trim()}\n`;
+const notes = releaseNotes({
+	repository, branch, tag, packageTag, sourceCommit, build: build.build,
+	acceptanceChecks: acceptance.assertions.length, changes: section.replace(/^ —[^\n]*\n/, "").trim(),
+});
+assertReleaseNotes(notes, { repository, packageTag, branch });
 writeFileSync(join(artifacts, "context-memory-preview-release-notes.md"), notes);
 const provenance = {
 	version, sourceCommit, publicationToolingCommit, sourceTag: tag, packageTag, packageBranch: branch,

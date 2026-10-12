@@ -6,6 +6,35 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.3.3] — 2026-10-12
+
+v0.3.3 leaves sessions the independent preview never protected to Pi, reports each failure once with a next step, and adds a read-only first-use check. The maintainer selected a patch release for these corrections and the diagnostic additions that accompany them. The resident runtime, its fingerprint, the checkpoint schema and the evaluation pin are unchanged; the preview build ID changes with its sources.
+
+### Fixed
+
+- Installing the preview no longer blocks sessions it has never protected and cannot check: sessions on a Pi version other than 1.1.0, in-memory sessions, sessions with a native or other compactor's checkpoint, and sessions containing images, non-text extension messages or unsupported context edits. For these the preview writes no failure marker and stops no request; Pi's own manual and automatic compaction and cache warming apply, and one notice per session explains why. A session is protected once the preview has written a checkpoint for it or recorded a pending or failed attempt, and protected sessions keep every existing check: an image, a foreign checkpoint or an unsupported host still blocks them durably, and the work continues in a new supported session.
+- An unreadable `pi-context-memory.json` no longer leaves durable failure markers on sessions the preview had not protected. It stops each request until the file is fixed and Pi restarts; protected sessions still record the block.
+- Each failed compaction and each blocked input now produces one notice instead of two to four identical ones. Notices name the controlled error code, what happened, whether requests are paused and the next step, and suggest `/compact` only where a retry can help. No provider text, note text or local path is included.
+- Cancelling Pi's automatic compaction is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` with an instruction to run `/compact`, instead of `CONTEXT_PREVIEW_UNSUPPORTED`. After a rollback to v0.3.2, a marker with the new code reads as invalid and stays blocked until an explicit `/compact`, which recovers it; a v0.3.2 marker opened by v0.3.3 recovers the same way. Both directions were checked on official Pi 1.1.0.
+- `/compaction-recover` no longer blocks a session when there is nothing staged to confirm. In v0.3.2, running it on a healthy session, or right after a successful checkpoint, recorded a `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED` block that only a successful `/compact` cleared; on a blocked session it replaced the reported error code. A refusal now changes nothing, says what was checked and points to `/compact` instead of back to itself. Confirmation failures of a staged checkpoint are still recorded.
+- `/compaction-status` reports a pending attempt as `pending` rather than `blocked`. The fixed-writer warning shown at session start goes to stderr outside the terminal UI, so print-mode output stays clean.
+
+### Added
+
+- `/compaction-doctor`, a plain-language self-check that calls no model, writes no marker and does not change the session. It separates extension loading, host version, session support, writer, manual `/compact` eligibility and durable blocks. Pi's own history gate is reported as `unknown`, because Pi's compaction settings are not visible to extensions; the check explains Pi's default `compaction.keepRecentTokens` of 20,000 estimated tokens and its `Nothing to compact (session too small)` answer.
+- `/compaction-status` keeps its fields and adds `host`, `supportedHost`, `protection`, `reason` and `manualCompaction`. After Pi starts or reloads extensions, one short notice says the preview is active and that it compacts only on request.
+
+### Changed
+
+- Rewrite the README around one copyable install command for the fixed `extension-v0.3.3` package, with separate commands to follow the moving branch, update one package and remove it by repository. It explains that a plain `pi update` updates Pi itself, that Pi records one source per package repository, and that Pi declines `/compact` in short sessions before the extension runs. Split the configuration page into preview and resident behavior, fix its link back to the README, and update the roadmap's current status. Resident compatibility notes moved from the README to the configuration page.
+- Release notes install the fixed package tag alone in their first code block and suggest `/compaction-doctor`; they no longer repeat v0.3.2's test counts and point to the validation record instead. The notes come from a tested function in the release checks, and publication refuses notes in which a copyable block holds more than one Pi command or mixes the fixed tag with the moving branch.
+
+### Maintenance
+
+- Stock-Pi acceptance now copies the package to a temporary directory outside any Node project, runs every case there and refuses to start if a Pi installation could shadow the host under test. Inside this repository, after `npm run build:offline`, a package's Pi imports resolved to the patched workspace build: on official Pi 1.0.4 such a package read version 1.1.0. The unchanged v0.3.2 package passes all 26 legacy acceptance checks under the isolated runner. Acceptance adds a read-only first-use check and removes the package by repository source.
+- Fifteen of the 17 scenario known gaps are now required checks. New cases cover an unreadable configuration, an image in a protected session and a protected session compacted natively; the first-use journey checks the self-check, a declined one-turn `/compact`, history retrieval and reopening. The two remaining known gaps measure long-session request overhead, which profiling attributes to re-hashing checkpoint source prefixes and reading the session file back on each of three request hooks; it is unchanged by this work.
+- Add 16 focused preview regressions for session classification, durable and request-only blocks, fail-closed classification errors, notice limits, recovery refusals, status compatibility and the read-only diagnostics. The first-use scenario also runs `/compaction-recover` on a healthy session.
+
 ## [v0.3.2] — 2026-10-11
 
 v0.3.2 fixes ordinary Agent retries in the independent extension preview for official Pi 1.1.0. The resident runtime, checkpoint schema and evaluation pin remain unchanged.
@@ -232,7 +261,8 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.2...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.3...main
+[v0.3.3]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.2...v0.3.3
 [v0.3.2]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.1...v0.3.2
 [v0.3.1]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...v0.3.0

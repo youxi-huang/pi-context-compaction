@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries, isRecord } from "../identity.ts";
@@ -60,6 +61,7 @@ const CODES = new Set([
 	"CONTEXT_PREVIEW_SESSION_INVALID",
 	"CONTEXT_PREVIEW_SESSION_IO",
 	"CONTEXT_PREVIEW_COMMIT_UNCONFIRMED",
+	"CONTEXT_PREVIEW_COMPACT_REQUIRED",
 ]);
 
 interface Marker {
@@ -240,10 +242,13 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	private readMarker(identity: SessionIdentity): Marker | undefined {
+	private readMarker(identity: SessionIdentity, create = true): Marker | undefined {
 		let data: Buffer;
 		try {
-			data = readBoundedFile(this.path(identity), MAX_MARKER_BYTES, "CONTEXT_PREVIEW_MARKER_INVALID");
+			const file = create
+				? this.path(identity)
+				: join(this.agentDir, "context-memory-preview", "failures", `${digest(identity.sessionId)}.json`);
+			data = readBoundedFile(file, MAX_MARKER_BYTES, "CONTEXT_PREVIEW_MARKER_INVALID");
 		} catch (error) {
 			if (missing(error)) return undefined;
 			throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO"));
@@ -296,9 +301,32 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	status(session: PreviewSession): PreviewStatus {
+		return this.evaluate(session, true);
+	}
+
+	/** The same evaluation without latching a newly observed failure; for read-only diagnostics. */
+	inspect(session: PreviewSession): PreviewStatus {
+		return this.evaluate(session, false);
+	}
+
+	/** A durable or same-process claim on this session. Never creates directories or files. */
+	markerPresent(session: PreviewSession): boolean {
+		const sessionId = session.getSessionId();
+		if (this.latched.has(sessionId) || this.recoveryMarkers.has(sessionId)) return true;
+		const file = join(this.agentDir, "context-memory-preview", "failures", `${digest(sessionId)}.json`);
+		try {
+			lstatSync(file);
+			return true;
+		} catch (error) {
+			// Anything other than a confirmed absence counts as a claim, so unreadable state fails closed.
+			return !(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR"));
+		}
+	}
+
+	private evaluate(session: PreviewSession, latch: boolean): PreviewStatus {
 		try {
 			const identity = this.identity(session);
-			const marker = this.readMarker(identity);
+			const marker = this.readMarker(identity, latch);
 			if (marker) return { state: marker.state, code: marker.code };
 			const latched = this.latched.get(identity.sessionId);
 			if (latched) return { state: "blocked", code: latched };
@@ -315,7 +343,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			return { state: "ready" };
 		} catch (error) {
 			const code = storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO");
-			this.latched.set(session.getSessionId(), code);
+			if (latch) this.latched.set(session.getSessionId(), code);
 			return { state: "blocked", code };
 		}
 	}

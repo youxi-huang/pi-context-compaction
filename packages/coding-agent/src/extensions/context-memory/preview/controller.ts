@@ -2,7 +2,9 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getInitialSystemMessage, type Tool } from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection,
+	type CompactionEntry,
 	convertToLlm,
+	DEFAULT_COMPACTION_SETTINGS,
 	type ExtensionContext,
 	estimateTokens,
 	type SessionBeforeCompactEvent,
@@ -27,7 +29,14 @@ import {
 	shrinkLineage,
 } from "../notes.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
-import type { PreviewCompaction, PreviewFailureStoreContract, PreviewSession } from "./contracts.ts";
+import type {
+	InactiveReason,
+	PreviewCompaction,
+	PreviewDiagnosis,
+	PreviewFailureStoreContract,
+	PreviewSession,
+} from "./contracts.ts";
+import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
 import { modelName, resolveWriterModel, type WriterProgress, writeMemory } from "./writer.ts";
 
 const PREVIEW_CODES = new Set([
@@ -39,6 +48,7 @@ const PREVIEW_CODES = new Set([
 	"CONTEXT_PREVIEW_SESSION_INVALID",
 	"CONTEXT_PREVIEW_SESSION_IO",
 	"CONTEXT_PREVIEW_COMMIT_UNCONFIRMED",
+	"CONTEXT_PREVIEW_COMPACT_REQUIRED",
 ]);
 
 /** Neither provider error text nor model output enters the failure marker or UI. */
@@ -49,15 +59,15 @@ export function previewErrorCode(error: unknown, aborted = false): string {
 	return aborted ? "CONTEXT_COMPACTION_CANCELLED" : "CONTEXT_WRITER_FAILED";
 }
 
-export function reportPreviewError(ctx: ExtensionContext, code: string): void {
-	const text = `context-memory preview: ${code}. Requests are blocked; use an explicit /compact retry after correcting the cause. New input and /reload do not clear this state.`;
-	// Notification failures must never turn a cancelled compaction into stock fallback.
-	try {
-		if (ctx.hasUI) ctx.ui.notify(text, "error");
-		else console.warn(text);
-	} catch {
-		// The persistent marker and request abort remain authoritative.
-	}
+/** Notification failures must never turn a cancelled compaction into stock fallback. */
+export function reportPreviewError(
+	ctx: ExtensionContext,
+	code: string,
+	durable = true,
+	reason?: InactiveReason,
+	version = VERSION,
+): void {
+	notify(ctx, blockedNotice(code, durable, reason, version), "error");
 }
 
 export function assertToolPairs(messages: readonly AgentMessage[]): void {
@@ -97,7 +107,7 @@ export function chooseCut(
 }
 
 /** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
-function assertRecoveryEdits(branch: readonly SessionEntry[]): void {
+export function assertRecoveryEdits(branch: readonly SessionEntry[]): void {
 	let lastMessage: SessionEntry | undefined;
 	for (const entry of branch) {
 		if (entry.type === "context_edit") {
@@ -168,40 +178,56 @@ function withPendingNotes(
 	return result;
 }
 
-/** The preview neither migrates existing checkpoints nor accepts a second compactor's summary. */
-export function assertPreviewSession(session: PreviewSession): void {
-	if (VERSION !== "1.1.0") {
-		throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi 1.1.0");
-	}
-	if (!session.getSessionFile()) throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required");
+export function isPreviewCheckpoint(entry: SessionEntry): entry is CompactionEntry {
+	return (
+		entry.type === "compaction" &&
+		isRecord(entry.details) &&
+		entry.details.kind === CONTEXT_MEMORY_KIND &&
+		typeof entry.details.build === "string" &&
+		entry.details.build.startsWith("stock-preview")
+	);
+}
+
+/** Host or session content this preview cannot check. Read-only: no IO beyond the session object. */
+export function unsupportedReason(session: PreviewSession, version: string = VERSION): InactiveReason | undefined {
+	if (version !== SUPPORTED_PI) return "host";
+	if (!session.getSessionFile()) return "in-memory";
 	const branch = session.getBranch();
-	assertRecoveryEdits(branch);
-	for (const entry of branch) {
-		if (entry.type !== "compaction") continue;
-		if (
-			!isRecord(entry.details) ||
-			entry.details.kind !== CONTEXT_MEMORY_KIND ||
-			typeof entry.details.build !== "string" ||
-			!entry.details.build.startsWith("stock-preview")
-		) {
-			throw new Error(
-				"CONTEXT_MIGRATION_REQUIRED: start a new preview session; existing checkpoints are not migrated",
-			);
-		}
-		// Validate each stored source prefix, schema, budget and quotation, including older checkpoints.
-		latestMemory(branch.slice(0, branch.indexOf(entry) + 1));
+	try {
+		assertRecoveryEdits(branch);
+	} catch {
+		return "context-edit";
 	}
+	if (branch.some((entry) => entry.type === "compaction" && !isPreviewCheckpoint(entry))) return "foreign-checkpoint";
 	for (const entry of branch) {
 		if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-			if (entry.message.content.some((part) => part.type === "image")) {
-				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview");
-			}
+			if (entry.message.content.some((part) => part.type === "image")) return "image";
 		}
 		if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-			if (entry.content.some((part) => part.type !== "text")) {
-				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported");
-			}
+			if (entry.content.some((part) => part.type !== "text")) return "non-text";
 		}
+	}
+	return undefined;
+}
+
+const UNSUPPORTED_ERRORS: Record<InactiveReason, string> = {
+	host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi ${SUPPORTED_PI}`,
+	"in-memory": "CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required",
+	"context-edit": "CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported",
+	"foreign-checkpoint":
+		"CONTEXT_MIGRATION_REQUIRED: start a new preview session; existing checkpoints are not migrated",
+	image: "CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview",
+	"non-text": "CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported",
+};
+
+/** The preview neither migrates existing checkpoints nor accepts a second compactor's summary. */
+export function assertPreviewSession(session: PreviewSession, version: string = VERSION): void {
+	const reason = unsupportedReason(session, version);
+	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
+	const branch = session.getBranch();
+	for (const [index, entry] of branch.entries()) {
+		// Validate each stored source prefix, schema, budget and quotation, including older checkpoints.
+		if (entry.type === "compaction") latestMemory(branch.slice(0, index + 1));
 	}
 }
 
@@ -210,6 +236,8 @@ export interface PreviewControllerOptions {
 	failureStore: PreviewFailureStoreContract;
 	/** Config parse errors still install cancellation and request guards. */
 	configError?: string;
+	/** The running Pi version; tests substitute other releases. */
+	hostVersion?: string;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -221,28 +249,72 @@ export class PreviewMemoryController {
 	private readonly observedFailures = new Map<string, string>();
 	private readonly activeCompactions = new Set<string>();
 	private readonly stagedCompactions = new Set<string>();
+	readonly hostVersion: string;
 	private activeTools: () => Tool[] = () => [];
 	private lastProgress?: WriterProgress;
+	readonly notices = new NoticeGate();
 
 	constructor(options: PreviewControllerOptions) {
 		this.config = options.config;
 		this.store = options.failureStore;
 		this.configError = options.configError;
+		this.hostVersion = options.hostVersion ?? VERSION;
 	}
 
 	bindTools(tools: () => Tool[]): void {
 		this.activeTools = tools;
 	}
 
-	status(ctx: ExtensionContext) {
-		const state = this.store.status(ctx.sessionManager);
-		let checkpointId: string | undefined;
-		let code = this.configError ?? this.stickyFailures.get(ctx.sessionManager.getSessionId()) ?? state.code;
+	/**
+	 * A session is protected once this package has written a checkpoint for it or recorded a pending
+	 * or failed attempt. Those durable claims, never content alone, decide strict blocking.
+	 */
+	protected(ctx: ExtensionContext): boolean {
+		const session = ctx.sessionManager;
+		const sessionId = session.getSessionId();
+		return (
+			this.stickyFailures.has(sessionId) ||
+			this.activeCompactions.has(sessionId) ||
+			session.getEntries().some(isPreviewCheckpoint) ||
+			this.store.markerPresent(session)
+		);
+	}
+
+	/** The reason this preview stands aside, for a session it does not protect and cannot check. */
+	inactive(ctx: ExtensionContext): InactiveReason | undefined {
+		const reason = unsupportedReason(ctx.sessionManager, this.hostVersion);
+		return reason && !this.protected(ctx) ? reason : undefined;
+	}
+
+	/** Request paths fail closed: if classification itself fails, the ordinary guards decide. */
+	safeInactive(ctx: ExtensionContext): InactiveReason | undefined {
 		try {
-			assertPreviewSession(ctx.sessionManager);
-			checkpointId = latestMemory(ctx.sessionManager.getBranch())?.entry.id;
-		} catch (error) {
-			code = previewErrorCode(error);
+			return this.inactive(ctx);
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Read-only: calls no model, writes no marker and latches no failure. */
+	diagnose(ctx: ExtensionContext): PreviewDiagnosis {
+		const session = ctx.sessionManager;
+		const reason = unsupportedReason(session, this.hostVersion);
+		const isProtected = this.protected(ctx);
+		const inactive = reason !== undefined && !isProtected;
+		let checkpointId: string | undefined;
+		let state: PreviewDiagnosis["state"] = "inactive";
+		let code: string | undefined;
+		if (!inactive) {
+			const stored = this.store.inspect(session);
+			state = stored.state;
+			code = this.configError ?? this.stickyFailures.get(session.getSessionId()) ?? stored.code;
+			try {
+				assertPreviewSession(session, this.hostVersion);
+				checkpointId = latestMemory(session.getBranch())?.entry.id;
+			} catch (error) {
+				code = previewErrorCode(error);
+			}
+			if (code && code !== stored.code) state = "blocked";
 		}
 		let writer: string | undefined;
 		let writerError: string | undefined;
@@ -253,25 +325,72 @@ export class PreviewMemoryController {
 				writerError = previewErrorCode(error);
 			}
 		}
+		let contextTokens: number | null = null;
+		try {
+			contextTokens = ctx.getContextUsage()?.tokens ?? null;
+		} catch {
+			// Usage is advisory and may be unavailable before the first response.
+		}
+		const last = [...session.buildSessionProjection().messages]
+			.reverse()
+			.find((message) => message.role !== "system");
+		const turnComplete =
+			last?.role === "assistant" &&
+			(last.stopReason === "stop" || last.stopReason === "length") &&
+			!ctx.hasPendingMessages();
 		return {
 			build: PREVIEW_BUILD_ID,
-			enabled: this.config?.enabled ?? true,
-			state: code ? "blocked" : state.state,
+			host: this.hostVersion,
+			supportedHost: SUPPORTED_PI,
+			protection: inactive ? "not-protected" : isProtected ? "protected" : "eligible",
+			...(reason ? { reason } : {}),
+			state,
 			...(code ? { code } : {}),
-			writerModel: this.config?.writerModel,
 			writer,
 			writerError,
 			checkpointId,
+			manualCompaction: {
+				preview: inactive
+					? "not-active"
+					: state !== "ready"
+						? "blocked"
+						: turnComplete
+							? "ready"
+							: "waiting-for-turn",
+				pi: "unknown",
+				contextTokens,
+				piDefaultKeepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
+			},
+		};
+	}
+
+	/** Machine-readable status. Earlier fields keep their names; protection and eligibility are additions. */
+	status(ctx: ExtensionContext) {
+		const diagnosis = this.diagnose(ctx);
+		return {
+			build: diagnosis.build,
+			enabled: this.config?.enabled ?? true,
+			state: diagnosis.state,
+			...(diagnosis.code ? { code: diagnosis.code } : {}),
+			writerModel: this.config?.writerModel,
+			writer: diagnosis.writer,
+			writerError: diagnosis.writerError,
+			checkpointId: diagnosis.checkpointId,
 			noteBudgetMode: this.config?.noteTokens === undefined ? "tiered" : "fixed",
 			noteRepair: this.config?.noteRepair,
 			manualOnly: true,
 			lastWriter: this.lastProgress,
+			host: diagnosis.host,
+			supportedHost: diagnosis.supportedHost,
+			protection: diagnosis.protection,
+			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
+			manualCompaction: diagnosis.manualCompaction,
 		};
 	}
 
 	assertReady(ctx: ExtensionContext): void {
 		if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-		assertPreviewSession(ctx.sessionManager);
+		assertPreviewSession(ctx.sessionManager, this.hostVersion);
 		const sticky = this.stickyFailures.get(ctx.sessionManager.getSessionId());
 		if (sticky) throw new Error(sticky);
 		this.store.assertReady(ctx.sessionManager);
@@ -289,21 +408,71 @@ export class PreviewMemoryController {
 		}
 	}
 
-	/** Stock Pi catches extension exceptions: abort is necessary before reporting any guard failure. */
+	/** At most one blocking notice per session for each user input or manual compaction attempt. */
+	reportBlocked(ctx: ExtensionContext, code: string, durable = true): void {
+		try {
+			if (!this.notices.blockedOnce(ctx.sessionManager.getSessionId())) return;
+			reportPreviewError(
+				ctx,
+				code,
+				durable,
+				unsupportedReason(ctx.sessionManager, this.hostVersion),
+				this.hostVersion,
+			);
+		} catch {
+			// Notices are advisory; the abort and any marker have already taken effect.
+		}
+	}
+
+	/** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
+	sessionStart(ctx: ExtensionContext): void {
+		const reason = this.safeInactive(ctx);
+		if (reason) {
+			this.standAside(ctx, reason);
+			return;
+		}
+		if (this.guard(ctx, () => this.assertReady(ctx)) && this.notices.once("ready")) {
+			notify(ctx, readyNotice(PREVIEW_BUILD_ID), "info");
+		}
+	}
+
+	/** The preview leaves this session to Pi; say so once per session and process. */
+	standAside(ctx: ExtensionContext, reason: InactiveReason): void {
+		if (this.notices.once(`inactive:${ctx.sessionManager.getSessionId()}:${reason}`)) {
+			notify(ctx, inactiveNotice(reason, this.hostVersion), "info");
+		}
+	}
+
+	/**
+	 * Stock Pi catches extension exceptions: abort is necessary before reporting any guard failure.
+	 * A protected session records the failure durably; for a session the preview has not enrolled,
+	 * only the current request is stopped and the check runs again next time.
+	 */
 	guard(ctx: ExtensionContext, operation: () => void): boolean {
 		try {
 			operation();
 			return true;
 		} catch (error) {
 			const code = previewErrorCode(error);
-			this.fail(ctx, code);
+			let durable = true;
+			try {
+				durable = this.protected(ctx);
+			} catch {
+				// An unclassifiable session is treated as protected, so the failure is recorded.
+			}
+			if (durable) this.fail(ctx, code);
 			ctx.abort();
-			reportPreviewError(ctx, code);
+			this.reportBlocked(ctx, code, durable);
 			return false;
 		}
 	}
 
 	context(messages: AgentMessage[], ctx: ExtensionContext): AgentMessage[] {
+		const reason = this.safeInactive(ctx);
+		if (reason) {
+			this.standAside(ctx, reason);
+			return messages;
+		}
 		let result = messages;
 		this.guard(ctx, () => {
 			this.assertReady(ctx);
@@ -328,6 +497,7 @@ export class PreviewMemoryController {
 	}
 
 	beforeRequest(payload: unknown, ctx: ExtensionContext): void {
+		if (this.safeInactive(ctx)) return;
 		this.guard(ctx, () => {
 			this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
@@ -347,9 +517,9 @@ export class PreviewMemoryController {
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-			assertPreviewSession(ctx.sessionManager);
+			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			if (event.reason !== "manual" || event.willRetry) {
-				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: use manual compaction at a completed turn");
+				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: this preview compacts only on an explicit /compact");
 			}
 			event.signal.throwIfAborted();
 			const branch = structuredClone(ctx.sessionManager.getBranch());
@@ -477,10 +647,12 @@ export class PreviewMemoryController {
 	}
 
 	committed(event: SessionCompactEvent, ctx: ExtensionContext): void {
-		this.activeCompactions.delete(ctx.sessionManager.getSessionId());
+		const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
+		// Pi's own compaction of a session this preview does not protect is not a commit of this package.
+		if (!ours && !this.protected(ctx)) return;
 		try {
-			assertPreviewSession(ctx.sessionManager);
+			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			const memory = latestMemory(ctx.sessionManager.getBranch());
 			if (!event.fromExtension || memory?.entry.id !== event.compactionEntry.id) {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
@@ -493,18 +665,26 @@ export class PreviewMemoryController {
 			const code = previewErrorCode(error);
 			this.fail(ctx, code);
 			ctx.abort();
-			reportPreviewError(ctx, code);
+			this.reportBlocked(ctx, code);
 		}
 	}
 
-	/** Reconcile a staged checkpoint that Pi saved but whose commit observation was interrupted. */
+	/**
+	 * Reconcile a staged checkpoint that Pi saved but whose commit observation was interrupted.
+	 * Only an existing pending or blocked record can be confirmed; a refusal never creates one,
+	 * and failures inside the confirmation are recorded by the failure store itself.
+	 */
 	recover(ctx: ExtensionContext): void {
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-			assertPreviewSession(ctx.sessionManager);
+			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			const leaf = ctx.sessionManager.getLeafEntry();
 			const memory = latestMemory(ctx.sessionManager.getBranch());
-			if (leaf?.type !== "compaction" || memory?.entry.id !== leaf.id) {
+			if (
+				leaf?.type !== "compaction" ||
+				memory?.entry.id !== leaf.id ||
+				!this.store.markerPresent(ctx.sessionManager)
+			) {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
 			this.store.recover(ctx.sessionManager, leaf);
@@ -512,9 +692,7 @@ export class PreviewMemoryController {
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
 		} catch (error) {
-			const code = previewErrorCode(error);
-			this.fail(ctx, code);
-			throw new Error(code);
+			throw new Error(previewErrorCode(error));
 		}
 	}
 
@@ -532,6 +710,6 @@ export class PreviewMemoryController {
 					? "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED"
 					: previewErrorCode(event.errorMessage));
 		this.fail(ctx, code);
-		reportPreviewError(ctx, code);
+		this.reportBlocked(ctx, code);
 	}
 }

@@ -54,6 +54,7 @@ Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
 - Do not change version strings, build fingerprints, tags or release assets. Releases are made by the maintainer. The root `package.json` carries upstream workspace metadata and is not this project's version.
 - Do not commit, push, open pull requests or create releases unless asked.
 - Do not add credentials, session logs, note content or local file paths to the repository, to fixtures or to issue text.
+- Do not add `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads this file only when none of them exists, and Codex reads it natively.
 
 ## Where to look
 

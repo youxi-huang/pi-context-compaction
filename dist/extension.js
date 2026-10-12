@@ -460,9 +460,9 @@ function queryHistory(snapshot, request, budgetTokens = 4e3) {
 // packages/coding-agent/src/extensions/context-memory/preview/controller.ts
 import { getInitialSystemMessage } from "@earendil-works/pi-ai";
 import {
+  buildSessionProjection,
   convertToLlm,
   estimateTokens as estimateTokens2,
-  sessionEntryToContextMessages,
   VERSION
 } from "@earendil-works/pi-coding-agent";
 
@@ -538,7 +538,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.6c2f3745fb7c2fbe";
+var PREVIEW_BUILD_ID = "stock-preview+src.105cef2556da81ad";
 
 // packages/coding-agent/src/extensions/context-memory/preview/writer.ts
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
@@ -931,22 +931,34 @@ function assertToolPairs(messages) {
   }
   if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the tool batch to finish");
 }
-function chooseCut(branch, keepRecentTokens) {
+function chooseCut(branch, keepRecentTokens, projection = buildSessionProjection([...branch])) {
   if (keepRecentTokens <= 0) return branch.length;
+  const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
   const starts = branch.flatMap(
-    (entry, index) => entry.type === "message" && entry.message.role === "user" ? [index] : []
+    (entry, index) => entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : []
   );
   if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
   let accumulated = 0;
   for (let index = branch.length - 1; index >= 0; index--) {
     if (branch[index].type === "compaction") continue;
-    accumulated += sessionEntryToContextMessages(branch[index]).reduce(
-      (sum, message) => sum + estimateTokens2(message),
-      0
-    );
+    accumulated += (projected.get(branch[index].id) ?? []).reduce((sum, message) => sum + estimateTokens2(message), 0);
     if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
   }
   return starts[starts.length - 1];
+}
+function assertRecoveryEdits(branch) {
+  let lastMessage;
+  for (const entry of branch) {
+    if (entry.type === "context_edit") {
+      if (entry.replacement !== null || !lastMessage || lastMessage?.id !== entry.targetId || lastMessage.type !== "message" || lastMessage.message.role !== "assistant" || lastMessage.message.stopReason !== "error" || lastMessage.message.content.some((part) => part.type === "toolCall")) {
+        throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported");
+      }
+    } else if (entry.type === "message") {
+      lastMessage = entry;
+    } else if (entry.type === "compaction") {
+      lastMessage = void 0;
+    }
+  }
 }
 function interruptedTurnStart(branch) {
   let completed = -1;
@@ -990,9 +1002,7 @@ function assertPreviewSession(session) {
   }
   if (!session.getSessionFile()) throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required");
   const branch = session.getBranch();
-  if (branch.some((entry) => entry.type === "context_edit")) {
-    throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: edited model context requires separate validation");
-  }
+  assertRecoveryEdits(branch);
   for (const entry of branch) {
     if (entry.type !== "compaction") continue;
     if (!isRecord(entry.details) || entry.details.kind !== CONTEXT_MEMORY_KIND || typeof entry.details.build !== "string" || !entry.details.build.startsWith("stock-preview")) {
@@ -1164,9 +1174,10 @@ var PreviewMemoryController = class {
       if (hashEntries(branch) !== attempt.sourceHash) throw new Error("CONTEXT_SOURCE_CHANGED");
       const budget = memoryBudget(ctx.model, this.config);
       const interrupted = !completed ? interruptedTurnStart(branch) : void 0;
-      const cut = Math.min(chooseCut(branch, budget.recentTokens), interrupted ?? branch.length);
+      const cut = Math.min(chooseCut(branch, budget.recentTokens, projection), interrupted ?? branch.length);
       if (cut < 1) throw new Error("CONTEXT_NO_CUT");
-      const kept = branch.slice(cut).filter((entry) => entry.type !== "compaction").flatMap(sessionEntryToContextMessages);
+      const keptIds = new Set(branch.slice(cut).map((entry) => entry.id));
+      const kept = projection.entries.filter((entry) => entry.sourceEntry.type !== "compaction" && keptIds.has(entry.sourceEntry.id)).flatMap((entry) => entry.messages);
       assertToolPairs(kept);
       const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
       const previous = latestMemory(branch);

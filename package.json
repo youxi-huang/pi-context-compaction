@@ -1,6 +1,6 @@
 {
   "name": "pi-context-compaction-preview",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "description": "Source-linked compaction preview for unmodified Pi 1.1.0",
   "repository": {

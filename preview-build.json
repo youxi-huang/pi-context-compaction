@@ -1,10 +1,10 @@
 {
-  "build": "stock-preview+src.6c2f3745fb7c2fbe",
-  "version": "0.3.1",
-  "sourceCommit": "534c8994ed17539ac97ed5712c36efe01268dffb",
+  "build": "stock-preview+src.105cef2556da81ad",
+  "version": "0.3.2",
+  "sourceCommit": "a3b82278e579667f9d538dd16054deeb88ba1ec2",
   "supportedPi": "1.1.0",
   "checkpointSchema": 1,
-  "sourceHash": "6c2f3745fb7c2fbe2bd55e39f63b72f5978ce1bc6546cb896b2aa638ff616b89",
+  "sourceHash": "105cef2556da81ad71c75ce96910288ec3bd9358a0b0eeb7d17a014b5a6d1ed4",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -32,7 +32,7 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/controller.ts",
-      "sha256": "6b037daa66db4dd492796e696fd7599e7d2308db5739ef2a2f9b54bfa10234c0"
+      "sha256": "9609850898cdfea5cdef784f8cf3342b1bce57f14d4a81911dc5378e4c08f618"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",

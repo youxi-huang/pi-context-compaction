@@ -1,4 +1,4 @@
-# Independent extension preview — v0.3.1
+# Independent extension preview — v0.3.2
 
 This preview runs on unmodified official Pi **1.1.0**. It is distributed through
 the `extension-preview` Git branch, separately from the v0.3.0 resident source
@@ -21,13 +21,13 @@ The branch source follows subsequent compatible preview releases when updated.
 `pi update` by itself updates Pi. `pi update --extensions` updates all installed extension packages; `--extension <source>` selects this package only.
 
 To pin this exact package, use
-`git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.1` instead.
+`git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.2` instead.
 Tags and commits stay pinned; remove the configured old source and install the
 new tag to change versions. Install one source for this package at a time.
 A compatible older preview can reopen its own checkpoint schema; resident and
 native checkpoints are not migrated.
 
-The [v0.3.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.1)
+The [v0.3.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.2)
 also provides the extension `.tgz`, source archive, provenance and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
 published to npm; `private: true` prevents accidental registry publication and
@@ -46,12 +46,12 @@ pi install ./.artifacts/context-memory-preview-package
 The builder produces an extension-only directory and an npm-compatible `.tgz`
 with five reviewed files. It bundles this project's code, keeps Pi and TypeBox
 as host-provided peers, and records a separate source fingerprint. It does not
-rebuild or replace Pi. The package version is 0.3.1, with the clean source commit
+rebuild or replace Pi. The package version is 0.3.2, with the clean source commit
 and independent source fingerprint recorded in `preview-build.json`.
 
 A local-path install loads that directory without copying it. Build and
 verification commands in this guide run from the development repository,
-checked out at source tag `v0.3.1`, with its development dependencies installed.
+checked out at source tag `v0.3.2`, with its development dependencies installed.
 
 ## Supported workflow
 
@@ -78,11 +78,22 @@ that file. `compactAt` bounds the manual checkpoint budget but does not start
 automatic compaction; resident event logging and its report are not provided.
 Setting `enabled: false` and restarting ends the package's protection.
 
-This first candidate is for manual compaction at completed turns. Automatic
+This preview is for manual compaction at completed turns. Automatic
 compaction, unfinished tool rounds, in-memory sessions, attachments, context
-edits, old checkpoints, parent-history grants and other context-transforming
+edits other than validated recovery omissions, old checkpoints, parent-history grants and other context-transforming
 or compaction extensions are outside its verified scope. Unsupported
 compaction is cancelled explicitly, without native summary fallback.
+
+Ordinary Agent retries may append an omission of the latest failed assistant response in the current
+checkpoint interval. Replacement content, user-message edits and failed
+responses containing tool calls remain unsupported. Normal Agent retries do
+not create a compaction failure marker. A previously blocked retry session
+with sufficient completed source history can recover through explicit
+`/compact`; the marker clears only after the new checkpoint is confirmed on
+disk. Text-only context-overflow failures can use the same manual recovery,
+which retains the unfinished user request. `/compaction-recover` still only
+confirms an already staged checkpoint. Automatic compaction remains outside
+this release. Published v0.3.1 assets do not contain the retry fix.
 
 While enabled, this candidate returns `stop` from Pi's public cache-warming
 decision event. Background warming bypasses ordinary request guards and can
@@ -157,6 +168,33 @@ real-provider compatibility, semantic recovery quality, compaction latency or
 Windows behavior. No official Pi source, real account, existing user settings
 or session is modified by these isolated checks.
 
+The scenario runner checks the same artifact under default Pi and extension
+settings, each case beside a control run without the extension. The second
+installation is optional and only serves the other-version case:
+
+```sh
+npm install --prefix ./.artifacts/context-memory-preview-stock-1.0.4 \
+  --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact \
+  @earendil-works/pi-coding-agent@1.0.4
+node scripts/context-memory-preview-scenarios.mjs \
+  --package-dir ./.artifacts/context-memory-preview-package \
+  --stock-root ./.artifacts/context-memory-preview-stock \
+  --other-stock-root ./.artifacts/context-memory-preview-stock-1.0.4 \
+  --output-dir ./.artifacts/context-memory-preview-scenarios
+```
+
+Every scenario check states intended behavior. Checks in the script's
+`KNOWN_GAPS` list describe behavior this candidate does not provide yet, such
+as leaving sessions it never enrolled usable, unsupported input formats or
+long-session request overhead. They are reported without failing
+the run. A listed check that starts passing fails the run until it is removed
+from the list, so each fix becomes a required regression. The runner loads a
+copy of the package from a temporary directory outside the repository: inside
+it, once `npm run build:offline` has run, the package's Pi imports resolve to
+the repository's workspace build instead of the host under test. The long-session case
+uses 20 checkpoints by default; `--perf-checkpoints 60` runs the full
+measurement, which takes several minutes.
+
 ## Maintainer publication
 
 Merge the reviewed source through a PR and confirm `verify` and all three
@@ -167,3 +205,11 @@ those checks, rebuilds and tests the package on official Pi, creates the matchin
 push, and publishes a pre-release after all assets are uploaded. Existing public
 assets and tags are never overwritten. The resident runtime retains its
 v0.3.0 fingerprint because this release changes only the ordinary extension.
+
+If publication tooling needs a fix after a source tag was created, merge the
+fix through the normal PR checks. Retry **Publish extension preview** from that
+main commit using its `source_tag` workflow input, or push that commit to
+`release/publish-v<version>`. The job uses the reviewed tooling while rebuilding
+and testing the immutable source tag; provenance records both commits. No tag
+or existing public asset is replaced, and uploaded assets are not downloaded
+again for verification.

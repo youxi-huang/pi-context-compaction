@@ -6,15 +6,20 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.3.2] — 2026-10-11
+
+v0.3.2 fixes ordinary Agent retries in the independent extension preview for official Pi 1.1.0. The resident runtime, checkpoint schema and evaluation pin remain unchanged.
+
 ### Fixed
 
+- The independent preview accepts Pi's validated omission of a failed assistant response during ordinary retries. Transient provider errors no longer create a compaction failure marker; retries, subsequent manual compaction, reload and reopening remain usable. Sessions with sufficient completed source history can recover existing retry-related blocks and text-only context-overflow failures through an explicit validated `/compact`. Recent-turn retention follows Pi's model projection while raw evidence hashes and checkpoint commit confirmation remain enforced. Arbitrary context edits, unfinished tool-call omissions and automatic compaction remain unsupported.
 - Extension publication recognizes GitHub's default CodeQL scans with a `dynamic` event. Reviewed publication tooling can retry an existing immutable source tag without replacing its contents or release assets.
 
 ### Maintenance
 
 - Add a shared operations runbook and script that connects existing verification commands, retains CI's pinned model-data download and checksum check, and documents private vulnerability reporting. Runtime behavior, build fingerprints, and evaluation contracts are unchanged.
 - Select scripted writer evidence from fixture user messages in the offline paired-plan test, avoiding accidental matches in randomized directory metadata. A deterministic directory-name collision covers both existing judge concurrency cases with every assertion retained.
-- Add a default-settings scenario runner for the stock-Pi preview. Each case runs beside a control without the extension: transient provider failures, context overflow, the compaction threshold, image input, sessions with native checkpoints, in-memory sessions, another Pi version, failed-compaction notices and long-session overhead. Checks state the intended behavior; the 23 that the current candidate does not meet are tracked as known gaps that do not fail CI, and a gap that starts passing fails the run until it becomes a required check. The `verify` workflow runs it after acceptance. The runner loads the package from outside the repository so that its Pi imports reach the host under test rather than the repository's workspace build. Findings are in the [validation record](docs/context-memory/validation.md#default-settings-scenarios-2026-10-11-utc). The acceptance runner now disables provider retries through Pi's actual `retry.provider.maxRetries` setting. The shared `preview` and `ci` commands run the same scenarios and prepare the second official Pi installation when needed.
+- Add a default-settings scenario runner for the stock-Pi preview. Each case runs beside a control without the extension: transient provider failures, context overflow, the compaction threshold, image input, sessions with native checkpoints, in-memory sessions, another Pi version, failed-compaction notices and long-session overhead. The v0.3.1 candidate initially missed 23 checks; six are required regressions in v0.3.2 and 17 remain known gaps that do not fail CI. A gap that starts passing fails the run until it becomes a required check. The `verify` workflow runs it after acceptance. The runner loads the package from outside the repository so that its Pi imports reach the host under test rather than the repository's workspace build. Findings are in the [validation record](docs/context-memory/validation.md#default-settings-scenarios-2026-10-11-utc). The acceptance runner now disables provider retries through Pi's actual `retry.provider.maxRetries` setting. The shared `preview` and `ci` commands run the same scenarios and prepare the second official Pi installation when needed.
 
 ## [v0.3.1] — 2026-10-11
 
@@ -227,7 +232,8 @@ Initial experimental source release, published as Pi Context Memory and based on
 
 Source commit: [ffbeccd](https://github.com/youxi-huang/pi-context-compaction/commit/ffbeccd0bd427058d2c62c0af5743cea9363bdc8). Distributed under the MIT license.
 
-[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.1...main
+[Unreleased]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.2...main
+[v0.3.2]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.1...v0.3.2
 [v0.3.1]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/youxi-huang/pi-context-compaction/compare/v0.2.4...v0.3.0
 [v0.2.3]: https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.2.3

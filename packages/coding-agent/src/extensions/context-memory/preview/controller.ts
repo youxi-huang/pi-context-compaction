@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getInitialSystemMessage, type Tool } from "@earendil-works/pi-ai";
 import {
+	buildSessionProjection,
 	convertToLlm,
 	type ExtensionContext,
 	estimateTokens,
@@ -8,7 +9,7 @@ import {
 	type SessionCompactEvent,
 	type SessionCompactFailedEvent,
 	type SessionEntry,
-	sessionEntryToContextMessages,
+	type SessionProjection,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
@@ -75,22 +76,49 @@ export function assertToolPairs(messages: readonly AgentMessage[]): void {
 }
 
 /** Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. */
-export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: number): number {
+export function chooseCut(
+	branch: readonly SessionEntry[],
+	keepRecentTokens: number,
+	projection: SessionProjection = buildSessionProjection([...branch]),
+): number {
 	if (keepRecentTokens <= 0) return branch.length;
+	const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
 	const starts = branch.flatMap((entry, index) =>
-		entry.type === "message" && entry.message.role === "user" ? [index] : [],
+		entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : [],
 	);
 	if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
 	let accumulated = 0;
 	for (let index = branch.length - 1; index >= 0; index--) {
 		if (branch[index].type === "compaction") continue;
-		accumulated += sessionEntryToContextMessages(branch[index]).reduce(
-			(sum, message) => sum + estimateTokens(message),
-			0,
-		);
+		accumulated += (projected.get(branch[index].id) ?? []).reduce((sum, message) => sum + estimateTokens(message), 0);
 		if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
 	}
 	return starts[starts.length - 1];
+}
+
+/** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
+function assertRecoveryEdits(branch: readonly SessionEntry[]): void {
+	let lastMessage: SessionEntry | undefined;
+	for (const entry of branch) {
+		if (entry.type === "context_edit") {
+			if (
+				entry.replacement !== null ||
+				!lastMessage ||
+				lastMessage?.id !== entry.targetId ||
+				lastMessage.type !== "message" ||
+				lastMessage.message.role !== "assistant" ||
+				lastMessage.message.stopReason !== "error" ||
+				lastMessage.message.content.some((part) => part.type === "toolCall")
+			) {
+				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported");
+			}
+		} else if (entry.type === "message") {
+			lastMessage = entry;
+		} else if (entry.type === "compaction") {
+			// Judge an edit against checkpoints preceding it, including after later compactions are appended.
+			lastMessage = undefined;
+		}
+	}
 }
 
 /** Abort guards can leave new user input on disk; recovery must keep that whole unfinished turn. */
@@ -147,9 +175,7 @@ export function assertPreviewSession(session: PreviewSession): void {
 	}
 	if (!session.getSessionFile()) throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required");
 	const branch = session.getBranch();
-	if (branch.some((entry) => entry.type === "context_edit")) {
-		throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: edited model context requires separate validation");
-	}
+	assertRecoveryEdits(branch);
 	for (const entry of branch) {
 		if (entry.type !== "compaction") continue;
 		if (
@@ -352,12 +378,12 @@ export class PreviewMemoryController {
 			if (hashEntries(branch) !== attempt.sourceHash) throw new Error("CONTEXT_SOURCE_CHANGED");
 			const budget = memoryBudget(ctx.model, this.config);
 			const interrupted = !completed ? interruptedTurnStart(branch) : undefined;
-			const cut = Math.min(chooseCut(branch, budget.recentTokens), interrupted ?? branch.length);
+			const cut = Math.min(chooseCut(branch, budget.recentTokens, projection), interrupted ?? branch.length);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT");
-			const kept = branch
-				.slice(cut)
-				.filter((entry) => entry.type !== "compaction")
-				.flatMap(sessionEntryToContextMessages);
+			const keptIds = new Set(branch.slice(cut).map((entry) => entry.id));
+			const kept = projection.entries
+				.filter((entry) => entry.sourceEntry.type !== "compaction" && keptIds.has(entry.sourceEntry.id))
+				.flatMap((entry) => entry.messages);
 			assertToolPairs(kept);
 			const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
 			const previous = latestMemory(branch);

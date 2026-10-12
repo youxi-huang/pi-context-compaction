@@ -1,5 +1,38 @@
 # Validation record
 
+## v0.3.2 retry compatibility, 2026-10-11
+
+The independent retry runtime `stock-preview+src.105cef2556da81ad` preserves
+original JSONL evidence while accepting Pi's omission of the latest failed
+assistant response. Validation used official npm Pi 1.1.0, with Pi 1.0.4 only
+for the unsupported-version control, and synthetic loopback services.
+
+| Command | Result |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0: offline build, static/dependency/type checks, 147 focused regressions (94 resident and 53 preview), and 461 host security checks passed. The resident fingerprint did not change. |
+| `node scripts/context-memory-preview-build.mjs` and `node scripts/context-memory-preview-acceptance.mjs` with an isolated official Pi installation | Exit 0: the independent artifact passed all 26 package and lifecycle checks, including source tampering, invalid citations, failed writes, cancellation and explicit recovery. |
+| `node scripts/context-memory-preview-scenarios.mjs` with both official installations | Exit 0: 83 checks passed, 17 existing known gaps, zero failures, zero unexpectedly passing gaps and zero skips. All 20 long-session checkpoints committed. |
+
+Retry scenarios now require success for transient 503s, connection drops,
+partial-response drops, repeated failures and the first request in a session.
+Retry exhaustion leaves no compaction marker and a later healthy request works.
+After successful retries, manual compaction, original-history retrieval,
+reload and reopening are required checks. Removed partial responses stay out
+of the assistant messages sent to both the provider and the memory writer.
+
+A legacy unsupported-edit marker remains blocking until explicit `/compact`
+confirms a new checkpoint on disk. `/compaction-recover` cannot clear an
+unstaged marker. Text-only overflow recovery keeps the whole unfinished user
+request. Replacement content, user/successful-response edits, sibling or
+forward references, edits crossing an existing checkpoint and tool-call
+omissions remain rejected; valid edits do not clear pending or failed
+compaction attempts. Six former retry/overflow known gaps are required checks.
+
+Automatic compaction, unsupported input/session formats, notice behavior and
+long-session overhead remain outside this fix. These results establish
+scripted lifecycle behavior, not real-provider reliability or semantic quality.
+The older validation records below describe their original release candidates.
+
 ## Default-settings scenarios, 2026-10-11 UTC
 
 `scripts/context-memory-preview-scenarios.mjs` ran the v0.3.1 candidate

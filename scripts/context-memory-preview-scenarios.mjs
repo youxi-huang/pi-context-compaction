@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -15,12 +15,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // until it is removed from KNOWN_GAPS, so a fix cannot land without becoming a required regression.
 const KNOWN_GAPS = new Set([
 	"documented-first-compaction/ready-notice",
-	"provider-retry/retry-completes",
-	"provider-retry/no-marker",
-	"provider-connection-drop/retry-completes",
-	"provider-connection-drop/no-marker",
-	"context-overflow/manual-compact-recovers",
-	"context-overflow/next-prompt-sent",
 	"threshold/notice-asks-for-compact",
 	"threshold/one-notice-per-input",
 	"image-input/text-after-image-sent",
@@ -43,6 +37,11 @@ const CASES = [
 	{ name: "documented-first-compaction", variants: ["extension"] },
 	{ name: "provider-retry", variants: ["extension", "control"] },
 	{ name: "provider-connection-drop", variants: ["extension", "control"] },
+	{ name: "provider-partial-drop", variants: ["extension", "control"] },
+	{ name: "provider-repeated-retry", variants: ["extension", "control"] },
+	{ name: "provider-first-turn-retry", variants: ["extension", "control"] },
+	{ name: "provider-retry-exhausted", variants: ["extension", "control"] },
+	{ name: "legacy-retry-marker", variants: ["extension"] },
 	{ name: "context-overflow", variants: ["extension", "control"] },
 	{ name: "threshold", variants: ["extension", "control"] },
 	{ name: "image-input", variants: ["extension", "control"] },
@@ -115,6 +114,7 @@ async function worker() {
 	const piVersion = JSON.parse(readFileSync(join(stockPackage, "package.json"), "utf8")).version;
 
 	const SOURCE_TEXT = "Use port 4317. Do not deploy this synthetic service. Continue checking it locally.";
+	const PARTIAL_REPLY = "Unfinished synthetic response before the connection dropped.";
 	// About 31k estimated tokens: enough later history for Pi's default 20k keep-recent gate.
 	const BIG_LOG = `Here is the local check log:\n${Array.from({ length: 2500 }, (_, i) => `log ${String(i).padStart(5, "0")}: local check ok, port 4317 healthy`).join("\n")}`;
 	const PNG =
@@ -165,8 +165,9 @@ async function worker() {
 		const writer = serialized.includes("Return ONLY one JSON object matching this schema");
 		const nativeSummary = serialized.includes("context summarization assistant");
 		const hasImage = serialized.includes("image_url");
+		const hasFailedAssistant = (payload.messages ?? []).some((message) => message.role === "assistant" && JSON.stringify(message.content).includes(PARTIAL_REPLY));
 		if (writer) {
-			requests.push({ kind: "writer" });
+			requests.push({ kind: "writer", hasFailedAssistant });
 			return stream(response, payload.model, JSON.stringify(note()));
 		}
 		if (nativeSummary) {
@@ -174,8 +175,14 @@ async function worker() {
 			return stream(response, payload.model, "Synthetic native summary: port 4317, deployment unauthorized.");
 		}
 		const step = plan(requests.filter((r) => r.kind === "main" || r.kind === "main-error").length);
-		requests.push({ kind: step.kind === "ok" ? "main" : "main-error", hasImage });
+		requests.push({ kind: step.kind === "ok" ? "main" : "main-error", hasImage, hasFailedAssistant });
 		if (step.kind === "drop") return request.socket.destroy();
+		if (step.kind === "partial-drop") {
+			response.writeHead(200, { "content-type": "text/event-stream" });
+			response.write(`data: ${JSON.stringify({ id: "synthetic", object: "chat.completion.chunk", created: 1, model: payload.model, choices: [{ index: 0, delta: { role: "assistant", content: PARTIAL_REPLY }, finish_reason: null }] })}\n\n`);
+			setTimeout(() => response.destroy(), 20);
+			return;
+		}
 		if (step.kind === "error") {
 			response.writeHead(step.status, { "content-type": "application/json" });
 			return response.end(JSON.stringify({ error: { message: step.message, type: "server_error" } }));
@@ -317,25 +324,85 @@ async function worker() {
 				break;
 			}
 			case "provider-retry":
-			case "provider-connection-drop": {
+			case "provider-connection-drop":
+			case "provider-partial-drop":
+			case "provider-repeated-retry":
+			case "provider-first-turn-retry":
+			case "provider-retry-exhausted": {
 				// Pi's default retry policy; SDK-level retries off so Pi's own retry runs, with a short backoff.
 				writeSettings(withExtension, { retry: { baseDelayMs: 20, provider: { maxRetries: 0 } } });
-				const failure = workerCase === "provider-retry" ? { kind: "error", status: 503, message: "Service temporarily overloaded" } : { kind: "drop" };
-				plan = (n) => (n === 2 ? failure : { kind: "ok" });
+				const failure = workerCase === "provider-connection-drop" ? { kind: "drop" } : workerCase === "provider-partial-drop" ? { kind: "partial-drop" } : { kind: "error", status: 503, message: "Service temporarily overloaded" };
+				const firstTurn = workerCase === "provider-first-turn-retry";
+				const exhausted = workerCase === "provider-retry-exhausted";
+				const failures = workerCase === "provider-repeated-retry" ? 3 : 1;
+				const firstFailure = firstTurn ? 0 : 2;
+				plan = (n) => (n >= firstFailure && (exhausted || n < firstFailure + failures) ? failure : { kind: "ok" });
+				if (workerCase === "provider-partial-drop" && withExtension) {
+					writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ keepRecentTokens: 64 }));
+				}
 				await open(newSession());
-				const seeded = await seed();
-				const turn = await prompt("Check the service again.");
-				observe("turn 3 (one transient provider failure)", { ...turn, entries: entryTypes() });
+				const seeded = firstTurn || await seed();
+				const turn = await prompt(firstTurn ? SOURCE_TEXT : "Check the service again.");
+				observe("provider failure and Pi retry", { ...turn, entries: entryTypes() });
+				if (exhausted) {
+					check("retries-exhausted", "Pi reaches its retry limit without completing the failed turn", !turn.completed && turn.sent.length === 4, turn);
+					check("no-marker", "Exhausting provider retries does not become a compaction failure", turn.marker === null, turn.marker);
+					plan = () => ({ kind: "ok" });
+					const next = await prompt("Continue when the provider is healthy.");
+					check("next-prompt-sent", "The next prompt completes after the provider recovers", next.completed && next.marker === null, next);
+					break;
+				}
 				if (withExtension) {
-					check("seeded", "The first two turns reach the provider", seeded);
-					check("retry-completes", "Pi's automatic retry reaches the provider and completes the turn", turn.completed && turn.sent.length >= 2, turn);
+					if (!firstTurn) check("seeded", "The first two turns reach the provider", seeded);
+					check("retry-completes", "Pi's automatic retry reaches the provider and completes the turn", turn.completed && turn.sent.length === failures + 1, turn);
 					check("no-marker", "A transient provider failure leaves no persistent failure marker", turn.marker === null, turn.marker);
-					observe("/compact", await compact());
-					observe("turn 4", await prompt("Continue."));
+					if (workerCase === "provider-partial-drop") {
+						check("partial-reply-recorded", "The dropped stream leaves its partial reply in original history", manager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "error" && JSON.stringify(entry.message.content).includes(PARTIAL_REPLY)));
+					}
+					if (!firstTurn) {
+						const compacted = await compact();
+						observe("/compact", compacted);
+						check("manual-compact-succeeds", "Manual compaction after retry confirms an extension checkpoint", compacted.ok && compacted.kind === "pi-context-memory" && compacted.marker === null, compacted);
+						const historyTool = session.agent.state.tools.find((tool) => tool.name === "context_history");
+						const history = await historyTool?.execute("synthetic-history-check", { operation: "read", entryId: sourceId() });
+						check("history-readable", "Original user evidence remains retrievable after retry and compaction", JSON.stringify(history)?.includes("Do not deploy this synthetic service.") === true);
+					}
+					const next = await prompt("Continue.");
+					check("next-prompt-sent", "The next prompt completes after retry and compaction", next.completed && next.marker === null, next);
+					await session.reload();
+					const reloaded = await prompt("Continue after reload.");
+					check("reload-usable", "Reload preserves a usable retry session", reloaded.completed && reloaded.marker === null, reloaded);
+					await open(stock.SessionManager.open(manager.getSessionFile()));
+					const reopened = await prompt("Continue after reopening.");
+					check("reopen-usable", "Reopening preserves a usable retry session", reopened.completed && reopened.marker === null, reopened);
+					check("no-omitted-assistant", "Retry and compaction never reintroduce the omitted partial assistant response", requests.every((request) => !request.hasFailedAssistant));
 				} else {
-					check("retry-completes", "Without the preview, Pi retries and completes the turn", turn.completed && turn.sent.length >= 2, turn);
+					check("retry-completes", "Without the preview, Pi retries and completes the turn", turn.completed && turn.sent.length === failures + 1, turn);
 					check("context-edit-written", "Pi records the failed attempt as a context_edit before retrying", entryTypes().includes("context_edit"), entryTypes());
 				}
+				break;
+			}
+			case "legacy-retry-marker": {
+				writeSettings(true);
+				await open(newSession());
+				await seed();
+				manager.appendMessage({ role: "user", content: "Keep checking the unfinished local request.", timestamp: Date.now() });
+				const failedId = manager.appendMessage({ ...lastAssistant(), stopReason: "error", content: [], errorMessage: "Synthetic transient failure", timestamp: Date.now() });
+				manager.appendContextEdit(failedId, null);
+				const directory = join(agentDir, "context-memory-preview", "failures");
+				mkdirSync(directory, { recursive: true, mode: 0o700 });
+				const markerPath = join(directory, `${createHash("sha256").update(manager.getSessionId()).digest("hex")}.json`);
+				writeFileSync(markerPath, JSON.stringify({ version: 1, state: "blocked", code: "CONTEXT_PREVIEW_UNSUPPORTED", sessionId: manager.getSessionId(), sessionPathHash: createHash("sha256").update(realpathSync(manager.getSessionFile())).digest("hex") }), { mode: 0o600 });
+				await open(stock.SessionManager.open(manager.getSessionFile()));
+				const blocked = await prompt("Continue without compaction.");
+				check("blocked-before-retry", "An old marker remains blocking until explicit recovery", !blocked.reached && blocked.marker !== null, blocked);
+				await session.prompt("/compaction-recover");
+				check("unstaged-not-recovered", "Recover cannot clear an old marker without a staged checkpoint", marker() !== null, marker());
+				const compacted = await compact();
+				check("explicit-retry-recovers", "Explicit compaction validates the old recovery edit and confirms a new checkpoint", compacted.ok && compacted.kind === "pi-context-memory" && compacted.marker === null, compacted);
+				check("unfinished-request-kept", "Recovery retains the whole unfinished original user request", manager.buildSessionProjection().messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("Keep checking the unfinished local request.")));
+				const next = await prompt("Continue after confirmed recovery.");
+				check("next-prompt-sent", "The recovered legacy session completes its next prompt", next.completed && next.marker === null, next);
 				break;
 			}
 			case "context-overflow": {
@@ -350,6 +417,7 @@ async function worker() {
 					const compacted = await compact();
 					observe("/compact", compacted);
 					check("manual-compact-recovers", "Manual /compact recovers the session after an overflow", compacted.ok && compacted.kind === "pi-context-memory", compacted);
+					check("unfinished-request-kept", "Overflow recovery retains the original unfinished request", manager.buildSessionProjection().messages.some((message) => message.role === "user" && JSON.stringify(message.content).includes("Read the large log.")));
 					const next = await prompt("Continue.");
 					observe("turn 4", next);
 					check("next-prompt-sent", "The next prompt reaches the provider", next.reached, next);

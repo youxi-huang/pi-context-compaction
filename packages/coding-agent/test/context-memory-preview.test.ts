@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { CompactionEntry, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
+import {
+	buildSessionProjection,
+	type CompactionEntry,
+	estimateTokens,
+	type SessionEntry,
+	type SessionHeader,
+} from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { freezeHistory, queryHistory } from "../src/extensions/context-memory/history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries } from "../src/extensions/context-memory/identity.ts";
@@ -15,6 +21,7 @@ import {
 	validateNote,
 } from "../src/extensions/context-memory/notes.ts";
 import type { PreviewCompaction, PreviewSession } from "../src/extensions/context-memory/preview/contracts.ts";
+import { assertPreviewSession, chooseCut } from "../src/extensions/context-memory/preview/controller.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 
 vi.mock("node:fs", async (original) => {
@@ -127,16 +134,7 @@ class SyntheticSession implements PreviewSession {
 		return this.getBranch();
 	}
 	buildSessionProjection() {
-		const entries = this.getBranch().map((entry) => ({
-			sourceEntry: entry,
-			messages: entry.type === "message" ? [entry.message] : [],
-		}));
-		return {
-			entries,
-			messages: entries.flatMap((entry) => entry.messages),
-			thinkingLevel: "off",
-			model: { provider: "preview-test", modelId: "preview-test" },
-		};
+		return buildSessionProjection(this.getBranch());
 	}
 	append(entry: SessionEntry, persist = true): void {
 		this.entries.push(entry);
@@ -536,5 +534,186 @@ describe("independent extension preview: evidence validation", () => {
 		if (source?.type !== "message" || source.message.role !== "user") throw new Error("Missing synthetic source");
 		source.message.content = "Modified decision.";
 		expect(() => latestMemory(session.getBranch())).toThrow(/CONTEXT_SOURCE_CHANGED/);
+	});
+});
+
+describe("independent extension preview: Pi recovery edits", () => {
+	let root: string;
+	let session: SyntheticSession;
+	beforeEach(() => {
+		root = fs.mkdtempSync(join(tmpdir(), "pi-preview-retry-"));
+		session = new SyntheticSession(root);
+	});
+	afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+	function retry(): void {
+		session.append({
+			type: "message",
+			id: "retry-input",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { role: "user", content: "Continue the local check.", timestamp: 2 },
+		});
+		session.append({
+			type: "message",
+			id: "failed-reply",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { ...assistant(), stopReason: "error", content: [{ type: "text", text: "Partial failed reply." }] },
+		});
+		session.append({
+			type: "context_edit",
+			id: "recovery-edit",
+			parentId: session.getLeafId(),
+			timestamp,
+			targetId: "failed-reply",
+			replacement: null,
+		});
+	}
+	function checkpoint(): void {
+		const value = candidate(session);
+		value.details!.build = "stock-preview+test";
+		session.append(saved(session, value));
+	}
+	it("accepts a failed-response omission while retaining the original history", () => {
+		retry();
+		expect(() => assertPreviewSession(session)).not.toThrow();
+		expect(JSON.stringify(session.buildSessionProjection().messages)).not.toContain("Partial failed reply.");
+		expect(
+			JSON.stringify(queryHistory(freezeHistory(session), { operation: "read", entryId: "failed-reply" })),
+		).toContain("Partial failed reply.");
+	});
+	it("keeps an earlier recovery edit valid after a later checkpoint", () => {
+		retry();
+		checkpoint();
+		expect(() => assertPreviewSession(session)).not.toThrow();
+		const failed = session.getEntry("failed-reply");
+		if (failed?.type !== "message" || failed.message.role !== "assistant") throw new Error("Missing failed reply");
+		failed.message.content = [{ type: "text", text: "Changed original evidence." }];
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_SOURCE_CHANGED/);
+	});
+	it.each(["source-1", "reply-1", "missing", "sibling"])("rejects an omission targeting %s", (targetId) => {
+		retry();
+		session.entries.push({
+			type: "message",
+			id: "sibling",
+			parentId: "reply-1",
+			timestamp,
+			message: { ...assistant(), stopReason: "error" },
+		});
+		const edit = session.getEntry("recovery-edit");
+		if (edit?.type !== "context_edit") throw new Error("Missing recovery edit");
+		edit.targetId = targetId;
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("rejects replacement content even for a failed assistant response", () => {
+		retry();
+		const edit = session.getEntry("recovery-edit");
+		if (edit?.type !== "context_edit") throw new Error("Missing recovery edit");
+		edit.replacement = { content: "New instructions." };
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it.each(["stop", "length", "aborted"] as const)("rejects omissions of a response ending with %s", (stopReason) => {
+		retry();
+		const failed = session.getEntry("failed-reply");
+		if (failed?.type !== "message" || failed.message.role !== "assistant") throw new Error("Missing failed reply");
+		failed.message.stopReason = stopReason;
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("rejects an omission after a new user request has arrived", () => {
+		retry();
+		session.append({
+			type: "message",
+			id: "new-request",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { role: "user", content: "A separate request.", timestamp: 3 },
+		});
+		session.append({
+			type: "context_edit",
+			id: "unrelated-edit",
+			parentId: session.getLeafId(),
+			timestamp,
+			targetId: "failed-reply",
+			replacement: null,
+		});
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("rejects a forward reference to a later response", () => {
+		session.append({
+			type: "context_edit",
+			id: "forward-edit",
+			parentId: session.getLeafId(),
+			timestamp,
+			targetId: "future-reply",
+			replacement: null,
+		});
+		session.append({
+			type: "message",
+			id: "future-reply",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { ...assistant(), stopReason: "error" },
+		});
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("does not clear pending or failed compaction state when a recovery edit is valid", () => {
+		const agentDir = join(root, "agent");
+		fs.mkdirSync(agentDir);
+		const store = new PreviewFailureStore(agentDir);
+		store.begin(session);
+		retry();
+		expect(() => assertPreviewSession(session)).not.toThrow();
+		expect(store.status(session).state).toBe("pending");
+		expect(() => store.assertReady(session)).toThrow(/CONTEXT_PREVIEW_PENDING/);
+		store.fail(session, "CONTEXT_WRITER_FAILED");
+		expect(() => assertPreviewSession(session)).not.toThrow();
+		expect(() => new PreviewFailureStore(agentDir).assertReady(session)).toThrow(/CONTEXT_WRITER_FAILED/);
+	});
+	it("rejects a failed response that contains a tool call", () => {
+		retry();
+		const failed = session.getEntry("failed-reply");
+		if (failed?.type !== "message" || failed.message.role !== "assistant") throw new Error("Missing failed reply");
+		failed.message.content = [{ type: "toolCall", id: "unfinished", name: "read", arguments: {} }];
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("rejects an edit crossing a checkpoint that already existed when it was appended", () => {
+		retry();
+		checkpoint();
+		session.append({
+			type: "context_edit",
+			id: "late-edit",
+			parentId: session.getLeafId(),
+			timestamp,
+			targetId: "failed-reply",
+			replacement: null,
+		});
+		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
+	});
+	it("counts only projected messages when retaining complete recent turns", () => {
+		retry();
+		const failed = session.getEntry("failed-reply");
+		if (failed?.type !== "message" || failed.message.role !== "assistant") throw new Error("Missing failed reply");
+		failed.message.content = [{ type: "text", text: "omitted ".repeat(1000) }];
+		session.append({
+			type: "message",
+			id: "later-input",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { role: "user", content: "Another local check.", timestamp: 3 },
+		});
+		session.append({
+			type: "message",
+			id: "later-reply",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: assistant(),
+		});
+		const branch = session.getBranch();
+		const budget = session
+			.buildSessionProjection()
+			.entries.filter((entry) => ["retry-input", "later-input", "later-reply"].includes(entry.sourceEntry.id))
+			.flatMap((entry) => entry.messages)
+			.reduce((sum, message) => sum + estimateTokens(message), 0);
+		expect(chooseCut(branch, budget)).toBe(branch.findIndex((entry) => entry.id === "retry-input"));
 	});
 });

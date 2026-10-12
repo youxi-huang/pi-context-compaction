@@ -7,7 +7,7 @@ Source-linked context compaction for [Pi](https://github.com/earendil-works/pi).
 
 A compaction note should carry the task forward and provide an index back to the original transcript.
 
-**Status:** [v0.3.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.1) is an independent extension preview for unmodified official Pi **1.1.0**. Its supported workflow is manual compaction of fresh persistent text sessions. The older [v0.3.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.0) resident source build remains available for development and comparison.
+**Status:** [v0.3.2](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.2) is an independent extension preview for unmodified official Pi **1.1.0**. It supports ordinary Agent retries and manual compaction of persistent text sessions, with explicit recovery for previously blocked retry sessions. The older [v0.3.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.0) resident source build remains available for development and comparison.
 
 [Recovery example](#recovery-example) · [How it works](#how-it-works) · [Evidence and limits](#evidence-and-limits) · [Install the extension](#install-the-extension) · [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions)
 
@@ -59,7 +59,7 @@ See the [architecture](docs/context-memory/architecture.md) for persistence, con
 | Evidence | What it supports |
 | --- | --- |
 | **94 context-memory regressions** | Covered contracts for notes, budgets, sources, retrieval, persistence and failure handling. Synthetic checks; no model calls. |
-| **Stock-Pi extension preview** | 37 preview regressions and 26 checks on official Pi 1.1.0 cover package lifecycle, source-linked continuation and explicit failure recovery. Uses loopback Git/HTTP, with no real-provider quality claim. See the [candidate validation](docs/context-memory/validation.md#independent-stock-pi-candidate-2026-10-11-utc). |
+| **Stock-Pi extension preview** | 53 preview regressions, 26 official-Pi acceptance checks and 83 passing scenario checks cover retries, package lifecycle, continuation and explicit recovery. Seventeen known gaps remain. Uses loopback Git/HTTP, with no real-provider quality claim. See the [retry validation](docs/context-memory/validation.md#v032-retry-compatibility-2026-10-11). |
 | **461 host security and compatibility regressions** | Covered host behavior under synthetic inputs and mocked providers. Separate from recovery-quality evaluation. |
 | **One passing nine-checkpoint live stress sequence** | A real model continued a synthetic task across nine automatic checkpoints and recovered earlier facts after session reopening. This followed one failed run and a correction. |
 | **Recovery evaluation and bounded live checks** | [Fixtures, probes, scoring and runners](eval/README.md) are implemented. Luna/max checks produced partial native results; the final project attempt recovered the task after one checkpoint, then rejected a second note with a misattributed quotation. The full two-arm baseline is deferred under the reduced evaluation budget. |
@@ -80,7 +80,7 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 pi remove git:github.com/youxi-huang/pi-context-compaction@extension-preview
 ```
 
-Restart Pi after installing or updating. Finish a text turn, use `/compact`, then inspect `/compaction-status` and continue. This branch is the extension-only download channel; it leaves the official Pi executable in place. To pin this version, use `@extension-v0.3.1` instead. Git tags stay pinned; branch updates follow newer preview releases.
+Restart Pi after installing or updating. Finish a text turn, use `/compact`, then inspect `/compaction-status` and continue. This branch is the extension-only download channel; it leaves the official Pi executable in place. To pin this version, use `@extension-v0.3.2` instead. Git tags stay pinned; branch updates follow newer preview releases.
 
 The [preview guide](docs/context-memory/extension-preview.md) covers configuration, explicit failure recovery and unsupported workflows. Automatic compaction is cancelled and background cache warming is paused while the preview is enabled. Real-provider quality, interactive TUI behavior and Windows persistence have not been validated. Older resident/native checkpoints are not migrated.
 
@@ -113,7 +113,7 @@ The **current session model writes the note by default**, so no second model con
 
 ## Status and compatibility
 
-The v0.3.1 preview is an ordinary extension with no private host patches. It targets official Pi **1.1.0** and manual compaction of fresh persistent text sessions, with its own blocking and recovery scope. The root `package.json` carries upstream workspace metadata; the package-only `extension-preview` branch and `extension-v0.3.1` tag carry the Pi extension manifest. The [roadmap](docs/context-memory/roadmap.md) separates this first public preview from the mature compatibility contract at 1.0.
+The v0.3.2 preview is an ordinary extension with no private host patches. It targets official Pi **1.1.0**, ordinary Agent retries and manual compaction of persistent text sessions, with its own blocking and recovery scope. The root `package.json` carries upstream workspace metadata; the package-only `extension-preview` branch and `extension-v0.3.2` tag carry the Pi extension manifest. The [roadmap](docs/context-memory/roadmap.md) separates this public preview from the mature compatibility contract at 1.0.
 
 The v0.3.0 resident source build uses Pi **v1.1.0** (`abe508e1`) and six host integrations. Its fingerprint and historical live evidence remain unchanged by the preview release. The source-build instructions above deliberately select v0.3.0. The [changelog](CHANGELOG.md) separates each released change and the [validation record](docs/context-memory/validation.md) keeps resident and preview evidence distinct.
 

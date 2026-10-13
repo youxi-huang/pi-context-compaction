@@ -3,7 +3,8 @@
 ## Status and next brief, 2026-10-13
 
 This section is the brief for the next session. It supersedes the original
-handoff below wherever they differ; the original stays for context.
+handoff below wherever they differ; the original stays for context. Steps 1–7
+are done; the open items are decisions, listed below.
 
 ### Where things are
 
@@ -14,7 +15,7 @@ CI (`verify` and CodeQL) was green on every pushed head so far. Do not merge,
 tag or publish; the maintainer decides releases.
 
 The maintainer accepted four decisions, D15–D18 in the [plan](v0.4.0-plan.md).
-Steps 1–5 implement D15–D17:
+Steps 1–5 implement D15–D17, step 6 implements D18 and step 7 measures them:
 
 1. The instruction-authority prototypes are removed; the design is
    [archived](archive/instruction-authority-design.md).
@@ -36,65 +37,44 @@ Steps 1–5 implement D15–D17:
    started once per checkpoint interval in the band below Pi's default
    threshold. Every writer call is in a content-free journal
    (`call-journal.ts`). The merge path, ledgers and S2 runner are gone.
+6. B is implemented behind `previewWorkNotes.enabled`, off by default
+   (`work-notes.ts`). `context_note` takes data only, one line per fact. A
+   compaction merges the previous note with the work notes since, without a
+   model call, and commits through the prefix path; the user's messages up to
+   the last note follow the note verbatim (`details.userMessages`), re-rendered
+   at every full validation. Earlier instructions are carried unchanged. Bounds,
+   a note that supersedes an instruction's source, the note schema or the prefix
+   conditions send the compaction to the writer, which also reads the carried
+   user messages.
+7. Two official-Pi scenario cases cover B and A end to end with the adversarial
+   cases from the earlier brief, and found that a writer call without a usage
+   event was journaled as free (fixed). `scripts/context-memory-preview-ab.mjs`
+   compares sync, A and B on one synthetic script; its first results are in
+   the [validation record](validation.md).
 
-### Step 6: B as data-only work notes (D18)
+### Decisions for the maintainer
 
-Goal: the session model's own notes let a compaction commit without a writer
-call, and no model-written text gains user-instruction authority.
+Each needs the maintainer, not the next worker alone.
 
-1. **Work-note schema.** Give `context_note` a preview-local schema without
-   `instructions`: `state`, `reasons` (decisions and why), `failedPaths`,
-   `files`, `nextSteps`, `gaps`, each fact with `sources` and an optional verbatim
-   `quote`. Keep the native custom-entry carrier (`CONTEXT_NOTE_TYPE`) and
-   validate sources and quotes against the branch when the tool runs, as today.
-   Do not edit the shared `notes.ts` or `identity.ts`: that changes the resident
-   fingerprint and the frozen evaluation, which need maintainer approval. Fill
-   `instructions: []` when a work note becomes part of a `MemoryNote`.
-2. **One short tool guideline.** Ask for a note after a decision with its
-   reason, a failed approach, or a completed subtask; not every turn. No review
-   step and no forced notes.
-3. **B candidate at compaction.** Build it deterministically: the previous
-   checkpoint's note (its validated `instructions` carried unchanged) merged with
-   the work notes since the previous `coveredThrough`, dropping facts whose
-   sources a later note supersedes. It covers through the last work note. Commit
-   it through the existing prefix path (step 4), so every later original stays
-   verbatim. If it is too large, the cut fails, or the merge is ambiguous, fall
-   back to the synchronous writer with the notes as increments, as today.
-4. **Verbatim user messages.** User instructions are never restated by a model
-   in this path. Render the user messages inside the compacted range verbatim in
-   their own section after the note (the existing continuation section is the
-   model to follow), each bounded with a `context_history` pointer to the
-   original, the total bounded; exceeding the bound means the writer path.
-   Record their entry IDs in the checkpoint details and re-render them on every
-   full validation in the preview, so a tampered section is rejected like a
-   tampered quote. The shared validator only checks that the summary starts
-   with `renderNote(note)`, so the appended section needs this preview check.
-5. **Opt-in.** Put B's direct commit behind its own switch in
-   `pi-context-memory.json`, default off, like `previewPreparation`, until the
-   A/B comparison. Record `details.preparation.path` (or an equivalent) as
-   `notes` so evaluation can tell the paths apart.
-6. **Tests.** Focused regressions for: a note claiming an instruction is
-   rejected by the schema; counterfeit sources and quotes; cross-branch notes
-   are ignored; a newer user ruling after the last note stays verbatim in the
-   tail; a tampered user-message section fails full validation; fallback to the
-   writer when bounds are exceeded; journal records for any writer call.
-
-Open design point to put to the maintainer, not to decide alone: the writer
-path still writes `instructions` itself. Removing that from every path means a
-shared schema change and a fingerprint change.
-
-### Step 7: one end-to-end path and the A/B runner
-
-1. On official Pi 1.1.0 (the existing acceptance or scenario harness, loopback
-   provider): real history, a candidate (A or B), a later user correction,
-   commit through the gate, disk confirmation, restart and recovery. Add the
-   adversarial cases: same-ID content tampering, branch switch, cancelled
-   preparation, a call with no reported usage, forged sources, and a fake
-   instruction inside a note.
-2. A bounded A/B comparison runner (synthetic first) that reports foreground
-   pause, total tokens and cost from the journal, discarded preparation, and
-   recovery probes, with the same sources and settings for sync, A and B.
-   Real-provider runs need the maintainer's credentials and an explicit budget.
+1. **Instructions on the writer path.** The writer (sync and A) still restates
+   user rulings in `instructions`. Options: keep it until real A/B data
+   (recommended); in the preview only, render the verbatim section on every path
+   and accept only writer instructions that quote a cited user message; or remove
+   `instructions` from the shared schema (fingerprint and frozen evaluation).
+2. **Payload guard versus A's band and Pi's threshold.** The final payload guard
+   counts bytes / 3 against `window − max(16,384, maxTokens)`. For text near 4
+   bytes per token it blocks, durably in a protected session, before A's band and
+   before Pi's threshold compaction. Aligning the scales is a policy change; the
+   preview could do it locally, the resident runtime shares `memoryBudget`.
+3. **B keeps the turn of its last note.** Coverage ends at the note, so that turn
+   stays verbatim until a later note. In the synthetic run that left 104k tokens
+   after compaction against 3k. Options: accept the lag; ask for notes at the end
+   of a turn and allow a cut right after the note's tool result; or let the
+   writer cover the rest.
+4. **Real-provider runs.** The A/B runner is synthetic. Running it against a
+   provider needs the maintainer's credentials and an explicit budget. At the
+   synthetic prices the current script costs about $1.86 for sync, $1.86 for A
+   and $4.37 for B per run without prompt caching; a smaller script is cheaper.
 
 ### Rules that keep this lean
 

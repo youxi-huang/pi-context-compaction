@@ -1,5 +1,87 @@
 # Validation record
 
+## Unreleased: end-to-end cases and a synthetic A/B runner, 2026-10-13 UTC
+
+Step 7 of the [handoff brief](claude-handoff.md). Everything here uses official Pi
+1.1.0 with a loopback provider and synthetic credentials. None of it is a
+real-provider latency, cost or quality result.
+
+### Two official-Pi cases
+
+`work-notes` (B, 12 checks) and `prepared-candidate` (A, 7 checks) join the
+scenario suite and the reviewed acceptance contract. Their first runs, against the
+step 6 package, failed 4 and 3 checks. Five failures came from the harness: it
+replaced Pi's system prompt, so tool guidelines never rendered; the tamper edit
+hit the note's quote before the user-message section; and Pi's own
+`keepRecentTokens` gate answered "Nothing to compact" before the extension ran,
+which the cases now avoid with Pi's `compaction.keepRecentTokens: 0`, as the
+acceptance runner does. One failure was inherited from an earlier durable marker.
+The last was a defect: a writer response with no usage event was journaled as a
+complete call with zero tokens. Zero usage now counts as unknown on any stop
+reason, with a focused regression that fails without the fix.
+
+| Command, at `882096f` | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 0. 100 script and 312 runtime checks; security 461, unchanged |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27 on `stock-preview+src.71713207c248a39e`; scenarios 145 pass (126 + 19), 0 known gaps, profile accepted; release checks and prepare pass |
+
+Long-session overhead in that run, raw ms: 10 checkpoints 73.07, 5.42, 4.79;
+20 checkpoints 153.31, 6.82, 10.89; control 6.47, 3.36, 2.90. Extra median
+overhead 2 / 8 ms.
+
+### A/B runner, first synthetic results
+
+`node scripts/context-memory-preview-ab.mjs --package-dir .artifacts/context-memory-preview-package --stock-root .artifacts/context-memory-preview-stock --output-dir <dir> [--latency-ms N]`
+
+Each arm runs in its own process with the same script: two cycles of a ruling,
+a pasted log of about 97k tokens with one fact in the middle, a follow-up, then
+`/compact`; then a restart and a probe prompt. The window is 128k tokens.
+Usage counts 3 bytes per token and costs a synthetic $3/$15 per million input
+and output tokens. The writer is faithful: it records every ground-truth fact it
+can see. The model writes B's notes, one `context_history` search and one
+`context_note` call each, only when B's guideline is in its system prompt. The
+script waits for A's preparation to finish before the next input, which is A's
+best case. At most 80 provider requests and 300 s per arm.
+
+| `--latency-ms` | Arm | Paths | Pause per compaction, ms | Turn time, ms | Writer calls (foreground) | Main requests | Total tokens | Synthetic cost | Context after cycle 2 | Probes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | sync | sync, sync | 92, 119 | 285 | 2 (2) | 9 | 616,942 | $1.86 | 3,001 | 6/6 |
+| 0 | A | prefix, prefix | 68, 114 | 317 | 2 (0) | 9 | 616,881 | $1.86 | 3,042 | 6/6 |
+| 0 | B | notes, notes | 76, 133 | 434 | 0 (0) | 17 | 1,453,006 | $4.37 | 104,386 | 6/6 |
+| 1000 | sync | sync, sync | 1,088, 1,139 | 6,243 | 2 (2) | 9 | 616,953 | $1.86 | 3,002 | 6/6 |
+| 1000 | A | prefix, prefix | 59, 99 | 6,310 | 2 (0) | 9 | 616,892 | $1.86 | 3,043 | 6/6 |
+| 1000 | B | notes, notes | 72, 152 | 14,425 | 0 (0) | 17 | 1,452,365 | $4.37 | 104,256 | 6/6 |
+
+No arm discarded a prepared call or left unknown usage. What this shows, within
+its synthetic limits:
+
+- **A** moves the writer call out of the pause at the same token cost, when
+  preparation finishes before the next input.
+- **B** removes the writer call, but each note costs two extra rounds that resend
+  the whole context. Without a prompt cache that more than doubles tokens and
+  moves the time into the turns. A provider cache would make those resends cheap;
+  the loopback cannot show it.
+- **B keeps the turn of its last note verbatim.** In cycle 2 the last note was
+  written in the log turn, so the log stayed in context after the commit: 104k
+  tokens against 3k for sync and A. B frees that turn only at a later note.
+- All arms pass the six probes, because the scripted writer is faithful and the
+  scripted model notes the right facts. This checks that no path drops what it
+  was given; it says nothing about how well a real model writes notes.
+
+### Finding: the payload guard blocks before A's band and Pi's threshold
+
+The runner first counted 4 bytes per token, closer to English text, and every
+arm was blocked after the log turn with `CONTEXT_PAYLOAD_TOO_LARGE`. The
+preview's final payload guard estimates tokens as bytes / 3 and compares them
+with `window − max(16,384, maxTokens)`. At about 4 bytes per token it fires near
+75% of that limit. For a 128k window with an 8k-output model that is about 84k
+real tokens, while A's preparation band starts at 97.7k and Pi's threshold
+compaction at 111.6k. With a larger `maxTokens` the guard moves lower still,
+because Pi reserves 16,384 tokens whatever the model's maximum output. In a
+protected session the guard blocks durably until `/compact`. The runner therefore
+counts 3 bytes per token, the guard's own scale. This is unchanged here and is
+put to the maintainer.
+
 ## Unreleased: arm B as data-only work notes, 2026-10-13 UTC
 
 Step 6 of the [handoff brief](claude-handoff.md), decision D18, at `9b97b47` on

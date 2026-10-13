@@ -1,5 +1,40 @@
 # Validation record
 
+## Unreleased: arm B as data-only work notes, 2026-10-13 UTC
+
+Step 6 of the [handoff brief](claude-handoff.md), decision D18, at `9b97b47` on
+`claude/affectionate-cray-21pzua`. `context_note` takes data only; with
+`previewWorkNotes.enabled` a compaction can commit merged work notes through the
+prefix path without a model call, with the user's own messages rendered after
+the note. The resident runtime, its fingerprint, the shared `notes.ts`/`identity.ts`
+and the evaluation pin are unchanged; the stamp's fingerprint gate passed.
+
+All results use the offline loopback provider and synthetic credentials. They are
+not real-provider latency, cost or recovery results.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` on `f7fe5bd`, before any change | Exit 0 |
+| `context-memory-ops.mjs verify` after the change | Exit 0. `context-memory-check.mjs`: 100 script and 311 runtime checks (304 before; seven B regressions added, one existing test moved to the new note shape). `security-regression-check.mjs`: 461 checks, unchanged |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` on the clean commit | Exit 0. Acceptance 27/27 on `stock-preview+src.40870d59ecfd6552`; scenarios 126 pass, 0 known gaps, 0 fail, profile accepted; release checks and prepare pass |
+
+The seven regressions cover: a commit from merged notes with no writer call,
+the user's messages verbatim and a later ruling kept in the tail, then reopened;
+an edited user message in the section blocking at the next full validation
+(`CONTEXT_NOTE_QUOTE`); the next writer receiving the user messages a notes
+checkpoint covered; earlier instructions carried unchanged, and a note that
+supersedes their source sent to the writer; user messages beyond their bound
+sent to the writer, which receives the notes and is journaled; the note schema
+refusing instructions, line breaks, forged sources and forged quotes; notes from
+another branch and counterfeit note entries ignored. Disabling the section check,
+the one-line rule and the covered-message rule together fails five of the seven.
+
+The scenarios run with both switches off, so B is covered by focused tests here;
+step 7 adds an official-Pi case. Long-session overhead in this run, raw ms:
+10 checkpoints 72.09, 5.20, 4.79; 20 checkpoints 201.95, 10.39, 8.00; control
+8.40, 3.54, 3.43. Extra median overhead 1 / 6 ms, within the required 50 ms. The
+first probe after a checkpoint again pays the full validation.
+
 ## Unreleased: validation at trust boundaries, 2026-10-13 UTC
 
 Three changes on `claude/affectionate-cray-21pzua`, after the handoff head

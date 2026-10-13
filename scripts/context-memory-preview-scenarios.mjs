@@ -15,9 +15,7 @@ import { assertProfileVersion, gradeScenarioAcceptance } from "./context-memory-
 // Every check states the intended behavior. Checks listed in KNOWN_GAPS are not provided by the current
 // preview: they are reported and do not fail the run. A listed check that starts passing fails the run
 // until it is removed from KNOWN_GAPS, so a fix cannot land without becoming a required regression.
-const KNOWN_GAPS = new Set([
-	"long-session-overhead/per-request-budget",
-]);
+const KNOWN_GAPS = new Set([]);
 
 const CASES = [
 	{ name: "documented-first-compaction", variants: ["extension"] },

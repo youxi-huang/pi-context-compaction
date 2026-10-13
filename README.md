@@ -8,7 +8,9 @@ Pi Context Compaction explores a more traceable handover for [Pi](https://github
 
 The goal is **continuity with a route back to the source**, not perfect memory.
 
-**Current release:** [v0.3.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It compacts on request (`/compact`) in persistent, text-only sessions, and leaves sessions it cannot check to Pi. It does **not** compact automatically.
+**Stable preview:** [v0.3.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It compacts on request (`/compact`) in persistent, text-only sessions, and leaves sessions it cannot check to Pi. It does **not** compact automatically.
+
+**Experimental pre-release candidate:** v0.4.0-preview.1 prepares optional background work by the same configured writer, disabled by default. It is being reviewed in a PR and has not been published. B, the new instruction-authority protocol and the full A/B comparison remain unfinished. The required performance-growth check fails and the 50 ms goal is unmet; this version has an explicit experimental exception, without a claim of better pause, total cost or recovery. See the [scope and evidence](docs/context-memory/v0.4.0-preview.1-release.md).
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
 
@@ -30,6 +32,14 @@ Install the **fixed v0.3.3 extension package** from your terminal:
 ```sh
 pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3
 ```
+
+After the experimental A pre-release is published, its fixed package tag will be:
+
+```sh
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0-preview.1
+```
+
+Preparation remains off until explicitly configured. The [extension guide](docs/context-memory/extension-preview.md) describes its limits and configuration.
 
 That is the whole installation. You don't need to clone this repository, rebuild Pi or configure a second model. Restart Pi afterwards.
 

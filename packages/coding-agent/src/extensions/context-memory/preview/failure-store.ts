@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { types } from "node:util";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries, isRecord } from "../identity.ts";
 import type {
 	PreviewAttempt,
+	PreviewBranchSnapshot,
 	PreviewCompaction,
 	PreviewFailureStoreContract,
 	PreviewSession,
@@ -149,23 +151,199 @@ function candidateHash(candidate: PreviewCompaction | CompactionEntry): string {
 	]);
 }
 
+function arrayIndex(key: string): number | undefined {
+	if (key.length > 10) return undefined;
+	const index = Number(key);
+	return Number.isInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === key ? index : undefined;
+}
+
+interface PrototypeTable {
+	keys: readonly PropertyKey[];
+	descriptors: ReadonlyMap<PropertyKey, PropertyDescriptor>;
+}
+
+function prototypeTable(prototype: object): PrototypeTable {
+	const keys = Reflect.ownKeys(prototype);
+	const descriptors = new Map<PropertyKey, PropertyDescriptor>();
+	for (let index = 0; index < keys.length; index++) {
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, keys[index]);
+		if (descriptor) descriptors.set(keys[index], descriptor);
+	}
+	return { keys: Object.freeze(keys), descriptors };
+}
+
+// The Node intrinsics and this extension's code are trusted at module initialization.
+// This is a source-hook eligibility proof, not a sandbox for pre-load/global builtin rewrites.
+const objectPrototypeTable = prototypeTable(Object.prototype);
+const arrayPrototypeTable = prototypeTable(Array.prototype);
+
+function samePrototypeTable(prototype: object, baseline: PrototypeTable): boolean {
+	const keys = Reflect.ownKeys(prototype);
+	if (keys.length !== baseline.keys.length) return false;
+	// Do not invoke an altered Array iterator or push while deciding whether it is safe.
+	for (let index = 0; index < keys.length; index++) {
+		const key = keys[index];
+		if (key !== baseline.keys[index]) return false;
+		const expected = baseline.descriptors.get(key);
+		const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
+		if (
+			!expected ||
+			!descriptor ||
+			descriptor.enumerable !== expected.enumerable ||
+			descriptor.configurable !== expected.configurable
+		)
+			return false;
+		const data = Object.hasOwn(descriptor, "value");
+		if (data !== Object.hasOwn(expected, "value")) return false;
+		if (data) {
+			if (!Object.is(descriptor.value, expected.value) || descriptor.writable !== expected.writable) return false;
+		} else if (descriptor.get !== expected.get || descriptor.set !== expected.set) return false;
+	}
+	return true;
+}
+
+/** Reject hooks without invoking them; memoization lives only inside one preflight. */
+function plainData(value: unknown, verified: WeakSet<object>): boolean {
+	// A changed parent can supply inherited serializer hooks absent on either
+	// standard prototype itself. Refuse it before creating any work arrays.
+	if (Object.getPrototypeOf(Array.prototype) !== Object.prototype) return false;
+	// Validation also reads inherited schema/fact properties after serialization.
+	// Refuse any new contribution, including a data container holding nested hooks.
+	// The native __proto__ accessor is allowed only with its exact initial descriptor.
+	if (
+		!samePrototypeTable(Object.prototype, objectPrototypeTable) ||
+		!samePrototypeTable(Array.prototype, arrayPrototypeTable)
+	)
+		return false;
+	const pending: unknown[] = [value];
+	const seen = new WeakSet<object>();
+	const checked: object[] = [];
+	while (pending.length) {
+		const current = pending.pop();
+		if (current === null || current === undefined) continue;
+		if (typeof current !== "object") {
+			if (!["string", "number", "boolean"].includes(typeof current)) return false;
+			continue;
+		}
+		if (verified.has(current) || seen.has(current)) continue;
+		if (types.isProxy(current)) return false;
+		const prototype = Object.getPrototypeOf(current);
+		if (Array.isArray(current) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null)
+			return false;
+		if (
+			(prototype !== null && Object.getOwnPropertyDescriptor(Object.prototype, "toJSON")) ||
+			(Array.isArray(current) && Object.getOwnPropertyDescriptor(Array.prototype, "toJSON"))
+		)
+			return false;
+		seen.add(current);
+		checked.push(current);
+		const arrayLength = Array.isArray(current) ? current.length : undefined;
+		let arrayIndices = 0;
+		for (const key of Reflect.ownKeys(current)) {
+			if (typeof key !== "string" || key === "toJSON") return false;
+			const descriptor = Object.getOwnPropertyDescriptor(current, key);
+			if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
+			if (arrayLength !== undefined) {
+				const index = arrayIndex(key);
+				if (index !== undefined && index < arrayLength) arrayIndices++;
+			}
+			pending.push(descriptor.value);
+		}
+		// Holes can invoke inherited indexed getters during JSON.stringify. Count
+		// only actual data indices, without iterating a potentially enormous length.
+		if (arrayLength !== undefined && arrayIndices !== arrayLength) return false;
+	}
+	for (const object of checked) verified.add(object);
+	return true;
+}
+
+const ownedSnapshots = new WeakSet<PreviewBranchSnapshot>();
+
+/** Required metadata must survive JSON serialization without normalization or inheritance. */
+function canonicalMetadata(entry: SessionEntry): boolean {
+	for (const key of ["id", "type", "timestamp", "parentId"] as const) {
+		const descriptor = Object.getOwnPropertyDescriptor(entry, key);
+		if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) return false;
+		const value: unknown = descriptor.value;
+		if (key === "id" && !identifier(value)) return false;
+		if (key === "type" && (typeof value !== "string" || value === "session")) return false;
+		if (key === "timestamp" && typeof value !== "string") return false;
+		if (key === "parentId" && value !== null && !identifier(value)) return false;
+	}
+	return true;
+}
+
+/**
+ * Preflight before the shared validator serializes anything: a later hook must not
+ * modify an already captured source. Non-data branches keep the ordinary readback.
+ * The collector and its completed snapshot belong to this one synchronous frame.
+ */
+export function createPreviewBranchSnapshot(branch: readonly SessionEntry[]):
+	| {
+			snapshot: PreviewBranchSnapshot;
+			onSerializedEntry(index: number, serialized: string): void;
+	  }
+	| undefined {
+	if (!plainData(branch, new WeakSet<object>()) || !branch.every(canonicalMetadata)) return undefined;
+	const canonicalLines: Buffer[] = [];
+	const snapshot = Object.freeze({ branch, canonicalLines });
+	let nextIndex = 0;
+	let valid = true;
+	if (branch.length === 0) {
+		Object.freeze(canonicalLines);
+		ownedSnapshots.add(snapshot);
+	}
+	return {
+		snapshot,
+		onSerializedEntry(index, serialized) {
+			if (!valid || index !== nextIndex || index >= branch.length) {
+				valid = false;
+				ownedSnapshots.delete(snapshot);
+				return;
+			}
+			canonicalLines.push(Buffer.from(serialized, "utf8"));
+			nextIndex++;
+			if (nextIndex === branch.length) {
+				Object.freeze(canonicalLines);
+				ownedSnapshots.add(snapshot);
+			}
+		},
+	};
+}
+
 function readSession(identity: SessionIdentity): Map<string, SessionEntry>;
-function readSession(identity: SessionIdentity, allowUnflushed: true): Map<string, SessionEntry> | undefined;
-function readSession(identity: SessionIdentity, allowUnflushed = false): Map<string, SessionEntry> | undefined {
+function readSession(
+	identity: SessionIdentity,
+	allowUnflushed: true,
+	snapshot?: PreviewBranchSnapshot,
+): Map<string, SessionEntry> | undefined;
+function readSession(
+	identity: SessionIdentity,
+	allowUnflushed = false,
+	snapshot?: PreviewBranchSnapshot,
+): Map<string, SessionEntry> | undefined {
 	try {
-		const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID").toString(
-			"utf8",
-		);
-		if (!data.endsWith("\n")) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-		const lines = data.slice(0, -1).split("\n");
-		if (lines.length > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-		const header: unknown = JSON.parse(lines.shift() ?? "");
+		const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID");
+		if (data.at(-1) !== 10) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+		// Count all physical records before parsing, preserving the original limit/error order.
+		let lines = 0;
+		for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, end + 1)) {
+			if (++lines > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+		}
+		const headerEnd = data.indexOf(10);
+		const header: unknown = JSON.parse(data.toString("utf8", 0, headerEnd));
 		if (!isRecord(header) || header.type !== "session" || header.version !== 3 || header.id !== identity.sessionId)
 			throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 		const entries = new Map<string, SessionEntry>();
 		let roots = 0;
-		for (const line of lines) {
-			const entry: unknown = JSON.parse(line);
+		let nextAncestor = 0;
+		for (let start = headerEnd + 1; start < data.length; ) {
+			const end = data.indexOf(10, start);
+			const canonical = snapshot?.canonicalLines[nextAncestor];
+			// Parent order places selected ancestors in branch order, even with interleaved siblings.
+			// Compare exact bytes before decoding; every noncanonical record retains the lossy UTF8 parser.
+			const exact = canonical !== undefined && data.compare(canonical, 0, canonical.length, start, end) === 0;
+			const entry: unknown = exact ? snapshot?.branch[nextAncestor] : JSON.parse(data.toString("utf8", start, end));
 			if (
 				!isRecord(entry) ||
 				!identifier(entry.id) ||
@@ -179,6 +357,9 @@ function readSession(identity: SessionIdentity, allowUnflushed = false): Map<str
 				throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			if (entry.parentId === null && ++roots !== 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			entries.set(entry.id, entry as unknown as SessionEntry);
+			// A selected ancestor with whitespace or alternate escaping still advances the byte cursor.
+			if (snapshot && entry.id === snapshot.branch[nextAncestor]?.id) nextAncestor++;
+			start = end + 1;
 		}
 		return entries;
 	} catch (error) {
@@ -199,11 +380,25 @@ function branchAt(entries: ReadonlyMap<string, SessionEntry>, leafId: string): S
 	return branch.reverse();
 }
 
+function sameEntries(left: readonly SessionEntry[], right: readonly SessionEntry[]): boolean {
+	return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+function currentSnapshot(
+	snapshot: PreviewBranchSnapshot,
+	branch: readonly SessionEntry[],
+	leafId: string | null,
+): boolean {
+	return leafId === (snapshot.branch.at(-1)?.id ?? null) && sameEntries(snapshot.branch, branch);
+}
+
 /** Operational failure state only; original history remains in Pi's JSONL. */
 export class PreviewFailureStore implements PreviewFailureStoreContract {
 	private readonly agentDir: string;
 	private readonly latched = new Map<string, string>();
 	private readonly recoveryMarkers = new Map<string, Marker>();
+	private readonly consumedSnapshots = new WeakSet<PreviewBranchSnapshot>();
+	private readonly consumedCanonicalLines = new WeakSet<readonly Buffer[]>();
 	private directory?: string;
 
 	constructor(agentDir: string) {
@@ -323,7 +518,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	private evaluate(session: PreviewSession, latch: boolean): PreviewStatus {
+	private evaluate(session: PreviewSession, latch: boolean, snapshot?: PreviewBranchSnapshot): PreviewStatus {
 		try {
 			const identity = this.identity(session);
 			const marker = this.readMarker(identity, latch);
@@ -331,14 +526,25 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			const latched = this.latched.get(identity.sessionId);
 			if (latched) return { state: "blocked", code: latched };
 			// Stock Pi allocates a path before its first user message. Empty persistent sessions may start normally.
-			const disk = readSession(identity, true);
+			const current =
+				snapshot && currentSnapshot(snapshot, session.getBranch(), session.getLeafId()) ? snapshot : undefined;
+			const disk = readSession(identity, true, current);
 			if (!disk) {
 				if (session.getEntries().some((entry) => entry.type === "message" || entry.type === "compaction"))
 					throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
 			} else {
 				const leafId = session.getLeafId();
-				if (leafId !== null && hashEntries(branchAt(disk, leafId)) !== hashEntries(session.getBranch()))
-					throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				if (leafId !== null) {
+					const memoryBranch = session.getBranch();
+					const diskBranch = branchAt(disk, leafId);
+					const identical =
+						current &&
+						snapshot &&
+						currentSnapshot(snapshot, memoryBranch, leafId) &&
+						sameEntries(diskBranch, memoryBranch);
+					if (!identical && hashEntries(diskBranch) !== hashEntries(memoryBranch))
+						throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				}
 			}
 			return { state: "ready" };
 		} catch (error) {
@@ -348,8 +554,20 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	assertReady(session: PreviewSession): void {
-		const status = this.status(session);
+	assertReady(session: PreviewSession, snapshot?: PreviewBranchSnapshot): void {
+		const current =
+			snapshot &&
+			ownedSnapshots.has(snapshot) &&
+			!this.consumedSnapshots.has(snapshot) &&
+			!this.consumedCanonicalLines.has(snapshot.canonicalLines)
+				? snapshot
+				: undefined;
+		if (snapshot) {
+			ownedSnapshots.delete(snapshot);
+			this.consumedSnapshots.add(snapshot);
+			this.consumedCanonicalLines.add(snapshot.canonicalLines);
+		}
+		const status = this.evaluate(session, true, current);
 		if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
 	}
 

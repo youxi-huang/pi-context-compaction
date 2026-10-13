@@ -6,6 +6,8 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inspectOfficialPi } from "./context-memory-preview-stock-install.mjs";
+import { assertProfileVersion, gradeScenarioAcceptance } from "./context-memory-preview-acceptance-profile.mjs";
 
 // Default-settings scenarios for the stock-Pi preview, each beside a control run without the extension.
 // Uses only an official npm Pi installation and a loopback mock provider. Never contacts a model service.
@@ -15,7 +17,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // until it is removed from KNOWN_GAPS, so a fix cannot land without becoming a required regression.
 const KNOWN_GAPS = new Set([
 	"long-session-overhead/per-request-budget",
-	"long-session-overhead/bounded-growth",
 ]);
 
 const CASES = [
@@ -45,10 +46,11 @@ const script = fileURLToPath(import.meta.url);
 const args = process.argv.slice(2);
 function argument(name, fallback) {
 	const index = args.indexOf(name);
-	if (index >= 0 && args[index + 1]) return args[index + 1];
+	if (index >= 0 && args[index + 1] && !args[index + 1].startsWith("--")) return args[index + 1];
+	if (index >= 0) throw new Error(`Missing value for ${name}`);
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence> [--other-stock-root <another Pi version>] [--perf-checkpoints 20] [--only <case>]`,
+		`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence> [--other-stock-root <another Pi version>] [--perf-checkpoints 20] [--only <case>] [--acceptance-profile <profile>]`,
 	);
 }
 const packageDir = resolve(argument("--package-dir"));
@@ -673,14 +675,18 @@ async function worker() {
 				const target = Number(argument("--perf-checkpoints", "20"));
 				const milestones = [...new Set([Math.min(10, target), target])];
 				const chunk = Array.from({ length: 6000 }, (_, i) => `trace ${String(i).padStart(5, "0")}: local check ok, port 4317 healthy`).join("\n");
-				async function probe() {
+				async function probe(milestone) {
 					const times = [];
+					const intervals = [];
 					for (let i = 0; i < 3; i++) {
+						const beginUs = Number(process.hrtime.bigint() / 1000n);
 						const started = performance.now();
 						const result = await prompt("Small follow-up question.");
 						times.push(performance.now() - started);
+						intervals.push({ beginUs, endUs: Number(process.hrtime.bigint() / 1000n) });
 						if (result.sent.length !== 1 || !result.reached) throw new Error(`Probe did not make exactly one request: ${JSON.stringify(result)}`);
 					}
+					observe("raw request timing samples", { milestone, samplesMs: times, monotonicIntervalsUs: intervals });
 					return median(times);
 				}
 				writeSettings(true);
@@ -698,14 +704,14 @@ async function worker() {
 					}
 					completed = cycle;
 					if (milestones.includes(cycle)) {
-						measured.push({ checkpoints: cycle, sessionMB: Number((statSync(manager.getSessionFile()).size / 1e6).toFixed(1)), extensionMs: Math.round(await probe()) });
+						measured.push({ checkpoints: cycle, sessionMB: Number((statSync(manager.getSessionFile()).size / 1e6).toFixed(1)), extensionMs: Math.round(await probe(cycle)) });
 					}
 				}
 				check("compactions-succeed", `All ${target} manual compactions succeed`, completed === target, completed);
 				const file = manager.getSessionFile();
 				writeSettings(false);
 				await open(stock.SessionManager.open(file));
-				const baselineMs = Math.round(await probe());
+				const baselineMs = Math.round(await probe("disabled-control"));
 				const rows = measured.map((row) => ({ ...row, baselineMs, overheadMs: Math.max(0, row.extensionMs - baselineMs) }));
 				observe("overhead per model request", { rows });
 				const first = rows.at(0);
@@ -776,7 +782,24 @@ async function parent() {
 	mkdirSync(outputDir, { recursive: true });
 	const otherStockRoot = argument("--other-stock-root", "");
 	const only = argument("--only", "");
-	const report = { host: "official npm Pi", providers: "loopback HTTP synthetic only", packageCopy: "temporary directory outside the repository", knownGaps: [...KNOWN_GAPS], cases: [], checks: [] };
+	const profile = argument("--acceptance-profile", "strict");
+	const packageManifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
+	const packageBuild = JSON.parse(readFileSync(join(packageDir, "preview-build.json"), "utf8"));
+	assertProfileVersion(profile, packageManifest.version);
+	if (packageBuild.version !== packageManifest.version) throw new Error("Candidate version identity mismatch");
+	const fileHash = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
+	const hostVersion = (root) => JSON.parse(readFileSync(join(root, "node_modules/@earendil-works/pi-coding-agent/package.json"), "utf8")).version;
+	const manifest = { spec: "0.4-preview-latency.1", suite: "S1/default-settings", providers: "loopback synthetic only",
+		runnerSha256: createHash("sha256").update(readFileSync(script)).digest("hex"),
+		package: packageBuild,
+		host: inspectOfficialPi(stockRoot, hostVersion(stockRoot)),
+		...(otherStockRoot ? { otherHost: inspectOfficialPi(otherStockRoot, hostVersion(otherStockRoot)) } : {}),
+		checkpointTarget: Number(argument("--perf-checkpoints", "20")), only: only || null };
+	writeFileSync(join(outputDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+	const report = { host: "official npm Pi", providers: "loopback HTTP synthetic only", packageCopy: "temporary directory outside the repository", knownGaps: [...KNOWN_GAPS],
+		candidate: { version: packageManifest.version, sourceCommit: packageBuild.sourceCommit, build: packageBuild.build, sourceHash: packageBuild.sourceHash,
+			manifestHash: fileHash(join(packageDir, "package.json")), entryHash: fileHash(join(packageDir, packageManifest.pi.extensions[0])), buildMetadataHash: fileHash(join(packageDir, "preview-build.json")) },
+		scope: { only: only || null, checkpointTarget: manifest.checkpointTarget, otherHostVersion: manifest.otherHost?.version ?? null }, cases: [], checks: [] };
 	const counts = { pass: 0, gap: 0, fail: 0, nowPasses: 0, skipped: 0 };
 	const isolatedRoot = mkdtempSync(join(tmpdir(), "pi-preview-scenarios-"));
 	const candidate = join(isolatedRoot, "package");
@@ -789,11 +812,14 @@ async function parent() {
 	}
 	report.summary = counts;
 	report.passed = counts.fail === 0 && counts.nowPasses === 0;
+	// Raw checks, calculations and the original gate remain intact. Acceptance is a separate version-bound decision.
+	report.acceptance = gradeScenarioAcceptance(report, profile);
 	writeFileSync(join(outputDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
 	process.stdout.write(
 		`\n${counts.pass} passed, ${counts.gap} known gaps, ${counts.fail} failed, ${counts.nowPasses} now passing and still listed, ${counts.skipped} skipped\n`,
 	);
-	if (!report.passed) process.exitCode = 1;
+	process.stdout.write(`Acceptance profile ${report.acceptance.profile}: ${report.acceptance.accepted ? "accepted" : "rejected"}; raw gate ${report.passed ? "passed" : "failed"}; ${report.acceptance.exceptions.length} declared performance exceptions\n`);
+	if (!report.acceptance.accepted) process.exitCode = 1;
 }
 
 async function runCases(report, counts, otherStockRoot, only, candidate) {

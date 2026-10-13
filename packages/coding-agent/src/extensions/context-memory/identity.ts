@@ -17,3 +17,28 @@ export function hashEntries(entries: readonly unknown[]): string {
 	for (const entry of entries) hash.update(JSON.stringify(entry)).update("\n");
 	return hash.digest("hex");
 }
+
+/** Exclusive prefix lengths, using exactly the serialization and newline bytes of hashEntries. */
+export function hashEntryPrefixes(
+	entries: readonly unknown[],
+	prefixLengths: readonly number[],
+	onSerializedEntry?: (index: number, serialized: string) => void,
+): ReadonlyMap<number, string> {
+	const requested = new Set(prefixLengths);
+	let last = 0;
+	for (const length of requested) {
+		if (!Number.isSafeInteger(length) || length < 0 || length > entries.length)
+			throw new Error("CONTEXT_SOURCE_PREFIX: invalid source prefix boundary");
+		last = Math.max(last, length);
+	}
+	const result = new Map<number, string>();
+	const hash = createHash("sha256");
+	if (requested.has(0)) result.set(0, hash.copy().digest("hex"));
+	for (let index = 0; index < last; index++) {
+		const serialized = JSON.stringify(entries[index]);
+		hash.update(serialized).update("\n");
+		onSerializedEntry?.(index, serialized);
+		if (requested.has(index + 1)) result.set(index + 1, hash.copy().digest("hex"));
+	}
+	return result;
+}

@@ -6,6 +6,8 @@ import { noteSchema, validateNote } from "../notes.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
 import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
+import { readPreparationConfig } from "./preparation-config.ts";
+import { PreviewPreparationCoordinator } from "./preparation-coordinator.ts";
 import { resolveWriterModel } from "./writer.ts";
 
 /** Output of a command the user asked for: the UI, or stdout without one. */
@@ -33,6 +35,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		config,
 		configError,
 		failureStore: new PreviewFailureStore(agentDir),
+		preparation: new PreviewPreparationCoordinator({ agentDir, settings: readPreparationConfig(agentDir) }),
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
@@ -140,6 +143,11 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	});
 	pi.on("session_compact", (event, ctx) => controller.committed(event, ctx));
 	pi.on("session_compact_failed", (event, ctx) => controller.compactionFailed(event, ctx));
+	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
+	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
+	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
+	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
+	pi.on("session_shutdown", () => controller.shutdownPreparation());
 	pi.registerTool({
 		name: "context_note",
 		label: "Context note",

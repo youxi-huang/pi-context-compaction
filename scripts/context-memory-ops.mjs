@@ -16,15 +16,20 @@ import {
 import { constants, tmpdir, userInfo } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { officialPiReady as officialPiCohortReady } from "./context-memory-preview-stock-install.mjs";
+import { assertProfileVersion, VERSION as FUNCTIONAL_PREVIEW_VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 // Command order comes from .github/workflows/context-memory.yml; do not add a second pipeline.
 const usage =
-	"Usage: node scripts/context-memory-ops.mjs <doctor|deps|build|verify|preview|eval|ci> [--verbose] [eval: --full --keep]";
+	"Usage: node scripts/context-memory-ops.mjs <doctor|deps|build|verify|preview|eval|ci> [--verbose] [eval: --full --keep] [preview/ci: --acceptance-profile <profile>]";
 const args = process.argv.slice(2);
+const profileIndex = args.indexOf("--acceptance-profile");
+const profile = profileIndex < 0 ? "strict" : args[profileIndex + 1];
+const operationArgs = args.filter((_, index) => profileIndex < 0 || (index !== profileIndex && index !== profileIndex + 1));
 const commands = new Set(["doctor", "deps", "build", "verify", "preview", "eval", "ci"]);
-const positional = args.filter((arg) => !arg.startsWith("--"));
+const positional = operationArgs.filter((arg) => !arg.startsWith("--"));
 const command = positional[0];
-const flags = new Set(args.filter((arg) => arg.startsWith("--")));
+const flags = new Set(operationArgs.filter((arg) => arg.startsWith("--")));
 if (args.length === 1 && args[0] === "--help") {
 	console.log(usage);
 	process.exit(0);
@@ -32,9 +37,16 @@ if (args.length === 1 && args[0] === "--help") {
 if (
 	positional.length !== 1 ||
 	!commands.has(command) ||
+	(profileIndex >= 0 && (!profile || profile.startsWith("--") || !["preview", "ci"].includes(command) || args.filter((arg) => arg === "--acceptance-profile").length !== 1)) ||
 	[...flags].some((flag) => flag !== "--verbose" && !(command === "eval" && ["--full", "--keep"].includes(flag)))
 ) {
 	console.error(usage);
+	process.exit(2);
+}
+try {
+	assertProfileVersion(profile, FUNCTIONAL_PREVIEW_VERSION);
+} catch (error) {
+	console.error(error.message);
 	process.exit(2);
 }
 
@@ -171,22 +183,7 @@ function dependencyState(hash) {
 }
 
 function officialPiReady(directory = stockRoot, version = "1.1.0") {
-	try {
-		const packageRoot = join(directory, "node_modules/@earendil-works/pi-coding-agent");
-		const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
-		const lock = JSON.parse(readFileSync(join(directory, "node_modules/.package-lock.json"), "utf8"));
-		const provenance = lock.packages["node_modules/@earendil-works/pi-coding-agent"];
-		return (
-			manifest.version === version &&
-			provenance?.version === version &&
-			!!provenance.integrity &&
-			realpathSync(packageRoot).startsWith(`${realpathSync(directory)}${sep}`) &&
-			["dist/index.js", "dist/bundle/cli.js"].every((file) => existsSync(join(packageRoot, file)))
-		);
-	} catch (error) {
-		if (error.code === "ENOENT") return false;
-		throw error;
-	}
+	return officialPiCohortReady(directory, version);
 }
 
 async function doctor() {
@@ -270,22 +267,14 @@ async function checks() {
 
 async function installOfficialPi(name, directory, version) {
 	await step(name, async (write) => {
-		if (officialPiReady(directory, version)) {
-			write(`Isolated official Pi ${version} is ready; no installation needed.\n`);
-			return;
-		}
 		await execute(
-			"npm",
+			process.execPath,
 			[
-				"install",
-				"--prefix",
-				relative(root, directory),
-				"--ignore-scripts",
-				"--no-audit",
-				"--no-fund",
-				"--package-lock=false",
-				"--save-exact",
-				`@earendil-works/pi-coding-agent@${version}`,
+				"scripts/context-memory-preview-stock-install.mjs",
+				"--stock-root",
+				directory,
+				"--version",
+				version,
 			],
 			write,
 		);
@@ -296,6 +285,7 @@ async function installOfficialPi(name, directory, version) {
 
 async function preview() {
 	await nodeStep("preview-build", ["scripts/context-memory-preview-build.mjs"]);
+	assertProfileVersion(profile, JSON.parse(readFileSync(join(root, ".artifacts/context-memory-preview-package/package.json"), "utf8")).version);
 	await installOfficialPi("official-pi", stockRoot, "1.1.0");
 	await nodeStep("preview-acceptance", [
 		"scripts/context-memory-preview-acceptance.mjs",
@@ -317,6 +307,8 @@ async function preview() {
 		".artifacts/context-memory-preview-stock-1.0.4",
 		"--output-dir",
 		".artifacts/context-memory-preview-scenarios",
+		"--acceptance-profile",
+		profile,
 	]);
 	await nodeStep("preview-release-checks", ["--test", "scripts/context-memory-preview-release-checks.test.mjs"]);
 	await nodeStep("preview-release-prepare", ["scripts/context-memory-preview-release.mjs", "--prepare"]);

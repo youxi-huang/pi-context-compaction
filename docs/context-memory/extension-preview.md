@@ -1,15 +1,26 @@
-# Independent extension preview — v0.3.3
+# Independent extension preview — v0.4.0-preview.1 candidate
 
 This preview runs on unmodified official Pi **1.1.0** as an ordinary Pi package.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
+**v0.4.0-preview.1 is an experimental A-stage pre-release candidate.** Its PR
+does not publish the immutable package tag; stable v0.3.3 remains available.
+Optional background
+preparation uses the same configured writer and is disabled by default. B and
+the new instruction-authority protocol remain future work. The required growth
+check fails, the 50 ms target is unmet and performance/cost/recovery benefits
+have not been accepted. The maintainer permits the growth failure only for this
+functional experiment; full v0.4.0 retains its performance and A/B gates.
+See the [release scope and evidence](v0.4.0-preview.1-release.md).
+
 ## Install, update and remove
 
-With official Pi 1.1.0 already installed, install the pinned v0.3.3 package:
+After the candidate is published, official Pi 1.1.0 users can install its pinned
+experimental package (the tag is not created by this PR):
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0-preview.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -42,7 +53,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.3.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3)
+The [v0.4.0-preview.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0-preview.1)
 also provides the extension `.tgz`, source archive, provenance and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
 published to npm; `private: true` prevents accidental registry publication and
@@ -243,6 +254,45 @@ over all host operations. Removing, disabling or filtering out the package
 ends its protection. Leave a blocked session with the package enabled and
 use the explicit retry operation.
 
+## Unreleased preparation experiment
+
+The development source adds optional preparation for v0.4.0; the pinned v0.3.3
+tag does not contain it. Build the development package above to evaluate it.
+The default remains synchronous manual compaction. To opt in, add this field
+alongside the ordinary settings in `pi-context-memory.json` and restart Pi:
+
+```json
+{
+  "previewPreparation": {
+    "enabled": true
+  }
+}
+```
+
+The configured writer prepares after a completed turn with at least 2,048 new
+source-proxy tokens, at most once per checkpoint interval and five seconds
+between starts. Preparation has its own 120-second cancellation deadline,
+eight-call limit, no repair/retry, and durable per-session budgets. The exact
+defaults and experiment envelope are in the
+[measurement specification](v0.4.0-measurement.md#initial-experiment-limits).
+Invalid preparation settings or unavailable accounting pause optional work;
+normal task requests and the formal compaction failure contract remain intact.
+
+`/compaction-status` reports `preparation`, its accounting, and the last selected
+commit path. A complete, current candidate can be submitted without a new writer
+call. New evidence or custom focus requires the same writer to reconcile it;
+otherwise the synchronous path remains available. Session-writer merges retain
+the current session prefix, so a smaller tail does not imply less provider input.
+Candidates live in memory and are lost on restart. Content-free accounting and
+budgets survive; pending disk claims wait for explicit commit recovery.
+`lastCompaction.stageMs` ends at staging and `pauseMs` is populated after disk
+confirmation. The S2 runner also measures the whole manual-compaction boundary.
+
+This experiment keeps full-branch checkpoint coverage. It does not enable the
+historical-prefix/retained-tail proposal, automatic scheduling or arm B.
+Synthetic execution establishes lifecycle behavior; natural hit rates, provider
+quality, cache economics and the 50 ms request target still require evidence.
+
 ## Verification
 
 Focused tests run through `scripts/context-memory-check.mjs`. The independent
@@ -251,10 +301,16 @@ npm Pi installation, using synthetic credentials and a loopback provider. Instal
 that official Pi first:
 
 ```sh
-npm install --prefix ./.artifacts/context-memory-preview-stock \
-  --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact \
-  @earendil-works/pi-coding-agent@1.1.0
+node scripts/context-memory-preview-stock-install.mjs \
+  --stock-root ./.artifacts/context-memory-preview-stock --version 1.1.0
 ```
+
+The installer pins all eight official runtime packages to the same release,
+checks their npm integrity metadata and starts the SDK with networking blocked.
+Installing only `pi-coding-agent@1.1.0` lets its caret dependencies select a newer
+Pi cohort and can fail at SDK startup. No official package source is patched.
+An existing coherent installation skips npm; `--check` verifies it without
+installing. The JSON report lists each runtime package's version and integrity.
 
 Then run acceptance:
 
@@ -283,9 +339,8 @@ settings, each case beside a control run without the extension. The second
 installation is optional and only serves the other-version case:
 
 ```sh
-npm install --prefix ./.artifacts/context-memory-preview-stock-1.0.4 \
-  --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact \
-  @earendil-works/pi-coding-agent@1.0.4
+node scripts/context-memory-preview-stock-install.mjs \
+  --stock-root ./.artifacts/context-memory-preview-stock-1.0.4 --version 1.0.4
 ```
 
 ```sh

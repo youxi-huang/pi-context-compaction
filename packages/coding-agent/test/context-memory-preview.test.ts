@@ -3,13 +3,20 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import {
+	type Api,
+	type AssistantMessage,
+	type Context,
+	createAssistantMessageEventStream,
+	type Model,
+} from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection,
 	type CompactionEntry,
 	type ExtensionAPI,
 	type ExtensionContext,
 	estimateTokens,
+	type SessionBeforeCompactEvent,
 	type SessionEntry,
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
@@ -34,6 +41,8 @@ import {
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 import { doctorReport } from "../src/extensions/context-memory/preview/notices.ts";
+import { parsePreparationConfig } from "../src/extensions/context-memory/preview/preparation-config.ts";
+import { PreviewPreparationCoordinator } from "../src/extensions/context-memory/preview/preparation-coordinator.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -43,6 +52,271 @@ vi.mock("node:fs", async (original) => {
 		unlinkSync: vi.fn(actual.unlinkSync),
 		fsyncSync: vi.fn(actual.fsyncSync),
 	};
+});
+
+describe("preview prepared compaction keeps the formal commit gate", () => {
+	let root: string;
+	let session: SyntheticSession;
+	let store: PreviewFailureStore;
+	let preparation: PreviewPreparationCoordinator;
+	let controller: PreviewMemoryController;
+	let ctx: ExtensionContext;
+	let output: MemoryNote | string;
+	let requests: Context[];
+	const model: Model<Api> = {
+		id: "preview-test",
+		name: "Synthetic writer",
+		provider: "preview-test",
+		api: "openai-completions",
+		baseUrl: "http://127.0.0.1:9/v1",
+		reasoning: false,
+		input: ["text"],
+		contextWindow: 128_000,
+		maxTokens: 8192,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	};
+	beforeEach(() => {
+		vi.mocked(fs.renameSync).mockReset().mockImplementation(originalFs.renameSync);
+		vi.mocked(fs.unlinkSync).mockReset().mockImplementation(originalFs.unlinkSync);
+		vi.mocked(fs.fsyncSync).mockReset().mockImplementation(originalFs.fsyncSync);
+		root = fs.mkdtempSync(join(tmpdir(), "pi-preview-prepared-commit-"));
+		session = new SyntheticSession(root);
+		store = new PreviewFailureStore(join(root, "agent"));
+		preparation = new PreviewPreparationCoordinator({
+			agentDir: join(root, "agent"),
+			settings: parsePreparationConfig({ enabled: true, minSourceTokens: 1, minIntervalMs: 0 }),
+		});
+		output = note();
+		requests = [];
+		const registry = {
+			find: () => model,
+			hasConfiguredAuth: () => true,
+			streamSimple: (_model: Model<Api>, context: Context) => {
+				requests.push(structuredClone(context));
+				const message = {
+					...assistant(),
+					content: [{ type: "text" as const, text: typeof output === "string" ? output : JSON.stringify(output) }],
+				};
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "done", reason: "stop", message });
+				stream.end(message);
+				return stream;
+			},
+		};
+		ctx = {
+			sessionManager: session,
+			model,
+			modelRegistry: registry,
+			thinkingLevel: "off",
+			getSystemPrompt: () => "Synthetic system prompt.",
+			hasPendingMessages: () => false,
+			getContextUsage: () => undefined,
+			hasUI: false,
+			ui: { notify: vi.fn() },
+			abort: vi.fn(),
+		} as unknown as ExtensionContext;
+		controller = new PreviewMemoryController({
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-test/preview-test", noteRepair: false },
+			failureStore: store,
+			preparation,
+		});
+		controller.sessionStart(ctx);
+	});
+	afterEach(async () => {
+		preparation.dispose();
+		await preparation.waitForIdle();
+		vi.restoreAllMocks();
+		fs.rmSync(root, { recursive: true, force: true });
+	});
+	function event(customInstructions?: string): SessionBeforeCompactEvent {
+		return {
+			type: "session_before_compact",
+			reason: "manual",
+			willRetry: false,
+			signal: new AbortController().signal,
+			customInstructions,
+			preparation: { tokensBefore: 2000 },
+		} as SessionBeforeCompactEvent;
+	}
+	async function prepare(): Promise<void> {
+		controller.prepare(ctx);
+		await preparation.waitForIdle();
+	}
+	function appendRuling(): void {
+		session.append({
+			type: "message",
+			id: "source-2",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: {
+				role: "user",
+				content: "Use port 4318 now. The deployment permission stays unchanged.",
+				timestamp: 2,
+			},
+		});
+		session.append({
+			type: "message",
+			id: "reply-2",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: assistant(),
+		});
+		output = {
+			...note(),
+			state: [{ text: "The service now uses port 4318.", sources: ["source-2"], supersedes: ["source-1"] }],
+		};
+	}
+	it("prepares without a pending marker, reuses full coverage with no foreground call, then requires disk confirmation", async () => {
+		await prepare();
+		expect(store.markerPresent(session)).toBe(false);
+		expect(requests).toHaveLength(1);
+		expect(controller.status(ctx).preparation?.state).toBe("ready");
+		const value = await controller.compact(event(), ctx);
+		expect(requests).toHaveLength(1);
+		expect(value.details?.preparation?.path).toBe("complete");
+		expect(value.details?.coveredThrough).toBe("reply-1");
+		expect(value.details?.sourceHash).toBe(hashEntries(session.getBranch()));
+		expect(value.usage?.totalTokens).toBe(0);
+		expect(store.status(session).state).toBe("pending");
+		expect(controller.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(0);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		expect(store.status(session).state).toBe("ready");
+		expect(controller.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(1);
+		expect(controller.status(ctx).lastCompaction).toMatchObject({ foregroundCalls: 0, diskConfirmed: true });
+		expect(ctx.abort).not.toHaveBeenCalled();
+	});
+	it.each(["ready", "failed"])(
+		"skips expensive optional preparation after a paid %s attempt without caching request validation",
+		async (state) => {
+			if (state === "failed") output = "malformed paid output";
+			await prepare();
+			appendRuling();
+			const inspect = vi.spyOn(store, "inspect");
+			const clone = vi.spyOn(globalThis, "structuredClone");
+			controller.prepare(ctx);
+			await preparation.waitForIdle();
+			expect(inspect).not.toHaveBeenCalled();
+			expect(clone).not.toHaveBeenCalled();
+			expect(requests).toHaveLength(1);
+			expect(store.markerPresent(session)).toBe(false);
+			expect(() => controller.assertReady(ctx)).not.toThrow();
+			if (!session.file) throw new Error("Missing synthetic session file");
+			fs.writeFileSync(session.file, fs.readFileSync(session.file, "utf8").replace("4317", "4316"));
+			expect(() => controller.assertReady(ctx)).toThrow("CONTEXT_SOURCE_CHANGED");
+			expect(ctx.abort).not.toHaveBeenCalled();
+		},
+	);
+	it("allows a new paid preparation after a confirmed checkpoint changes the interval", async () => {
+		await prepare();
+		const value = await controller.compact(event(), ctx);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		appendRuling();
+		await prepare();
+		expect(requests).toHaveLength(2);
+		expect(controller.status(ctx).preparation?.accounting?.aggregate.attempts).toBe(2);
+		expect(controller.status(ctx).preparation?.state).toBe("ready");
+		expect(store.markerPresent(session)).toBe(false);
+		expect(ctx.abort).not.toHaveBeenCalled();
+	});
+	it("merges a new user ruling through the same writer and only the unread tail", async () => {
+		await prepare();
+		appendRuling();
+		expect(controller.status(ctx).preparation?.state).toBe("stale");
+		const value = await controller.compact(event(), ctx);
+		expect(value.details?.preparation?.path).toBe("merge");
+		expect(value.details?.coveredThrough).toBe("reply-2");
+		expect(requests).toHaveLength(2);
+		const request = JSON.stringify(requests[1]);
+		expect(request).toContain("4318");
+		expect(request).toContain("The service uses port 4317.");
+		const payload: { newSources: Array<{ entryId: string }> } = JSON.parse(requests[1].messages[0].content as string);
+		expect(payload.newSources.map((source) => source.entryId)).toEqual(["source-2", "reply-2"]);
+		expect(value.details?.note.state[0]).toMatchObject({ sources: ["source-2"], supersedes: ["source-1"] });
+	});
+	it("new custom focus invokes a rewrite instead of directly submitting an old candidate", async () => {
+		await prepare();
+		const value = await controller.compact(event("Preserve deployment permission first."), ctx);
+		expect(requests).toHaveLength(2);
+		expect(JSON.stringify(requests[1])).toContain("Preserve deployment permission first.");
+		expect(value.details?.preparation?.path).toBe("merge");
+	});
+	it("malformed optional output is fully charged without blocking the task or creating a failure marker", async () => {
+		output = "malformed paid output";
+		await prepare();
+		expect(store.markerPresent(session)).toBe(false);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		expect(controller.context(session.buildSessionProjection().messages, ctx)).toBeDefined();
+		expect(controller.status(ctx).preparation?.accounting?.aggregate).toMatchObject({ calls: 1, discardedCalls: 1 });
+		output = note();
+		const value = await controller.compact(event(), ctx);
+		expect(value.details?.preparation?.path).toBe("sync");
+		expect(requests).toHaveLength(2);
+	});
+	it("mutation of previously prepared originals blocks compaction before any reuse", async () => {
+		await prepare();
+		const original = session.entries[0];
+		if (original.type !== "message" || original.message.role !== "user") throw new Error("Missing source");
+		original.message.content = "Changed original evidence.";
+		await expect(controller.compact(event(), ctx)).rejects.toThrow(/CONTEXT_SOURCE_CHANGED/);
+		expect(requests).toHaveLength(1);
+	});
+	it("freshly validates same-leaf source edits between the independent request hooks", async () => {
+		await prepare();
+		const value = await controller.compact(event(), ctx);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		const messages = session.buildSessionProjection().messages;
+		controller.context(messages, ctx);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		const unchangedLeaf = session.getLeafId();
+		const source = session.entries[0];
+		if (source.type !== "message" || source.message.role !== "user") throw new Error("Missing source");
+		source.message.content = "Same leaf, changed original evidence.";
+		controller.context(messages, ctx);
+		controller.beforeRequest({ messages: [{ content: entry.summary }] }, ctx);
+		expect(session.getLeafId()).toBe(unchangedLeaf);
+		expect(ctx.abort).toHaveBeenCalledTimes(2);
+		expect(store.status(session).state).toBe("blocked");
+	});
+
+	it("restart confirms a staged disk commit before accounting marks the preparation reused", async () => {
+		await prepare();
+		const value = await controller.compact(event(), ctx);
+		session.append(saved(session, value));
+		preparation.dispose();
+		const restoredPreparation = new PreviewPreparationCoordinator({
+			agentDir: join(root, "agent"),
+			settings: parsePreparationConfig({ enabled: true, minSourceTokens: 1, minIntervalMs: 0 }),
+		});
+		const restored = new PreviewMemoryController({
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-test/preview-test", noteRepair: false },
+			failureStore: new PreviewFailureStore(join(root, "agent")),
+			preparation: restoredPreparation,
+		});
+		restored.sessionStart(ctx);
+		expect(restored.status(ctx).preparation?.accounting?.aggregate).toMatchObject({
+			reusedCalls: 0,
+			discardedCalls: 0,
+		});
+		restored.recover(ctx);
+		expect(restored.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(1);
+		expect(store.inspect(session).state).toBe("ready");
+		restoredPreparation.dispose();
+	});
 });
 const originalFs = await vi.importActual<typeof fs>("node:fs");
 const timestamp = "2026-01-01T00:00:00.000Z";

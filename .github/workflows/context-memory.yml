@@ -42,9 +42,9 @@ jobs:
         run: node scripts/context-memory-preview-build.mjs
       - name: Install isolated official Pi baseline
         run: >-
-          npm install --prefix "${{ runner.temp }}/context-preview-stock"
-          --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact
-          @earendil-works/pi-coding-agent@1.1.0
+          node scripts/context-memory-preview-stock-install.mjs
+          --stock-root "${{ runner.temp }}/context-preview-stock"
+          --version 1.1.0
       - name: Verify candidate on official Pi with loopback provider and Git source
         run: >-
           node scripts/context-memory-preview-acceptance.mjs
@@ -53,16 +53,17 @@ jobs:
           --output-dir .artifacts/context-memory-preview-acceptance
       - name: Install a second official Pi version for scenario checks
         run: >-
-          npm install --prefix "${{ runner.temp }}/context-preview-other"
-          --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact
-          @earendil-works/pi-coding-agent@1.0.4
-      - name: Run default-settings scenarios (known gaps reported; regressions and unlisted fixes fail)
+          node scripts/context-memory-preview-stock-install.mjs
+          --stock-root "${{ runner.temp }}/context-preview-other"
+          --version 1.0.4
+      - name: Run default-settings scenarios (raw failures retained; version-bound A preview scope)
         run: >-
           node scripts/context-memory-preview-scenarios.mjs
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
           --other-stock-root "${{ runner.temp }}/context-preview-other"
           --output-dir .artifacts/context-memory-preview-scenarios
+          --acceptance-profile v0.4.0-preview.1-a-functional
       - name: Prepare release archives without publishing
         run: |
           node --test scripts/context-memory-preview-release-checks.test.mjs

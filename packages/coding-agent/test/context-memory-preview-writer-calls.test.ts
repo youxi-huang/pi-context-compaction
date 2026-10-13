@@ -132,10 +132,10 @@ function harness(
 }
 
 describe("preview writer provider-call reservations and settlements", () => {
-	it.each(["error", "aborted"] as const)(
+	it.each(["error", "aborted", "stop"] as const)(
 		"keeps default zero usage unknown after a dispatched %s",
 		async (stopReason) => {
-			const message = response("Interrupted before a usage event.", stopReason);
+			const message = response("No usage event arrived.", stopReason);
 			message.usage = {
 				input: 0,
 				output: 0,
@@ -145,11 +145,11 @@ describe("preview writer provider-call reservations and settlements", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
 			const test = harness(() => completed(message));
-			await expect(writeMemory(test.options)).rejects.toThrow(/CONTEXT_WRITER_FAILED/);
+			await expect(writeMemory(test.options)).rejects.toThrow(/CONTEXT_WRITER_FAILED|CONTEXT_NOTE_INVALID/);
 			expect(test.after).toHaveLength(1);
 			expect(test.after[0]).toMatchObject({
 				dispatched: true,
-				outcome: stopReason === "aborted" ? "cancelled" : "failed",
+				outcome: { error: "failed", aborted: "cancelled", stop: "success" }[stopReason],
 			});
 			expect(test.after[0].usage).toBeUndefined();
 			expect(test.after[0].usageComplete).toBe(false);

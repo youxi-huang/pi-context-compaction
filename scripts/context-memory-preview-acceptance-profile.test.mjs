@@ -31,6 +31,8 @@ const CASES = [
 	["in-memory-session", "prompt-sent", "prompt-sent"],
 	["other-pi-version", "fresh-session-usable no-marker", "prompt-sent"],
 	["failed-compaction-notices", "rejected-and-blocked one-notice-for-failure one-notice-per-blocked-input explicit-retry-recovers"],
+	["work-notes", "guideline forged-notes-refused note-saved notes-commit disk-confirmed user-words note-claim-stays-data correction-in-context restart section-tamper-blocks explicit-recovery same-id-edit-blocks"],
+	["prepared-candidate", "no-note-guideline prepared branch-switch-drops-candidate sync-on-new-branch unknown-usage cancelled-preparation journal-survives-restart"],
 	["long-session-overhead", "compactions-succeed per-request-budget bounded-growth"],
 ];
 
@@ -87,7 +89,7 @@ test("reviewed full case matrix matches the current scenario runner", () => {
 	assert(declaration, "Expected the scenario runner's explicit case matrix");
 	const actual = [...declaration.matchAll(/\{ name: "([^"]+)", variants: \[([^\]]+)\]/g)].map((match) => ({ case: match[1], variants: [...match[2].matchAll(/"([^"]+)"/g)].map((variant) => variant[1]) }));
 	assert.deepEqual(actual, CASES.map(([name, , control]) => ({ case: name, variants: control === undefined ? ["extension"] : ["extension", "control"] })));
-	assert.equal(fixture().cases.length, 31);
+	assert.equal(fixture().cases.length, 33);
 });
 
 test("the sole authorized profile accepts two unchanged raw performance results", () => {

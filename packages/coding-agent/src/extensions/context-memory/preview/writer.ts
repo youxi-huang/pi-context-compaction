@@ -199,9 +199,9 @@ export function writerContractHashes(artifactId: string): { promptHash: string; 
 }
 
 function reportedUsage(response: AssistantMessage): Usage | undefined {
-	// Pi initializes streams with zero usage. An interrupted stream may never receive a usage event.
+	// Pi initializes streams with zero usage. An interrupted stream, or a provider that sends no usage event,
+	// leaves it at zero: a dispatched call is unknown then, never free.
 	if (
-		(response.stopReason === "error" || response.stopReason === "aborted") &&
 		[
 			response.usage.input,
 			response.usage.output,
@@ -396,7 +396,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 				outcome,
 				elapsedMs,
 				usageComplete:
-					response !== undefined && response.stopReason !== "error" && response.stopReason !== "aborted",
+					reported !== undefined && response?.stopReason !== "error" && response?.stopReason !== "aborted",
 				...(reported ? { usage: structuredClone(reported) } : {}),
 			};
 			try {

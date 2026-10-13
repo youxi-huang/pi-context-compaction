@@ -22,11 +22,13 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Fixed
 
+- Record a preview writer call whose provider sends no usage as unknown usage in the call journal. A successful response without a usage event kept Pi's initial zero usage and was journaled as a complete, free call; only interrupted calls were treated as unknown. Found by the new official-Pi case for arm A.
 - Keep the preview's cut after the previous checkpoint. With `keepRecentTokens` above zero, a manual compaction soon after another could keep the earlier checkpoint in the retained range, where stock Pi shows it as a second summary and later requests were blocked. The default `keepRecentTokens` of zero was not affected.
 - Stop re-inserting `context_note` candidates at the head of every request in the independent preview. They arrived as a user-role message headed "Instructions", although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The notes already appear in context as the model's own tool calls; they still reach the writer as candidates at compaction. The resident runtime has the same injection and keeps it until a fingerprint change is approved.
 
 ### Maintenance
 
+- Add two official Pi 1.1.0 scenario cases for the opt-in arms. The work-notes case drives real `context_note` calls through the stock SDK: forged notes refused, a note saved between its tool call and result, a later correction, a commit with no writer request confirmed on disk, a restart, an edited user message, explicit recovery and a same-ID source edit. The prepared-candidate case covers a branch switch, a call with no reported usage, a preparation cancelled by `/compact` and the call record across a restart.
 - Note in `AGENTS.md` that the repository must not gain a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads `AGENTS.md` only when none of these files exists, so adding one would silently drop the shared agent instructions from Claude Code sessions while Codex kept following them.
 - Add a light and dark introductory README illustration showing how a source-linked handover leads back to original session entries. The illustration follows the documented port example and is not a screenshot or benchmark comparison.
 - Remove the S2 latency runner, which measured the removed preparation design; the A/B comparison will need its own runner.

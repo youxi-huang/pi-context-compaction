@@ -98,9 +98,10 @@ The preview distinguishes three kinds of session:
   pending or failed attempt recorded by it. Every check below is strict, and a
   failure is recorded durably.
 - **Eligible:** a persistent, text-only session on Pi 1.1.0 with no
-  checkpoint from another compactor. The preview handles its compaction:
-  automatic compaction is cancelled and `/compact` writes a checked checkpoint.
-  The first attempt, or a cancelled automatic compaction, makes it protected.
+  checkpoint from another compactor. The preview handles its compaction: Pi's
+  threshold compaction after a completed turn and `/compact` both write a
+  checked checkpoint, and overflow recovery is cancelled until `/compact`. The
+  first attempt, or a cancelled overflow recovery, makes it protected.
 - **Not protected:** a session the preview has never protected and cannot
   check: Pi other than 1.1.0, an in-memory session, a native or other
   compactor's checkpoint, an image or other non-text content, or an
@@ -171,8 +172,11 @@ that file. `compactAt` bounds the manual checkpoint budget but does not start
 automatic compaction; the resident event log and its report are not provided.
 Setting `enabled: false` and restarting ends the package's protection.
 
-This preview is for manual compaction at completed turns. Automatic
-compaction, unfinished tool rounds, in-memory sessions, attachments, context
+This preview compacts at completed turns: on `/compact`, and when Pi's
+threshold compaction runs after a turn completes. While input is queued or a
+session is blocked, threshold compaction is left for a later turn and nothing is
+recorded; a blocked session still needs an explicit `/compact`. Overflow
+recovery, unfinished tool rounds, in-memory sessions, attachments, context
 edits other than validated recovery omissions, old checkpoints, parent-history
 grants and other context-transforming or compaction extensions are outside its
 verified scope. In the sessions it handles, unsupported compaction is cancelled
@@ -229,9 +233,10 @@ the cause. Neither recovery command forces those cases through validation.
 Each failure and each blocked input produces one notice (v0.3.2 could repeat
 the same notice two to four times). The notice names the controlled error code,
 says what happened and whether requests are paused, and gives the next step;
-`/compact` is suggested only where it can help. Pi's automatic compaction
-request is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
-`CONTEXT_PREVIEW_UNSUPPORTED`). After a rollback to v0.3.2, that record reads
+`/compact` is suggested only where it can help. Pi's overflow recovery request
+is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
+`CONTEXT_PREVIEW_UNSUPPORTED`; before the unreleased threshold support, threshold
+compaction was reported the same way). After a rollback to v0.3.2, that record reads
 as invalid and stays blocked until an explicit `/compact`, which recovers it;
 a v0.3.2 record opened by v0.3.3 recovers the same way.
 
@@ -276,34 +281,36 @@ alongside the ordinary settings in `pi-context-memory.json` and restart Pi:
 }
 ```
 
-The configured writer prepares after a completed turn with at least 2,048 new
-source-proxy tokens, at most once per checkpoint interval and five seconds
-between starts. Preparation has its own 120-second cancellation deadline,
-eight-call limit, no repair/retry, and durable per-session budgets. The exact
-defaults and experiment envelope are in the
-[measurement specification](v0.4.0-measurement.md#initial-experiment-limits).
-Invalid preparation settings or unavailable accounting pause optional work;
-normal task requests and the formal compaction failure contract remain intact.
+The configured writer prepares once per checkpoint interval, after a completed
+turn, when the context enters the band just below Pi's default threshold
+compaction point: 12.5% of it, between 8,192 and 32,768 tokens. A run has a
+120-second deadline, at most eight provider calls and no repair. One candidate
+is kept in memory and is lost on restart. Earlier experimental keys
+(`minSourceTokens`, `minIntervalMs`, `deadlineMs`, `maxCallsPerAttempt`,
+`ledger`) are ignored; an invalid value disables preparation without affecting
+requests or the formal compaction failure contract.
 
-`/compaction-status` reports `preparation`, its accounting, and the last selected
-commit path. A complete, current candidate can be submitted without a new writer
-call. When turns were added after it, the candidate can still be committed
-without a writer call for the prefix it covers: the checkpoint records that
-prefix, and every later original stays in context verbatim after it. This prefix
-path is taken only when the cut drops nothing the note did not see, follows the
-previous checkpoint, makes the context smaller and leaves it within 80% of the
-compaction threshold. Otherwise, or with custom focus, the same writer
-reconciles the candidate with the new evidence, and the synchronous path remains
-available. Session-writer merges retain
-the current session prefix, so a smaller tail does not imply less provider input.
-Candidates live in memory and are lost on restart. Content-free accounting and
-budgets survive; pending disk claims wait for explicit commit recovery.
-`lastCompaction.stageMs` ends at staging and `pauseMs` is populated after disk
-confirmation. The S2 runner also measures the whole manual-compaction boundary.
+At compaction, a complete, current candidate is committed without a writer
+call. When turns were added after it, the candidate is still committed without
+a writer call for the prefix it covers: the checkpoint records that prefix, and
+every later original stays in context verbatim after it. This prefix path is
+taken only when the cut drops nothing the note did not see, follows the previous
+checkpoint, makes the context smaller and leaves it within 80% of the compaction
+threshold. Otherwise, or with custom focus, the candidate is discarded and the
+writer compacts synchronously from the originals.
 
-Checkpoints from the complete, merge and synchronous paths cover the whole
-branch; prefix checkpoints cover what their candidate saw. Automatic scheduling
-and arm B are not enabled.
+Every writer call, preparation and compaction alike, is recorded in a
+content-free journal under `context-memory-preview/calls/` in Pi's agent
+directory. The start of a call is on disk before the request is sent and its
+settlement follows, so a call interrupted by a crash stays visible as unsettled
+rather than free. Optional preparation never sends an unrecorded call and pauses
+while the journal cannot be read or written; a formal compaction proceeds and
+reports the gap. `/compaction-status` shows `preparation`, the journal's `calls`
+summary and `lastCompaction`; `lastCompaction.stageMs` ends at staging and
+`pauseMs` is set after disk confirmation.
+
+Checkpoints from the complete and synchronous paths cover the whole branch;
+prefix checkpoints cover what their candidate saw. Arm B is not enabled.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
 

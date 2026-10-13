@@ -20,6 +20,7 @@ They are not real-provider latency, cost or recovery results.
 | `ops preview`, strict profile, before promoting the known gap | Acceptance 27/27 on official Pi 1.1.0. Scenarios 126 pass, 0 fail; the run exits 1 because the listed 50 ms gap now passes, as the runner requires |
 | `ops preview`, strict profile, gap promoted to a required check | Acceptance 27/27. Scenarios 127 pass, 0 known gaps, 0 fail; profile accepted, raw gate passed. Release prepare refuses a strict-profile report, as designed |
 | `ops preview`, CI profile `v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27; scenarios 127 pass, raw gate passed, 0 declared performance exceptions; release checks and prepare pass |
+| Same, after one preparation slot, threshold compaction and the call journal (`753a9f9`) | Exit 0. Acceptance 27/27 on `stock-preview+src.71ebfa28d1860470`; scenarios 126 pass, 0 known gaps. The threshold case now checks that crossing the threshold after a completed turn writes a checked checkpoint, leaves no marker and lets the next prompt through, in place of the earlier blocked-until-`/compact` checks. `context-memory-check.mjs` exit 0 with 100 script and 304 runtime checks; `security-regression-check.mjs` exit 0 with 461 |
 | Same, after the prefix commit path (`bea9497`) | Exit 0. Acceptance 27/27 on `stock-preview+src.a23a816475767026`; scenarios 127 pass, 0 known gaps. `context-memory-check.mjs` exit 0 with 107 script and 374 runtime checks. Scenarios run with preparation disabled, so the prefix path is covered by focused tests only |
 
 Runtime build `stock-preview+src.dbdbdab7626c83e6` in all three preview runs;
@@ -36,11 +37,12 @@ compared with the median of the extension-disabled control.
 | Strict, promoted | 102.21, 8.03, 7.61 | 139.28, 4.95, 5.26 | 7.63, 3.68, 4.01 | 4 / 1 ms |
 | CI profile | 68.66, 4.98, 4.51 | 142.26, 4.58, 4.56 | 6.60, 3.42, 3.66 | 1 / 1 ms |
 | CI profile, prefix path | 75.32, 5.37, 4.91 | 148.11, 5.23, 4.77 | 6.69, 5.08, 6.89 | 0 / 0 ms |
+| CI profile, preparation slot and journal | 94.01, 7.71, 7.37 | 177.04, 5.08, 5.15 | 6.59, 3.42, 3.47 | 5 / 2 ms |
 
 The handoff's final C2 measured 46 / 84 ms on the earlier design. The first
 probe after each checkpoint is consistently slower: it is the first request
 after a trust boundary and pays one full validation and readback, about 60–95 ms
-at 3.0 MB and 130–142 ms at 5.9 MB above the control's first probe. That cost
+at 3.0 MB and 130–171 ms at 5.9 MB above the control's first probe. That cost
 still grows with history size, but it is paid once per checkpoint, session start
 or branch change, not on every request. The median hides it by construction, so
 it is recorded here rather than claimed as removed. In the last run the control's

@@ -8,10 +8,13 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Added
 
+- Handle Pi's threshold compaction after a completed turn in the independent preview, through the same path and gates as `/compact`. Until now crossing the threshold blocked the session until a manual `/compact`. While input is queued or a session is blocked, threshold compaction is left for a later turn and nothing is recorded; it never acts as an explicit retry. Overflow recovery still needs `/compact`.
+- Record every preview writer call, preparation and compaction alike, in one content-free journal under `context-memory-preview/calls/`. The start of a call is fsynced before the request is sent and its settlement follows, so an interrupted call stays visible as unsettled. `/compaction-status` reports the summary as `calls`. Foreground calls with preparation disabled were previously observed only in memory.
 - Commit a prepared candidate in the independent preview for the prefix it covers when turns were added after it, without a writer call. Every later original stays in context verbatim after the checkpoint, so a newer user message keeps its own words and position. The store accepts such a checkpoint only if its source hash matches the covered prefix and the cut drops no uncovered entry; the path is used only when the context shrinks and fits within 80% of the threshold, and otherwise the same writer reconciles the candidate as before.
 
 ### Changed
 
+- Reduce the unreleased optional preparation to one run and one armed candidate. It starts at most once per checkpoint interval, when the context enters the band just below Pi's default threshold, instead of after the first 2,048 new tokens. Compaction commits the candidate complete or for its prefix, or writes synchronously; the merge path, the two preparation ledgers with their reservations and policy hashes, and the earlier preparation keys are removed. Ledger files from the earlier experiment are left in place and no longer read.
 - Validate sources and read the session back in full at trust boundaries instead of on every request in the independent preview. Session start, branch changes, new checkpoints, compaction, recovery and failures still run the complete checks. Requests in between check only entries added since and compare the session file's identity and length with Pi's appends, so a failed or foreign append, truncation or replacement is still found at once. Same-length rewrites and in-place edits of loaded entries are found at the next boundary. The whole-branch plain-data proof, canonical-line reuse and the request-component diagnostic that profiled them are removed. In the synthetic long-session scenario, extra median overhead per request falls from 46/84 ms to 1–4 ms at 10/20 checkpoints, and the 50 ms check becomes a required regression; the first request after each checkpoint still pays one full check.
 
 ### Fixed
@@ -23,6 +26,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - Note in `AGENTS.md` that the repository must not gain a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads `AGENTS.md` only when none of these files exists, so adding one would silently drop the shared agent instructions from Claude Code sessions while Codex kept following them.
 - Add a light and dark introductory README illustration showing how a source-linked handover leads back to original session entries. The illustration follows the documented port example and is not a screenshot or benchmark comparison.
+- Remove the S2 latency runner, which measured the removed preparation design; the A/B comparison will need its own runner.
 - Remove the unused instruction-authority prototypes: the ownership bridge, refusal guards, bootstrap and guard drivers, and their tests. None was bundled, enabled or published. The authority design moves to `docs/context-memory/archive/`; B will keep notes as data and carry user messages verbatim instead.
 
 ## [v0.4.0-preview.1] — candidate, not released

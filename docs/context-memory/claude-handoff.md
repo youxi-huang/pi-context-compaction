@@ -1,25 +1,118 @@
 # Claude Code cloud handoff: simplify the plugin and close a minimal B loop
 
-## Status, 2026-10-13
+## Status and next brief, 2026-10-13
 
-The maintainer accepted four decisions that replace parts of this handoff; they
-are recorded as D15–D18 in the [plan](v0.4.0-plan.md). The first four steps
-are done on `claude/affectionate-cray-21pzua`:
+This section is the brief for the next session. It supersedes the original
+handoff below wherever they differ; the original stays for context.
 
-1. The authority prototypes, their tests and drivers are removed; the design is
+### Where things are
+
+Work continues on branch `claude/affectionate-cray-21pzua`, draft PR
+https://github.com/youxi-huang/pi-context-compaction/pull/40 against `main`.
+The PR contains the earlier handoff PR #39 (`da6276b`) plus the commits below.
+CI (`verify` and CodeQL) was green on every pushed head so far. Do not merge,
+tag or publish; the maintainer decides releases.
+
+The maintainer accepted four decisions, D15–D18 in the [plan](v0.4.0-plan.md).
+Steps 1–5 implement D15–D17:
+
+1. The instruction-authority prototypes are removed; the design is
    [archived](archive/instruction-authority-design.md).
-2. `context_note` candidates no longer enter the request context.
-3. Full source validation and session readback run at trust boundaries; a
-   request checks only what was added since (D15).
+2. `context_note` candidates no longer enter the request context; they reach
+   only the writer at compaction.
+3. Full source validation and session readback run at trust boundaries (load,
+   tree navigation, new checkpoint, compaction, recovery, failure). A request
+   checks only entries added since and the session file's identity and length
+   (`controller.ts` `assertReady`/`extendsVerified`, `failure-store.ts`
+   `unchangedSinceReadback`). Median request overhead is a few milliseconds.
 4. A prepared note can be committed for the prefix it covers, with every later
-   original kept verbatim (D16). A uses it today; B will use the same path.
+   original kept verbatim (`prefixCut`, `reusablePrefix`, store
+   `assertCoverage`). It is used only when the cut drops nothing uncovered,
+   follows the previous checkpoint, shrinks the context and fits within 80% of
+   the threshold.
+5. Pi's threshold compaction after a completed turn uses the `/compact` path
+   (`thresholdReady`, extension `session_before_compact`); it never acts as an
+   explicit retry. Arm A is one run and one candidate (`preparation.ts`),
+   started once per checkpoint interval in the band below Pi's default
+   threshold. Every writer call is in a content-free journal
+   (`call-journal.ts`). The merge path, ledgers and S2 runner are gone.
 
-Next, in order: A reduced to one candidate slot prepared near the
-threshold, with threshold compaction after a completed turn (D17) and one call
-journal for every writer call; then B as data-only notes plus a verbatim
-user-message section, committed directly or through the writer (D18). The
-sections below are the original handoff and remain useful for context, but the
-decisions above take precedence where they differ.
+### Step 6: B as data-only work notes (D18)
+
+Goal: the session model's own notes let a compaction commit without a writer
+call, and no model-written text gains user-instruction authority.
+
+1. **Work-note schema.** Give `context_note` a preview-local schema without
+   `instructions`: `state`, `reasons` (decisions and why), `failedPaths`,
+   `files`, `nextSteps`, `gaps`, each fact with `sources` and an optional verbatim
+   `quote`. Keep the native custom-entry carrier (`CONTEXT_NOTE_TYPE`) and
+   validate sources and quotes against the branch when the tool runs, as today.
+   Do not edit the shared `notes.ts` or `identity.ts`: that changes the resident
+   fingerprint and the frozen evaluation, which need maintainer approval. Fill
+   `instructions: []` when a work note becomes part of a `MemoryNote`.
+2. **One short tool guideline.** Ask for a note after a decision with its
+   reason, a failed approach, or a completed subtask; not every turn. No review
+   step and no forced notes.
+3. **B candidate at compaction.** Build it deterministically: the previous
+   checkpoint's note (its validated `instructions` carried unchanged) merged with
+   the work notes since the previous `coveredThrough`, dropping facts whose
+   sources a later note supersedes. It covers through the last work note. Commit
+   it through the existing prefix path (step 4), so every later original stays
+   verbatim. If it is too large, the cut fails, or the merge is ambiguous, fall
+   back to the synchronous writer with the notes as increments, as today.
+4. **Verbatim user messages.** User instructions are never restated by a model
+   in this path. Render the user messages inside the compacted range verbatim in
+   their own section after the note (the existing continuation section is the
+   model to follow), each bounded with a `context_history` pointer to the
+   original, the total bounded; exceeding the bound means the writer path.
+   Record their entry IDs in the checkpoint details and re-render them on every
+   full validation in the preview, so a tampered section is rejected like a
+   tampered quote. The shared validator only checks that the summary starts
+   with `renderNote(note)`, so the appended section needs this preview check.
+5. **Opt-in.** Put B's direct commit behind its own switch in
+   `pi-context-memory.json`, default off, like `previewPreparation`, until the
+   A/B comparison. Record `details.preparation.path` (or an equivalent) as
+   `notes` so evaluation can tell the paths apart.
+6. **Tests.** Focused regressions for: a note claiming an instruction is
+   rejected by the schema; counterfeit sources and quotes; cross-branch notes
+   are ignored; a newer user ruling after the last note stays verbatim in the
+   tail; a tampered user-message section fails full validation; fallback to the
+   writer when bounds are exceeded; journal records for any writer call.
+
+Open design point to put to the maintainer, not to decide alone: the writer
+path still writes `instructions` itself. Removing that from every path means a
+shared schema change and a fingerprint change.
+
+### Step 7: one end-to-end path and the A/B runner
+
+1. On official Pi 1.1.0 (the existing acceptance or scenario harness, loopback
+   provider): real history, a candidate (A or B), a later user correction,
+   commit through the gate, disk confirmation, restart and recovery. Add the
+   adversarial cases: same-ID content tampering, branch switch, cancelled
+   preparation, a call with no reported usage, forged sources, and a fake
+   instruction inside a note.
+2. A bounded A/B comparison runner (synthetic first) that reports foreground
+   pause, total tokens and cost from the journal, discarded preparation, and
+   recovery probes, with the same sources and settings for sync, A and B.
+   Real-provider runs need the maintainer's credentials and an explicit budget.
+
+### Rules that keep this lean
+
+- Read `AGENTS.md` and `docs/context-memory/operations.md` first. Keep changes
+  in `preview/`, its tests and scripts.
+- Verify with `node scripts/context-memory-check.mjs`,
+  `node scripts/security-regression-check.mjs` and
+  `node scripts/context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional`
+  (CI's profile; release prepare needs a clean commit). Use the strict profile
+  for performance claims. Report command, result and exit code.
+- Prefer deleting a mechanism to adding a guard around it. Add a test for a
+  property, not for an implementation detail. Record results in
+  `validation.md` and user-visible changes in `CHANGELOG.md` under Unreleased.
+- Open items not to fix silently: the resident `controller.ts` still injects
+  note candidates (fingerprint approval needed); the release-note generator in
+  `scripts/context-memory-preview-release-checks.mjs` still describes the
+  earlier state; the first request after each checkpoint pays one full
+  validation (about 60–170 ms in the synthetic scenario).
 
 ## Mandate and delivery boundary
 

@@ -24,6 +24,15 @@ below. Final committed package metadata and archives must be rebuilt and checked
 again after C1/C2. The PR description records those final commands and results;
 no dirty-source archive is relabeled as a committed release artifact.
 
+The real implementation C1 is
+`2ccd555a26f42cae66c9eb76207e4caf63aa9d64`, based on
+`e83a7bf8631c1d2d2e93a8d6e9676b1b39bc970c`. A separate maintenance change
+advances `eval/runtime.ts` from its prior `96566c194654407450a8da3f5a18443516f283c6`
+to C1. It changes no fixture/scorer lock or historical report. The prepared
+resident build is `1.1.0-context-memory.0.3.0+src.3706b8258e544710`; its release
+version remains v0.3.0. Earlier deliberately rejected uncommitted-fingerprint
+runs below remain historical evidence, not a current frozen-gate failure.
+
 ## Unreleased authority bridge and public-API prototypes
 
 The maintainer retained the v0.4.0 A/B target and authorized preparation of a

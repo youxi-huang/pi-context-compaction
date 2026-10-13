@@ -24,7 +24,8 @@ routine input reviews, repeated confirmations, or a mandatory strict-mode switch
 The PR head branch is `codex/v0.4.0-preview1-handoff` in
 `youxi-huang/pi-context-compaction`, based on
 `e83a7bf8631c1d2d2e93a8d6e9676b1b39bc970c`. The implementation is committed as
-C1; a separate C2 maintains `eval/runtime.ts` at the actual C1 SHA. The PR's head
+C1 (`2ccd555a26f42cae66c9eb76207e4caf63aa9d64`); a separate C2 maintains
+`eval/runtime.ts` at that actual C1 SHA. The PR's head
 SHA is the authoritative complete handoff revision; read it from the PR, then
 pin the checkout to that value. No uncommitted source is required to reproduce
 the delivered tree.
@@ -248,6 +249,15 @@ There is no approved cross-request cache. If a robust request ID is unavailable,
 keep that limitation explicit and investigate a smaller final-hook consolidation
 only after proving equivalent protection for every supported dispatch route.
 
+A small first experiment is to encode canonical UTF-8 once and use those same
+bytes for SHA and readback, preserving original hash bytes and observer timing.
+Then consider caching only pure derived indexes/validated results after proving
+full fresh memory content and exact fresh disk bytes plus marker state. To skip
+serialization itself, a private detached snapshot must compare every relevant
+value/type/key order/descriptor without freezing host-owned entries or leaking
+aliases. Measure that new comparison cost; none of these proposals guarantees
+50 ms or the growth target.
+
 The third hook requires a fresh boundary check: an earlier retained provider
 payload callback can mutate sources before later dispatch. “No handler between
 the first two hooks” is a source-inspection hypothesis, not an accepted general
@@ -308,6 +318,17 @@ default scenarios, release preparation and frozen scripted evaluation. Downloads
 may be necessary; model calls are scripted/loopback only. Inspect every step's
 exit code and the raw scenario/profile summary, not only the final process code.
 Use `.github/workflows/context-memory.yml` as the command/order authority.
+
+After an implementation change, declare and run the finite strict S1 comparison
+below once, using fresh output directories. Install the second official cohort
+before the complete suite. A nonzero performance exit must remain a recorded
+failure; do not substitute the experimental profile when judging performance.
+
+```sh
+node scripts/context-memory-preview-stock-install.mjs --stock-root .artifacts/context-memory-preview-stock-1.0.4 --version 1.0.4
+node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root .artifacts/context-memory-preview-stock --output-dir .artifacts/cloud-next-s1 --only long-session-overhead --perf-checkpoints 20 --acceptance-profile strict
+node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root .artifacts/context-memory-preview-stock --other-stock-root .artifacts/context-memory-preview-stock-1.0.4 --output-dir .artifacts/cloud-next-full --perf-checkpoints 20 --acceptance-profile strict
+```
 
 For the performance-only worker, inspect `--help`/argument parsing in the bounded
 scenario/component/latency runners and use outside-repository output directories.

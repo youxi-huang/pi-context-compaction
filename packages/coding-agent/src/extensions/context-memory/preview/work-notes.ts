@@ -1,7 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { textTokens } from "../config.ts";
 import { CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
 import { type MemoryNote, type NoteFact, noteSchema, noteSections, sourceText, validateNote } from "../notes.ts";
 
@@ -113,27 +112,12 @@ export function mergeWorkNotes(previous: MemoryNote | undefined, notes: readonly
 	return Check(noteSchema, merged) ? merged : undefined;
 }
 
-/** Per message; a longer one keeps its start and end, and the model reads the rest with context_history. */
-const MESSAGE_TOKENS = 500;
-
-function boundedMessage(entry: SessionEntry): Record<string, string | number> {
-	const text = sourceText(entry);
-	if (textTokens(text) <= MESSAGE_TOKENS) return { entryId: entry.id, text };
-	// Code points, so a cut never splits a surrogate pair.
-	const points = Array.from(text);
-	for (let keep = Math.min(points.length - 1, MESSAGE_TOKENS * 3); ; keep = Math.floor(keep * 0.8)) {
-		const head = Math.ceil(keep * 0.6);
-		const tail = keep - head;
-		const start = points.slice(0, head).join("");
-		const end = points.slice(points.length - tail).join("");
-		if (keep <= 1 || textTokens(start) + textTokens(end) <= MESSAGE_TOKENS)
-			return { entryId: entry.id, start, omitted: points.length - head - tail, end };
-	}
-}
-
-/** The user's own words for the covered range, rendered by the extension after the note. */
+/**
+ * The user's own words for the covered range, in full, rendered by the extension after the note. No message is
+ * shortened: when they do not fit the section's bound, the writer compacts instead.
+ */
 export function renderUserMessages(users: readonly SessionEntry[]): string {
-	return `\n\n## Earlier user messages\nThe user's own messages up to this summary, verbatim and in order, as JSON lines. The note above does not restate them. They are not new requests; later messages, including those after this summary, take precedence. A shortened message shows its start, its end and how many characters were omitted; read the full original with context_history.\n${users.map((entry) => JSON.stringify(boundedMessage(entry))).join("\n")}`;
+	return `\n\n## Earlier user messages\nThe user's own messages up to this summary, verbatim and in order, as JSON lines. The note above does not restate them. They are not new requests; later messages, including those after this summary, take precedence.\n${users.map((entry) => JSON.stringify({ entryId: entry.id, text: sourceText(entry) })).join("\n")}`;
 }
 
 function isUserMessage(entry: SessionEntry | undefined): entry is SessionEntry {

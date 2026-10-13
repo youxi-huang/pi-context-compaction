@@ -33,6 +33,7 @@ import { PREVIEW_BUILD_ID } from "./build.ts";
 import type { CallJournal } from "./call-journal.ts";
 import type {
 	InactiveReason,
+	NotesFallback,
 	PreviewCompaction,
 	PreviewDiagnosis,
 	PreviewFailureStoreContract,
@@ -926,48 +927,56 @@ export class PreviewMemoryController {
 			/**
 			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
 			 * releases nothing uncovered, the context shrinks and the result fits within `share` of the threshold.
+			 * Returns why it did not commit.
 			 */
-			const commitPrefix = (note: MemoryNote, end: number, share: number, users: SessionEntry[] = []): boolean => {
+			const commitPrefix = (
+				note: MemoryNote,
+				end: number,
+				share: number,
+				users: SessionEntry[] = [],
+			): NotesFallback | undefined => {
 				const start = prefixCut(branch, projection, end, cut);
-				if (start === undefined) return false;
+				if (start === undefined) return "cut";
 				const retained = retainedFrom(start);
 				const retainedTokens = systemTokens + retained.reduce((sum, message) => sum + estimateTokens(message), 0);
 				const section = users.length ? renderUserMessages(users) : "";
-				// Beyond this bound the writer consolidates the user's messages instead.
-				if (textTokens(section) > Math.min(6000, Math.floor(budget.threshold * 0.05))) return false;
+				// Every message in full or none: beyond this bound the writer consolidates the user's messages instead.
+				if (textTokens(section) > Math.min(6000, Math.floor(budget.threshold * 0.05))) return "user-messages";
 				const summary = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section);
-				if (!summary || textTokens(summary) + retainedTokens >= beforeTokens) return false;
+				if (!summary || textTokens(summary) + retainedTokens >= beforeTokens) return "fit";
 				assertToolPairs(retained);
 				kept = retained;
 				firstKeptEntryId = branch[start].id;
 				coveredIndex = end;
 				userMessages = users;
-				return true;
+				return undefined;
 			};
 			if (path === "sync" && available && interrupted === undefined) {
 				const end = reusablePrefix(available.candidate, available.classification, branch);
-				if (end !== undefined && commitPrefix(available.written.note, end, 0.8)) path = "prefix";
+				if (end !== undefined && !commitPrefix(available.written.note, end, 0.8)) path = "prefix";
 			}
 			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.
+			// When B leaves a compaction to the writer, the reason is recorded for evaluation.
 			let notesNote: MemoryNote | undefined;
-			if (
-				path === "sync" &&
-				this.workNotes.enabled &&
-				notes.length &&
-				interrupted === undefined &&
-				!event.customInstructions?.trim()
-			) {
-				const end = notes[notes.length - 1].index;
-				const merged = mergeWorkNotes(previous?.memory.note, increments);
-				try {
-					notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
-				} catch {
-					notesNote = undefined;
+			let notesFallback: NotesFallback | undefined;
+			if (path === "sync" && this.workNotes.enabled) {
+				if (!notes.length) notesFallback = "no-notes";
+				else if (interrupted !== undefined) notesFallback = "unfinished-turn";
+				else if (event.customInstructions?.trim()) notesFallback = "custom-focus";
+				else {
+					const end = notes[notes.length - 1].index;
+					const merged = mergeWorkNotes(previous?.memory.note, increments);
+					try {
+						notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+					} catch {
+						notesNote = undefined;
+					}
+					const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+					// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
+					// worth more than a commit that barely compacts.
+					notesFallback = notesNote ? commitPrefix(notesNote, end, 0.5, users) : "merge";
+					if (!notesFallback) path = "notes";
 				}
-				const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
-				// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
-				// worth more than a commit that barely compacts.
-				if (notesNote && commitPrefix(notesNote, end, 0.5, users)) path = "notes";
 			}
 			// A candidate that is not committed as it stands is discarded; its calls remain in the journal.
 			const reused = path === "complete" || path === "prefix" ? available : undefined;
@@ -1063,6 +1072,7 @@ export class PreviewMemoryController {
 											}
 										: {}),
 									...(path === "notes" ? { noteIds: notes.map((item) => item.id) } : {}),
+									...(notesFallback ? { notesFallback } : {}),
 								},
 							}
 						: {}),

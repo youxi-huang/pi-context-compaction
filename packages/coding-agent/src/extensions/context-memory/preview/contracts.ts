@@ -11,11 +11,20 @@ export interface PreviewCheckpoint extends MemoryCheckpoint {
 		callIds?: string[];
 		/** Work notes merged by the notes path. */
 		noteIds?: string[];
+		/** Why arm B left this compaction to the writer. */
+		notesFallback?: NotesFallback;
 	};
 	/** User messages rendered verbatim after the note by the notes path; re-rendered at every full validation. */
 	userMessages?: string[];
 }
 export type PreviewCompaction = CompactionResult<PreviewCheckpoint>;
+
+/**
+ * Why arm B did not commit: no work notes since the previous checkpoint, an unfinished turn, custom focus, a merge
+ * the note schema or budget rejects, no cut that releases only covered entries, user messages that do not fit in
+ * full, or a result that would not compact enough.
+ */
+export type NotesFallback = "no-notes" | "unfinished-turn" | "custom-focus" | "merge" | "cut" | "user-messages" | "fit";
 
 export interface PreviewAttempt {
 	attemptId: string;

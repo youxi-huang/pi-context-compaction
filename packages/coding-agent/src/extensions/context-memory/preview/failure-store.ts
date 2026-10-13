@@ -149,23 +149,32 @@ function candidateHash(candidate: PreviewCompaction | CompactionEntry): string {
 	]);
 }
 
-function readSession(identity: SessionIdentity): Map<string, SessionEntry>;
-function readSession(identity: SessionIdentity, allowUnflushed: true): Map<string, SessionEntry> | undefined;
-function readSession(identity: SessionIdentity, allowUnflushed = false): Map<string, SessionEntry> | undefined {
+interface SessionFile {
+	entries: Map<string, SessionEntry>;
+	/** Exact length of the bytes that were parsed. */
+	bytes: number;
+}
+
+function readSession(identity: SessionIdentity): SessionFile;
+function readSession(identity: SessionIdentity, allowUnflushed: true): SessionFile | undefined;
+function readSession(identity: SessionIdentity, allowUnflushed = false): SessionFile | undefined {
 	try {
-		const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID").toString(
-			"utf8",
-		);
-		if (!data.endsWith("\n")) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-		const lines = data.slice(0, -1).split("\n");
-		if (lines.length > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-		const header: unknown = JSON.parse(lines.shift() ?? "");
+		const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID");
+		if (data.at(-1) !== 10) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+		// Count all physical records before parsing, preserving the original limit/error order.
+		let lines = 0;
+		for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, end + 1)) {
+			if (++lines > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+		}
+		const headerEnd = data.indexOf(10);
+		const header: unknown = JSON.parse(data.toString("utf8", 0, headerEnd));
 		if (!isRecord(header) || header.type !== "session" || header.version !== 3 || header.id !== identity.sessionId)
 			throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 		const entries = new Map<string, SessionEntry>();
 		let roots = 0;
-		for (const line of lines) {
-			const entry: unknown = JSON.parse(line);
+		for (let start = headerEnd + 1; start < data.length; ) {
+			const end = data.indexOf(10, start);
+			const entry: unknown = JSON.parse(data.toString("utf8", start, end));
 			if (
 				!isRecord(entry) ||
 				!identifier(entry.id) ||
@@ -179,8 +188,9 @@ function readSession(identity: SessionIdentity, allowUnflushed = false): Map<str
 				throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			if (entry.parentId === null && ++roots !== 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			entries.set(entry.id, entry as unknown as SessionEntry);
+			start = end + 1;
 		}
-		return entries;
+		return { entries, bytes: data.length };
 	} catch (error) {
 		if (allowUnflushed && missing(error)) return undefined;
 		throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_SESSION_IO"));
@@ -199,11 +209,41 @@ function branchAt(entries: ReadonlyMap<string, SessionEntry>, leafId: string): S
 	return branch.reverse();
 }
 
+/**
+ * What the last full readback proved about the session file. Pi only appends
+ * `JSON.stringify(entry)` plus a newline for each new entry, so between trust
+ * boundaries a request compares the file's identity and length with that
+ * arithmetic instead of reading it again. A failed or foreign append, a
+ * truncation or a replaced file changes the length or identity and forces a
+ * full readback. A same-length rewrite in place is found at the next boundary.
+ */
+interface ReadbackFrontier {
+	session: PreviewSession;
+	sessionId: string;
+	file: string;
+	entries: number;
+	last: SessionEntry | undefined;
+	bytes: number;
+	dev: bigint;
+	ino: bigint;
+}
+
+/** Undefined for anything but a readable regular file; the caller then reads the file back in full. */
+function fileIdentity(file: string): { dev: bigint; ino: bigint; size: bigint } | undefined {
+	try {
+		const stat = lstatSync(file, { bigint: true, throwIfNoEntry: false });
+		return stat?.isFile() ? { dev: stat.dev, ino: stat.ino, size: stat.size } : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Operational failure state only; original history remains in Pi's JSONL. */
 export class PreviewFailureStore implements PreviewFailureStoreContract {
 	private readonly agentDir: string;
 	private readonly latched = new Map<string, string>();
 	private readonly recoveryMarkers = new Map<string, Marker>();
+	private frontier?: ReadbackFrontier;
 	private directory?: string;
 
 	constructor(agentDir: string) {
@@ -323,13 +363,15 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	private evaluate(session: PreviewSession, latch: boolean): PreviewStatus {
+	private evaluate(session: PreviewSession, latch: boolean, request = false): PreviewStatus {
 		try {
 			const identity = this.identity(session);
 			const marker = this.readMarker(identity, latch);
 			if (marker) return { state: marker.state, code: marker.code };
 			const latched = this.latched.get(identity.sessionId);
 			if (latched) return { state: "blocked", code: latched };
+			if (request && this.unchangedSinceReadback(session, identity)) return { state: "ready" };
+			if (request) this.frontier = undefined;
 			// Stock Pi allocates a path before its first user message. Empty persistent sessions may start normally.
 			const disk = readSession(identity, true);
 			if (!disk) {
@@ -337,8 +379,23 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 					throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
 			} else {
 				const leafId = session.getLeafId();
-				if (leafId !== null && hashEntries(branchAt(disk, leafId)) !== hashEntries(session.getBranch()))
+				if (leafId !== null && hashEntries(branchAt(disk.entries, leafId)) !== hashEntries(session.getBranch()))
 					throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				const file = fileIdentity(identity.file);
+				// Another writer between the read and this stat simply leaves no frontier.
+				if (request && file?.size === BigInt(disk.bytes)) {
+					const entries = session.getEntries();
+					this.frontier = {
+						session,
+						sessionId: identity.sessionId,
+						file: identity.file,
+						entries: entries.length,
+						last: entries.at(-1),
+						bytes: disk.bytes,
+						dev: file.dev,
+						ino: file.ino,
+					};
+				}
 			}
 			return { state: "ready" };
 		} catch (error) {
@@ -348,12 +405,42 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
+	/** True only if the file grew by exactly the entries Pi appended since the last full readback. */
+	private unchangedSinceReadback(session: PreviewSession, identity: SessionIdentity): boolean {
+		const frontier = this.frontier;
+		if (
+			!frontier ||
+			frontier.session !== session ||
+			frontier.sessionId !== identity.sessionId ||
+			frontier.file !== identity.file
+		)
+			return false;
+		const entries = session.getEntries();
+		if (entries.length < frontier.entries || entries[frontier.entries - 1] !== frontier.last) return false;
+		let bytes = frontier.bytes;
+		for (let index = frontier.entries; index < entries.length; index++)
+			bytes += Buffer.byteLength(JSON.stringify(entries[index]), "utf8") + 1;
+		const file = fileIdentity(identity.file);
+		if (!file || file.dev !== frontier.dev || file.ino !== frontier.ino || file.size !== BigInt(bytes)) return false;
+		frontier.entries = entries.length;
+		frontier.last = entries.at(-1);
+		frontier.bytes = bytes;
+		return true;
+	}
+
+	/** Request guard. Full readback at a trust boundary, then only the length check until the next one. */
 	assertReady(session: PreviewSession): void {
-		const status = this.status(session);
+		const status = this.evaluate(session, true, true);
 		if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
 	}
 
+	/** A trust boundary: session start, compaction, recovery and every failure read the whole file again. */
+	forgetReadback(): void {
+		this.frontier = undefined;
+	}
+
 	begin(session: PreviewSession, explicitRetry = false): PreviewAttempt {
+		this.frontier = undefined;
 		try {
 			const identity = this.identity(session);
 			if (!explicitRetry) this.assertReady(session);
@@ -376,7 +463,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				lastCheckpointId: [...branch].reverse().find((entry) => entry.type === "compaction")?.id ?? null,
 				sourceHash: hashEntries(branch),
 			};
-			if (hashEntries(branchAt(readSession(identity), leafId)) !== attempt.sourceHash)
+			if (hashEntries(branchAt(readSession(identity).entries, leafId)) !== attempt.sourceHash)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			writeMarker(this.path(identity), {
 				version: 1,
@@ -406,8 +493,8 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			!isRecord(details) ||
 			details.kind !== CONTEXT_MEMORY_KIND ||
 			details.version !== CONTEXT_MEMORY_VERSION ||
-			details.coveredThrough !== attempt.leafId ||
-			details.sourceHash !== attempt.sourceHash ||
+			typeof details.coveredThrough !== "string" ||
+			!hash(details.sourceHash) ||
 			!isRecord(details.snapshot) ||
 			details.snapshot.sessionId !== attempt.sessionId ||
 			details.snapshot.leafId !== attempt.leafId ||
@@ -420,7 +507,28 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 	}
 
+	/**
+	 * The note covers an intact prefix of the attempt's branch, ending at the leaf or earlier, and the cut
+	 * releases only covered entries; everything after the covered prefix stays in context verbatim.
+	 */
+	private assertCoverage(
+		candidate: PreviewCompaction | CompactionEntry,
+		branch: readonly SessionEntry[],
+		branchHash: string,
+	): void {
+		const details = candidate.details;
+		const end = isRecord(details) ? branch.findIndex((entry) => entry.id === details.coveredThrough) : -1;
+		const cut =
+			candidate.firstKeptEntryId === CONTEXT_KEEP_NONE
+				? branch.length
+				: branch.findIndex((entry) => entry.id === candidate.firstKeptEntryId);
+		const prefixHash = end === branch.length - 1 ? branchHash : hashEntries(branch.slice(0, end + 1));
+		if (end < 0 || cut < 0 || cut > end + 1 || !isRecord(details) || prefixHash !== details.sourceHash)
+			throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+	}
+
 	stage(session: PreviewSession, attempt: PreviewAttempt, candidate: PreviewCompaction): void {
+		this.frontier = undefined;
 		try {
 			const identity = this.identity(session);
 			const marker = this.pending(identity);
@@ -431,13 +539,9 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			this.assertCandidate(attempt, candidate);
-			const branch = branchAt(readSession(identity), attempt.leafId);
-			if (
-				hashEntries(branch) !== attempt.sourceHash ||
-				(candidate.firstKeptEntryId !== CONTEXT_KEEP_NONE &&
-					!branch.some((entry) => entry.id === candidate.firstKeptEntryId))
-			)
-				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			const branch = branchAt(readSession(identity).entries, attempt.leafId);
+			if (hashEntries(branch) !== attempt.sourceHash) throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			this.assertCoverage(candidate, branch, attempt.sourceHash);
 			writeMarker(this.path(identity), { ...marker, candidateHash: candidateHash(candidate) } satisfies Marker);
 		} catch (error) {
 			this.reject(session, error, "CONTEXT_PREVIEW_MARKER_IO");
@@ -453,6 +557,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	private confirm(session: PreviewSession, entry: CompactionEntry, explicitRecovery: boolean): void {
+		this.frontier = undefined;
 		let recoveryMarker: Marker | undefined;
 		try {
 			const identity = this.identity(session);
@@ -476,7 +581,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			// Explicit same-process recovery first restores that evidence durably, then rechecks everything.
 			if (!persisted) this.recordFailure(session, marker.code, marker);
 			this.assertCandidate(marker.attempt, entry);
-			const disk = readSession(identity);
+			const disk = readSession(identity).entries;
 			const stored = disk.get(entry.id);
 			if (
 				stored?.type !== "compaction" ||
@@ -494,6 +599,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				hashEntries(session.getBranch()) !== hashEntries(branchAt(disk, entry.id))
 			)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			this.assertCoverage(entry, sources, marker.attempt.sourceHash);
 			removeMarker(this.path(identity));
 			this.latched.delete(identity.sessionId);
 			this.recoveryMarkers.delete(identity.sessionId);
@@ -503,6 +609,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	fail(session: PreviewSession, code: string): void {
+		this.frontier = undefined;
 		const controlled = CODES.has(code) ? code : "CONTEXT_WRITER_FAILED";
 		this.latched.set(session.getSessionId(), controlled);
 		try {

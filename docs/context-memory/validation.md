@@ -1,5 +1,1108 @@
 # Validation record
 
+## Unreleased: request guards, B's 50% rule and a Haiku-answered A/B run, 2026-10-13 UTC
+
+The maintainer's follow-ups to step 7, in the order 2 → 3 → 1 → 4. All
+results use official Pi 1.1.0 and a loopback provider; none comes from a
+provider API.
+
+**Request guards (2).** A new regression fails on the earlier code: text near
+4 bytes per token just below Pi's threshold was blocked, with an 8k- and a
+64k-output model. Both guards now use Pi's estimate; the context guard stops
+above `window − 16,384`, the payload guard above the window.
+**B's fit share (3).** A notes commit must leave the context below 50% of the
+threshold instead of 80%. Its regression fails when the share is put back to
+80%. **Probes (1).** The runner's script adds a rule with exact numbers
+("retry limit to 7", "2,500 ms") and a port that a later message overturns;
+two probes check that the context after a restart keeps the numbers and does
+not state the old port as current.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify`, source of `5f03ff4` | Exit 0. 100 script and 314 runtime checks; security 461 |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` at `dd14b50` | Exit 0. Acceptance 27/27 on `stock-preview+src.771b52ad8b1ebfbc`; scenarios 145 pass, profile accepted; release checks and prepare pass. Overhead raw ms: 10 checkpoints 71.63, 5.34, 4.87; 20 checkpoints 145.86, 5.00, 4.64; control 6.29, 3.18, 3.30; extra median 2 / 2 ms |
+| Both again at `912383e`, after the runner fixes and these records | Verify exit 0, same counts. Preview exit 0, same build, acceptance 27/27, scenarios 145 pass. Overhead raw ms: 70.55, 4.73, 4.17; 137.67, 4.79, 4.49; control 6.48, 2.97, 3.00; extra median 2 / 2 ms |
+
+With the guard fixed, the scripted runner counts about 4 bytes per token and
+no arm is blocked. At `--latency-ms 1000`:
+
+| Arm | Paths | Pause per compaction, ms | Turn time, ms | Writer calls (foreground) | Main requests | Total tokens | Context after cycle 2 | Probes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| sync | sync, sync | 1,103, 1,154 | 6,247 | 2 (2) | 9 | 650,342 | 2,267 | 8/8 |
+| A | prefix, prefix | 83, 135 | 6,329 | 2 (0) | 9 | 650,388 | 2,297 | 8/8 |
+| B | notes, sync | 105, 1,175 | 14,460 | 1 (1) | 17 | 1,427,582 | 2,320 | 8/8 |
+
+B's second commit would have kept the log turn of its last note, about three
+quarters of the threshold; under the new rule the writer compacts instead, at the cost of
+one foreground call.
+
+### A real model through a file bridge (4)
+
+No provider key is available here, so the maintainer suggested Claude Haiku
+run as Claude Code subagents. The runner's new `--bridge <dir>` writes each
+writer request and each of B's note decisions to a file; a Haiku subagent read
+the file, answered as the model, and wrote the answer back, and the run then
+continued through Pi's real validation, commit gate and disk confirmation. The
+main model's ordinary replies stayed scripted. One repetition, a 48k window
+with logs of about 23k tokens, two cycles, a restart and the probe prompt.
+
+| Arm | Paths | Foreground writer calls | Pause per compaction | Work notes | Probes |
+| --- | --- | --- | --- | --- | --- |
+| sync | sync, sync | 1, 1 | 84.6 s, 102.7 s | — | 8/8 |
+| A | prefix, prefix | 0, 0 | 0.03 s, 0.05 s | — | 8/8 |
+| B | notes, sync | 0, 1 | 0.05 s, 96.7 s | 2 saved, 0 refused; none on 4 of 6 turns | 7/8: lost "build 7" |
+
+- Pauses are the subagent's time to read the file and answer, not provider
+  latency, and the token counts are the runner's synthetic estimate; neither
+  is a cost or speed result.
+- Every Haiku note that reached a commit validated against its sources. Both writers and
+  B's notes kept the exact numbers and marked the old port as superseded, so
+  both restatement probes passed in every arm. On this evidence, item 1 keeps
+  `instructions` on the writer path.
+- Haiku wrote no note for either pasted log. B's checkpoint keeps only the
+  start and end of a long user message, and the writer that consolidated it
+  in cycle 2 saw those carried messages only as shortened text and an
+  80-character manifest line. So the fact in the middle of the first log was
+  lost on B's path, while sync and A, whose writer read the whole log, kept it.
+- B's second cycle had no new note after the port change, so the commit would
+  have kept the whole log turn; the 50% rule sent it to the writer.
+
+Two harness faults were found and fixed before the results above: the bridge
+first rendered Pi's content parts as one JSON line, which the subagent's file
+reader truncates, so the run was restarted with real line breaks; and arm A's
+script moved on before Pi had started preparation, so compaction cancelled it.
+Arm A was rerun alone after the fix; the first run's A row (prefix, then sync
+with one cancelled preparation counted as unknown usage) is superseded. The
+prompts for B's last three decisions also named the schema's `supersedes`
+field, which the first three did not; the field was in the schema shown each
+time.
+
+## Unreleased: end-to-end cases and a synthetic A/B runner, 2026-10-13 UTC
+
+Step 7 of the [handoff brief](claude-handoff.md). Everything here uses official Pi
+1.1.0 with a loopback provider and synthetic credentials. None of it is a
+real-provider latency, cost or quality result.
+
+### Two official-Pi cases
+
+`work-notes` (B, 12 checks) and `prepared-candidate` (A, 7 checks) join the
+scenario suite and the reviewed acceptance contract. Their first runs, against the
+step 6 package, failed 4 and 3 checks. Five failures came from the harness: it
+replaced Pi's system prompt, so tool guidelines never rendered; the tamper edit
+hit the note's quote before the user-message section; and Pi's own
+`keepRecentTokens` gate answered "Nothing to compact" before the extension ran,
+which the cases now avoid with Pi's `compaction.keepRecentTokens: 0`, as the
+acceptance runner does. One failure was inherited from an earlier durable marker.
+The last was a defect: a writer response with no usage event was journaled as a
+complete call with zero tokens. Zero usage now counts as unknown on any stop
+reason, with a focused regression that fails without the fix.
+
+| Command, at `882096f` | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 0. 100 script and 312 runtime checks; security 461, unchanged |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27 on `stock-preview+src.71713207c248a39e`; scenarios 145 pass (126 + 19), 0 known gaps, profile accepted; release checks and prepare pass |
+| Both again at `6382b88`, which adds only the A/B runner and documents | Verify exit 0 with the same counts. Preview exit 0 with the same build, acceptance 27/27 and scenarios 145 pass |
+
+Long-session overhead, raw ms: at `882096f`, 10 checkpoints 73.07, 5.42, 4.79;
+20 checkpoints 153.31, 6.82, 10.89; control 6.47, 3.36, 2.90; extra median
+overhead 2 / 8 ms. At `6382b88`, 79.26, 9.07, 8.82; 172.55, 6.43, 5.02; control
+10.90, 5.44, 5.50; extra median overhead 3 / 0 ms.
+
+### A/B runner, first synthetic results
+
+`node scripts/context-memory-preview-ab.mjs --package-dir .artifacts/context-memory-preview-package --stock-root .artifacts/context-memory-preview-stock --output-dir <dir> [--latency-ms N]`
+
+Each arm runs in its own process with the same script: two cycles of a ruling,
+a pasted log of about 97k tokens with one fact in the middle, a follow-up, then
+`/compact`; then a restart and a probe prompt. The window is 128k tokens.
+Usage counts 3 bytes per token and costs a synthetic $3/$15 per million input
+and output tokens. The writer is faithful: it records every ground-truth fact it
+can see. The model writes B's notes, one `context_history` search and one
+`context_note` call each, only when B's guideline is in its system prompt. The
+script waits for A's preparation to finish before the next input, which is A's
+best case. At most 80 provider requests and 300 s per arm.
+
+| `--latency-ms` | Arm | Paths | Pause per compaction, ms | Turn time, ms | Writer calls (foreground) | Main requests | Total tokens | Synthetic cost | Context after cycle 2 | Probes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | sync | sync, sync | 92, 119 | 285 | 2 (2) | 9 | 616,942 | $1.86 | 3,001 | 6/6 |
+| 0 | A | prefix, prefix | 68, 114 | 317 | 2 (0) | 9 | 616,881 | $1.86 | 3,042 | 6/6 |
+| 0 | B | notes, notes | 76, 133 | 434 | 0 (0) | 17 | 1,453,006 | $4.37 | 104,386 | 6/6 |
+| 1000 | sync | sync, sync | 1,088, 1,139 | 6,243 | 2 (2) | 9 | 616,953 | $1.86 | 3,002 | 6/6 |
+| 1000 | A | prefix, prefix | 59, 99 | 6,310 | 2 (0) | 9 | 616,892 | $1.86 | 3,043 | 6/6 |
+| 1000 | B | notes, notes | 72, 152 | 14,425 | 0 (0) | 17 | 1,452,365 | $4.37 | 104,256 | 6/6 |
+
+No arm discarded a prepared call or left unknown usage. What this shows, within
+its synthetic limits:
+
+- **A** moves the writer call out of the pause at the same token cost, when
+  preparation finishes before the next input.
+- **B** removes the writer call, but each note costs two extra rounds that resend
+  the whole context. Without a prompt cache that more than doubles tokens and
+  moves the time into the turns. A provider cache would make those resends cheap;
+  the loopback cannot show it.
+- **B keeps the turn of its last note verbatim.** In cycle 2 the last note was
+  written in the log turn, so the log stayed in context after the commit: 104k
+  tokens against 3k for sync and A. B frees that turn only at a later note.
+- All arms pass the six probes, because the scripted writer is faithful and the
+  scripted model notes the right facts. This checks that no path drops what it
+  was given; it says nothing about how well a real model writes notes.
+
+### Finding: the payload guard blocks before A's band and Pi's threshold
+
+The runner first counted 4 bytes per token, closer to English text, and every
+arm was blocked after the log turn with `CONTEXT_PAYLOAD_TOO_LARGE`. The
+preview's final payload guard estimates tokens as bytes / 3 and compares them
+with `window − max(16,384, maxTokens)`. At about 4 bytes per token it fires near
+75% of that limit. For a 128k window with an 8k-output model that is about 84k
+real tokens, while A's preparation band starts at 97.7k and Pi's threshold
+compaction at 111.6k. With a larger `maxTokens` the guard moves lower still,
+because Pi reserves 16,384 tokens whatever the model's maximum output. In a
+protected session the guard blocks durably until `/compact`. The runner therefore
+counts 3 bytes per token, the guard's own scale. This is unchanged here and is
+put to the maintainer.
+
+## Unreleased: arm B as data-only work notes, 2026-10-13 UTC
+
+Step 6 of the [handoff brief](claude-handoff.md), decision D18, at `9b97b47` on
+`claude/affectionate-cray-21pzua`. `context_note` takes data only; with
+`previewWorkNotes.enabled` a compaction can commit merged work notes through the
+prefix path without a model call, with the user's own messages rendered after
+the note. The resident runtime, its fingerprint, the shared `notes.ts`/`identity.ts`
+and the evaluation pin are unchanged; the stamp's fingerprint gate passed.
+
+All results use the offline loopback provider and synthetic credentials. They are
+not real-provider latency, cost or recovery results.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` on `f7fe5bd`, before any change | Exit 0 |
+| `context-memory-ops.mjs verify` after the change | Exit 0. `context-memory-check.mjs`: 100 script and 311 runtime checks (304 before; seven B regressions added, one existing test moved to the new note shape). `security-regression-check.mjs`: 461 checks, unchanged |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` on the clean commit | Exit 0. Acceptance 27/27 on `stock-preview+src.40870d59ecfd6552`; scenarios 126 pass, 0 known gaps, 0 fail, profile accepted; release checks and prepare pass |
+
+The seven regressions cover: a commit from merged notes with no writer call,
+the user's messages verbatim and a later ruling kept in the tail, then reopened;
+an edited user message in the section blocking at the next full validation
+(`CONTEXT_NOTE_QUOTE`); the next writer receiving the user messages a notes
+checkpoint covered; earlier instructions carried unchanged, and a note that
+supersedes their source sent to the writer; user messages beyond their bound
+sent to the writer, which receives the notes and is journaled; the note schema
+refusing instructions, line breaks, forged sources and forged quotes; notes from
+another branch and counterfeit note entries ignored. Disabling the section check,
+the one-line rule and the covered-message rule together fails five of the seven.
+
+The scenarios run with both switches off, so B is covered by focused tests here;
+step 7 adds an official-Pi case. Long-session overhead in this run, raw ms:
+10 checkpoints 72.09, 5.20, 4.79; 20 checkpoints 201.95, 10.39, 8.00; control
+8.40, 3.54, 3.43. Extra median overhead 1 / 6 ms, within the required 50 ms. The
+first probe after a checkpoint again pays the full validation.
+
+## Unreleased: validation at trust boundaries, 2026-10-13 UTC
+
+Three changes on `claude/affectionate-cray-21pzua`, after the handoff head
+`da6276b`: the unused authority prototypes are removed, `context_note`
+candidates no longer enter the request context, and full source validation and
+session readback move from every request to trust boundaries (decision D15 in
+the [plan](v0.4.0-plan.md)). The resident runtime, its fingerprint, the shared
+`notes.ts`/`identity.ts` and the evaluation pin are unchanged.
+
+All results below use the offline loopback provider and synthetic credentials.
+They are not real-provider latency, cost or recovery results.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` on `da6276b`, before any change | Exit 0. 137 script and 520 runtime checks; security regressions exit 0 |
+| `context-memory-check.mjs` after the three changes | Exit 0. 107 script and 368 runtime checks. The removed checks belonged to the authority prototypes (15 script, 79 runtime), the request-component diagnostic (15 script) and the canonical-line readback (96 runtime, replaced by 21); two preview regressions are new |
+| `security-regression-check.mjs` | Exit 0. 461 checks, unchanged |
+| `ops preview`, strict profile, before promoting the known gap | Acceptance 27/27 on official Pi 1.1.0. Scenarios 126 pass, 0 fail; the run exits 1 because the listed 50 ms gap now passes, as the runner requires |
+| `ops preview`, strict profile, gap promoted to a required check | Acceptance 27/27. Scenarios 127 pass, 0 known gaps, 0 fail; profile accepted, raw gate passed. Release prepare refuses a strict-profile report, as designed |
+| `ops preview`, CI profile `v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27; scenarios 127 pass, raw gate passed, 0 declared performance exceptions; release checks and prepare pass |
+| Same, after one preparation slot, threshold compaction and the call journal (`753a9f9`) | Exit 0. Acceptance 27/27 on `stock-preview+src.71ebfa28d1860470`; scenarios 126 pass, 0 known gaps. The threshold case now checks that crossing the threshold after a completed turn writes a checked checkpoint, leaves no marker and lets the next prompt through, in place of the earlier blocked-until-`/compact` checks. `context-memory-check.mjs` exit 0 with 100 script and 304 runtime checks; `security-regression-check.mjs` exit 0 with 461 |
+| Same, after the prefix commit path (`bea9497`) | Exit 0. Acceptance 27/27 on `stock-preview+src.a23a816475767026`; scenarios 127 pass, 0 known gaps. `context-memory-check.mjs` exit 0 with 107 script and 374 runtime checks. Scenarios run with preparation disabled, so the prefix path is covered by focused tests only |
+
+Runtime build `stock-preview+src.dbdbdab7626c83e6` in all three preview runs;
+source commits `ef2a288`, then `7246581`, which changes only the scenario
+runner's known-gap list.
+
+Long-session overhead, three probes per milestone, raw milliseconds. The probe
+is a short prompt with exactly one provider request; the median of three is
+compared with the median of the extension-disabled control.
+
+| Run | 10 checkpoints, 3.0 MB | 20 checkpoints, 5.9 MB | Control | Overhead 10 / 20 |
+| --- | --- | --- | --- | --- |
+| Strict, before promotion | 79.75, 5.43, 5.02 | 139.43, 5.47, 5.72 | 7.74, 3.80, 4.11 | 1 / 2 ms |
+| Strict, promoted | 102.21, 8.03, 7.61 | 139.28, 4.95, 5.26 | 7.63, 3.68, 4.01 | 4 / 1 ms |
+| CI profile | 68.66, 4.98, 4.51 | 142.26, 4.58, 4.56 | 6.60, 3.42, 3.66 | 1 / 1 ms |
+| CI profile, prefix path | 75.32, 5.37, 4.91 | 148.11, 5.23, 4.77 | 6.69, 5.08, 6.89 | 0 / 0 ms |
+| CI profile, preparation slot and journal | 94.01, 7.71, 7.37 | 177.04, 5.08, 5.15 | 6.59, 3.42, 3.47 | 5 / 2 ms |
+
+The handoff's final C2 measured 46 / 84 ms on the earlier design. The first
+probe after each checkpoint is consistently slower: it is the first request
+after a trust boundary and pays one full validation and readback, about 60–95 ms
+at 3.0 MB and 130–171 ms at 5.9 MB above the control's first probe. That cost
+still grows with history size, but it is paid once per checkpoint, session start
+or branch change, not on every request. The median hides it by construction, so
+it is recorded here rather than claimed as removed. In the last run the control's
+median (7 ms) exceeded the extension's (5 ms), so its 0 ms is noise, not a gain.
+
+## v0.4.0-preview.1 PR and cloud handoff preparation
+
+### Final clean C2 verification
+
+`node scripts/context-memory-ops.mjs ci --acceptance-profile
+v0.4.0-preview.1-a-functional` exits 0 on clean source commit
+`1f7576e41639c616c683454e1687db859d6dd589` (C2). This is the single final
+committed-artifact verification run, after source/pin maintenance; it is not a
+retry of an unchanged S1 result to seek a pass. The documentation-only successor
+records C2 evidence; any later publication must verify its own final clean source.
+
+| Check | Result |
+| --- | --- |
+| Offline build, stamp and fingerprint | Exit 0; no generated source diff |
+| Project static/dependency/import/type checks | Exit 0 |
+| Self-contained script checks | 137 passed, zero failed/skipped |
+| Focused runtime checks | 520 passed across 11 files |
+| Synthetic host-security checks | 461 passed |
+| Exact official Pi 1.1.0 package acceptance | 27 passed |
+| Default scenarios with Pi 1.1.0 and 1.0.4 | 126 pass, one 50 ms known gap, zero fail/now-passes/skipped; raw `passed: true` |
+| Preview release checks and local `--prepare` | Exit 0; no publication |
+| Frozen scripted evaluator | 89 passed across 10 files; fixture/scorer locks unchanged |
+
+The final C2 scenario uses 20 checkpoints, 70 loopback requests and the unchanged
+nine-probe calculation. Growth passes in this run; the absolute target fails.
+Earlier two growth failures below remain separate results on the same runtime.
+
+| Milestone | Raw samples, ms | Rounded extension/control median | Extra overhead |
+| --- | --- | ---: | ---: |
+| 10 checkpoints | 52.409547, 46.291738, 58.420072 | 52 | 46 ms |
+| 20 checkpoints | 89.836717, 109.522654, 90.022501 | 90 | 84 ms |
+| Extension-disabled control | 10.516734, 5.610550, 4.713208 | 6 | — |
+
+`84 <= 2 * 46` passes growth; `84 > 50` fails the absolute budget. The authorized
+profile reports only the existing absolute known gap as an exception in this
+run. No required growth failure was reclassified or omitted. Neither the new
+pass nor the scope profile establishes stable pause/cost/recovery acceptance.
+
+C2 package version is `0.4.0-preview.1`, runtime source/bundle remain a8fc/2c72
+as recorded below, and exact archive SHA-256 is
+`a38ed48d971c8eb1aeaa9317a335727e737384b9d1c34afce151d778d3e5c290`.
+Manifest SHA-256 is
+`34d92b2626da5db04ac5031d886f79dcb7c12150af72f37cd6a4d40bce253a8b`;
+build metadata SHA-256 is
+`5db76e897b7fda5a4a1fcdc57e05863c21cb6ea1dd1bc9e6524bbdb836739108`.
+These identify C2, not a future source/package tag. No main update, merge,
+tag, release, live-provider run or final-main/CodeQL success is claimed.
+
+The maintainer selected an unmerged PR and cloud handoff as this session's
+endpoint, with no tags, package-branch update or release. Arm A remains an
+opt-in experiment; B remains disabled. The next worker may reassess or delete
+the designs under the source/branch/disk/failure/cost constraints in the
+[executable handoff](claude-handoff.md).
+
+Only `v0.4.0-preview.1` has explicit approval for a functional experimental
+acceptance scope. Its internal profile retains raw failed growth grading and
+the 50 ms known gap; every other version and all non-performance requirements
+remain unchanged. Full v0.4.0's A/B and performance requirements are not accepted
+by this exception. Before the real C1/C2 and final clean-source run,
+`node --test scripts/context-memory-preview-release-checks.test.mjs
+scripts/context-memory-preview-acceptance-profile.test.mjs` exits 0 for 80
+focused tests. Syntax and diff checks exit 0. This is policy/tooling verification,
+not another performance measurement or final-main CI evidence.
+
+The prior local `v0.4.0-preview.1` package passed 27 official-Pi package checks;
+its production runtime source and bundle hashes match the hardened candidate
+below. Final committed package metadata and archives must be rebuilt and checked
+again after C1/C2. The PR description records those final commands and results;
+no dirty-source archive is relabeled as a committed release artifact.
+
+The real implementation C1 is
+`2ccd555a26f42cae66c9eb76207e4caf63aa9d64`, based on
+`e83a7bf8631c1d2d2e93a8d6e9676b1b39bc970c`. A separate maintenance change
+advances `eval/runtime.ts` from its prior `96566c194654407450a8da3f5a18443516f283c6`
+to C1. It changes no fixture/scorer lock or historical report. The prepared
+resident build is `1.1.0-context-memory.0.3.0+src.3706b8258e544710`; its release
+version remains v0.3.0. Earlier deliberately rejected uncommitted-fingerprint
+runs below remain historical evidence, not a current frozen-gate failure.
+
+## Unreleased authority bridge and public-API prototypes
+
+The maintainer retained the v0.4.0 A/B target and authorized preparation of a
+compatibility bridge with a minimum supported rollback reader. Released v0.3.3
+is outside that authority-session rollback range. Release identities, strict
+intake/projection and B remain unassigned or disabled. The prototypes below are
+not imported by the production preview entry point.
+
+### Bounded bootstrap on official Pi 1.1.0
+
+`context-memory-authority-bootstrap.mjs` uses the actual public command →
+`ctx.newSession({ setup })` path against the isolated eight-package official npm
+cohort with networking denied. Approvals are a scripted UI, not authenticated
+human acts. Script SHA-256 is
+`249e80aeef6448f6a11d5c75e8ae803d442ee7e50c896b4ee2a68a9f076eda36`;
+test SHA-256 is
+`53588f320da7b91f2e38e5cf133e67d936d56d99a8c02b965269c9a9f02dc5d4`.
+The final content-free v2 report SHA-256 is
+`31f85615d4ccf08434d1317e77252acb3a893ab635ccc933540727e73737c52e`.
+The earlier v1 report and its identity are retained separately.
+
+| Command / evidence | Result |
+| --- | --- |
+| `node --test scripts/context-memory-authority-bootstrap.test.mjs` | Exit 0, five self-contained tests; no official installation needed |
+| Same command with explicit `PI_AUTHORITY_BOOTSTRAP_STOCK_ROOT` | Exit 0, 13 tests, including actual official SDK lifecycle |
+| Bootstrap CLI with explicit stock root and outside-repository report | Exit 0; all observed lifecycle/report-shape invariants checked |
+| Provider/agent starts | Zero; eight runtime creations within the original cap |
+
+Actual setup already contains `thinking_level_change/off`; a selected synthetic
+model additionally produces `model_change` before it. The selected-model case
+uses the public model option without provider registration, credentials or
+transport. Both prefixes are source-free, linear, explicitly checked and bound
+with the header hash; an empty/root-claim assumption does not hold.
+
+Custom-only records remain buffered. Appending the genuinely reviewed original
+user payload first flushes header/configuration/claim/source together; subsequent
+receipt and fixture-seal records are separately read back. First-flush, receipt
+and seal IO failures advance memory before disk confirmation and leave the
+replacement runtime active, skipping `withSession`/rebind. Captured old context
+and Pi closures are invalidated. Unsupported origin/mode, cancelled review and
+review errors return `handled` through the actual input dispatcher. The fixture
+seal is metadata, not an authority checkpoint; `pendingCounterDurable=false`.
+This lifecycle experiment does not prove the ownership protocol, human origin,
+ordinary-turn admission, provider projection, rollback or crash durability.
+
+### Session-wide ownership primitive and public refusal hooks
+
+The unused `PreviewAuthorityBridge` prototype publishes content-free ownership
+metadata before the first approved source, binds canonical file/session/header
+identity and the audited initialization prefix, and separately confirms original
+claim/source/ownership-seal records. Its bootstrap helpers default off; its
+reader refuses every owned state for dispatch, compact, retry, recovery, tree
+and fork. An ownership state named `active` never authorizes a projection.
+Sidecars are operational metadata, not another transcript. Bounds are 4 KiB per
+barrier, 64 barriers, 128 directory entries, 64 MiB/250,000 original records and
+128 KiB per reviewed source payload.
+
+Focused checks pass 66 ownership tests and 13 event-guard tests. They cover
+full initial-header binding, same-ID/file header changes, source/prefix changes,
+missing/unknown barriers, interrupted publication, all-entry/sibling detection,
+tokens from another manager, replay/recovery refusal and active ownership.
+Ordinary multi-root trees and dotted session IDs retain their tested legacy
+behavior; strict-owned second roots fail. Seal ancestry uses an invocation-local
+ID index rather than a quadratic parent search.
+
+One initial-failure limit is explicitly reproduced: after no barrier bytes have
+been published, a new reader cannot see an old object's private latch and sees
+an otherwise unmarked configuration prefix as legacy. The supplied setup caller
+must append a bounded content-free incomplete-enrollment sentinel before
+rethrowing. The unit remedy makes a replacement reader refuse without appending
+a user source or pretending a custom-only flush. No persistence after a no-byte
+storage failure is claimed; a complete product setup path is still required.
+
+`context-memory-authority-guards.mjs --reader bridge` then runs the frozen
+prototype through actual official SDK public events and the official
+OpenAI-completions adapter, using an in-memory fetch transport with sockets
+denied. It exits 0 for 21 expected classified cases and seven synthetic fetches
+under the predeclared cap of eight. Four cases are legacy controls, 16 are
+refusals and one is an explicitly unsupported warming-order counterexample.
+Ten official host inputs have identical hashes before and after.
+
+| Identity | SHA-256 |
+| --- | --- |
+| Guard CLI | `479a9944250527bc82eba4d550995c7ca7e4c6fff87b14ccc65e8d93423f4d42` |
+| Guard CLI unit tests | `40e076052374252c883eeecce1d00945458939de49ff78572240804476c322f7` |
+| Prototype source graph | `cf98d793c3a2dd6b09d1a556e7999fb72e86d6e653b1b76b459acce82bf9494d` |
+| Temporary prototype bundle | `46f92e29aca830808e04e6bda3d28bc249067c77ec480f5b963e3d3447a954a5` |
+| Real-reader SDK report | `af4d6aeace39983125a909707f8a46b90d752d386fe275eee58d0b5d18291e32` |
+
+The valid active-ownership input is refused. Other deliberately unapproved
+history fixtures become `tampered`, rather than being mislabeled valid pending
+sessions. Each active request hook independently aborts; the final payload case
+enters the actual adapter once and dispatches no fetch. Manual/threshold/overflow
+compaction, tree summaries, fork and warming use their separate cancellation
+mechanisms. Recovery tests are a command wrapper around a dummy marker/numeric
+mutation, not actual production `PreviewFailureStore` recovery. Disabled tests
+prove installation before the fixture's disabled return, not package integration.
+Target-hook and after-first-request cases deliberately defer reader exposure to
+isolate mechanisms; they do not authorize strict generation beforehand.
+
+Stock warming is last-override-wins. A later handler can replace `stop`, which the
+bounded handler-only negative records as unsupported ordering. A reviewed
+extension set/final guard order remains necessary. The preliminary stub driver
+failure (deny changed on a user event before its intended threshold request) and
+earlier stub source snapshots are retained; the driver was corrected before the
+final real-reader run. This evidence proves neither arbitrary extension ordering
+nor complete intake/authority projection, fresh-process release compatibility,
+source adoption, revocation or model obedience. These remain separate gates.
+
+### Unified checks and unchanged production identity
+
+The final `context-memory-ops.mjs verify` exits 1 solely at the deliberately
+prepared resident-fingerprint gate. Offline build, project check and security
+each exit 0: static/dependency/import/type checks, 57 self-contained Node tests,
+520 focused runtime regressions and 461 synthetic host-security checks.
+The new Node tests run before official cohort installation in CI; actual SDK
+assertions require explicit separate invocation and never use the patched host.
+
+Preview build exits 0 and produces exactly the previous `a8fcd0a35240f1fd` source,
+bundle and archive identities listed below. Neither prototype is bundled. The
+previous 27 exact-artifact stock package checks remain applicable; there is no
+production-code delta requiring a new S1/S2 run. Both failed S1 runs below remain
+release blockers. All 531 resident manifest files/content/diff match the prepared
+candidate; the evaluation pin and fixture/scorer inputs remain unchanged. No
+commit, push, release, full frozen CI pass or live-provider evidence is claimed.
+
+## Unreleased v0.4.0 hardened readback candidate
+
+The latest candidate is `stock-preview+src.a8fcd0a35240f1fd`, full source SHA-256
+`a8fcd0a35240f1fdcf505e1cbbf6e3d7ca68120ffe4cd8143c8c243c26604d76`,
+bundle SHA-256
+`2c7259319766dddc4eb8a2f3964cc245e28242c1ec814e21954811054db389b1`,
+archive SHA-256
+`daa02fcc19b83e70428948e4521f7a3944ed6b766d3ee41ae11b428611b75314`.
+Earlier artifacts and their failures below remain separate evidence.
+
+Readback eligibility now verifies the complete allowed Array prototype chain and
+the Object/Array prototype key/descriptor tables captured at module initialization.
+A hidden inherited serializer can no longer escape the preflight. A named
+prototype getter or inherited schema container could also mutate an earlier
+source after prefix hashing, during successful TypeBox/note validation, and hide
+that divergence through borrowed object identity. Both failures were reproduced
+before this fix; any changed prototype contribution now disables borrowing for
+the entire invocation. The baseline assumes trusted Node intrinsics and extension
+helpers at initialization; it is not a sandbox against arbitrary local code or
+global builtin rewrites. Ordinary parsing remains the compatibility fallback.
+
+| Check | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 1 solely for the deliberate prepared-fingerprint gate; offline build, project check and security each exit 0 |
+| Project check | Exit 0: static/dependency/import/type checks, 42 Node tests and 441 focused runtime regressions, including 96 readback cases |
+| Security check | Exit 0: 461 synthetic host checks |
+| Preview package build | Exit 0: five package files; identities above; maintained release version remains unchanged |
+| Official Pi 1.1.0 package acceptance | Exit 0: 27 checks on this exact artifact, with official host bytes unchanged |
+| Standalone S1 | Exit 1: one pass, one 50 ms known gap and one required growth failure |
+| Complete official Pi 1.1.0 / 1.0.4 scenarios | Exit 1: 125 passes, one 50 ms known gap, one required growth failure, no skips or unexpected passes |
+| One `.2` component diagnostic | Exit 0: 70 loopback calls and nine original probes; diagnostic only |
+| Four same-artifact S2 runs | Each exits 0: eight checkpoints and 24 independent scripted probes complete |
+
+Resident stamp/content identity remains the authorized `3706b8258e544710`
+candidate, with the existing 531-file manifest and frozen pin unchanged. No commit,
+push, release, real-provider run or full frozen CI pass is claimed.
+
+### Hardened S1: both unchanged growth checks fail
+
+Both runs follow the same unchanged recipe and nine-probe calculation after
+functional CPU checks ended, with preparation disabled and 70 loopback calls.
+The full suite validates the actual implementation change; neither run was
+repeated for a passing sample.
+
+| Run / checkpoints | Extension median, ms | Disabled median, ms | Extra, ms | Raw extension samples, ms |
+| --- | ---: | ---: | ---: | --- |
+| Standalone / 10 | 65 | 8 | 57 | 68.770, 57.919, 65.187 |
+| Standalone / 20 | 130 | 8 | 122 | 135.409, 111.520, 130.326 |
+| Complete / 10 | 60 | 6 | 54 | 60.469, 52.173, 64.558 |
+| Complete / 20 | 127 | 6 | 121 | 111.859, 127.042, 132.636 |
+
+Controls were 9.198/7.694/5.703 ms standalone and 9.182/5.640/4.572 ms complete.
+Session sizes remain 3.0/5.9 MB. Growth fails `122 > 2 * 57` and
+`121 > 2 * 54`; 20-checkpoint overhead exceeds 50 ms in both. The required growth
+check stays required, all failures stay recorded, and the equation is unchanged.
+Neither timing differences from the earlier byte candidate nor these small
+samples identify the causal effect of the prototype proof or establish tails.
+
+One source-bound `.2` diagnostic was declared after the proof change to confirm
+that the new gate had not silently disabled healthy canonical readback. All 141
+hooks complete and their exclusive partitions close. All 8,460 serialized,
+encoded, observed, disk, canonical and metadata records match; parses, canonical
+misses and fallback hashes are zero. All six enabled probes contain the three
+distinct hooks; disabled probes contain none. The prototype gate did not cause
+fallback in this fixture.
+
+At 20 checkpoints the three-hook/task exclusive means are 126.512 ms stringify,
+25.427 ms SHA, 8.957 ms encoding, 14.405 ms plain-data proof, 16.889 ms disk read,
+4.413 ms LF scan and 10.295 ms byte comparison. A 610.884 ms third probe strongly
+skews those means; no independent CPU/GC evidence explains it. Retain all three
+samples rather than discard that probe or infer algorithmic regression. This
+instrumented result does not replace either failed S1 acceptance, and is not
+pooled with `23dd`'s `.1` diagnostic.
+
+### Hardened S2: complete reuse, mixed whole-task result
+
+All runs share the artifact, unchanged working-tree snapshot, fixture/scorer and
+declared readiness-wait policy from the measurement specification. Background
+still overrides only the start interval to zero for the finite experiment.
+
+| Writer / strategy | Paths | Pauses, ms | Chain wall, ms | All calls / synthetic tokens |
+| --- | --- | --- | ---: | --- |
+| Session / synchronous | sync, sync | 53, 72 | 2,285 | 17 / 399,481 |
+| Session / background | complete, complete | 29, 48 | 1,853 | 17 / 399,481 |
+| Fixed / synchronous | sync, sync | 63, 69 | 1,858 | 25 / 423,368 |
+| Fixed / background | complete, complete | 31, 57 | 2,074 | 25 / 423,368 |
+
+Readiness waits are 36/51 ms for session and 69/88 ms for fixed; ruling waits are
+3/9 and 16/9 ms. All four complete background boundaries have zero foreground
+writer calls. Session chain wall is lower and fixed chain wall is higher in this
+set; the earlier byte candidate had higher background wall in both modes.
+These single synthetic chains do not establish stable whole-task improvement.
+All task, writer/preparation and ten probe provider calls per run are included;
+cache-write, reasoning and billing remain unknown. Natural hit rate, provider
+cache economics, semantic recovery, instruction authority and B remain untested
+or gated. The roadmap acceptance is incomplete.
+
+## Unreleased v0.4.0 byte-readback candidate
+
+The byte-readback candidate is `stock-preview+src.cc4ee46f242d67c4`, full source
+SHA-256 `cc4ee46f242d67c4dc23697fcdf88f1d2fb936e607b5d6f3bd47c8dcd39b150c`,
+bundle SHA-256
+`1f0d59023e09a53296756156fa8060026216959a66bf90a70b272543d37f0c5e`,
+archive SHA-256
+`1c6c11321126245f66447d677392d0eca4ab1c9eaea26f2483dc092ea621d95a`.
+It replaces full-file decoded strings and canonical string-map lookup with fresh
+bounded Buffer readback and sequential byte comparison. Exact selected-ancestor
+records borrow proven branch objects; siblings and noncanonical records still
+parse and receive all metadata/parent checks. A noncanonical selected record
+advances the ancestor cursor but preserves the independent branch-hash fallback.
+
+The whole-branch factory proof additionally requires own enumerable serializable
+entry metadata. Hidden/inherited metadata and nonfinite parent IDs retain legacy
+parse semantics through fallback. Nested ordinary nonfinite/undefined values do
+not gain a new storage meaning. Ninety focused readback cases cover Unicode,
+lone surrogates, malformed-byte lossy decoding, CRLF/BOM/blank/truncated records,
+entry-limit error order, interleaved siblings, complete owned collection and
+fresh file/marker checks.
+
+| Check | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 1 only for the authorized changed-fingerprint gate; offline build, project check and security steps exit 0 |
+| `context-memory-check.mjs` | Exit 0: static/dependency/import/type checks, 42 Node checks and 435 focused runtime regressions |
+| `security-regression-check.mjs` | Exit 0: 461 synthetic host security checks |
+| `context-memory-preview-build.mjs` | Exit 0: five independent package files, source/bundle/archive identities above |
+| Official Pi 1.1.0 preview acceptance | Exit 0: 27 package/lifecycle checks; official CLI/SDK/runner/storage bytes unchanged |
+| Standalone S1, 20 checkpoints | Exit 0: two required passes and the remaining 50 ms known gap |
+| Complete scenarios, official Pi 1.1.0 / 1.0.4 | Exit 1: 125 passes, one 50 ms known gap and one required growth failure; no skips or unexpected passes |
+| Four same-artifact S2 runs | Each exits 0; eight checkpoints and 24 independent synthetic probes complete |
+
+The 531-file resident content and diff manifests remain byte-identical to the
+authorized `3706b8258e544710` shared candidate. `eval/runtime.ts` and tracked
+evaluation inputs remain unchanged. Earlier frozen-runtime rejection still
+applies; no implementation commit, pin advancement or full frozen CI pass is
+claimed. No real-provider endpoint or credentials were used.
+
+### Byte S1: unchanged targets remain incomplete
+
+Both runs occurred after CPU checks finished, with preparation disabled and the
+unchanged source recipe, nine probes, median calculation and 70 synthetic HTTP
+calls. The complete suite is a required whole-suite check after the implementation
+change, not a retry of the standalone result.
+
+| Run / checkpoints | Extension median, ms | Disabled median, ms | Extra, ms | Raw extension samples, ms |
+| --- | ---: | ---: | ---: | --- |
+| Standalone / 10 | 50 | 8 | 42 | 49.913, 43.372, 53.471 |
+| Standalone / 20 | 90 | 8 | 82 | 89.658, 123.101, 87.539 |
+| Complete / 10 | 51 | 5 | 46 | 51.135, 49.278, 63.556 |
+| Complete / 20 | 116 | 5 | 111 | 115.769, 131.379, 115.677 |
+
+Control samples were 8.919/7.754/5.493 ms standalone and
+5.915/4.717/4.428 ms in the complete suite. Session sizes remain 3.0/5.9 MB.
+The standalone growth check passes (`82 <= 2 * 42`), while the complete check
+fails (`111 > 2 * 46`). Keep this failure and the preceding candidate's failure;
+do not restore the old known-gap entry, change the equation or rerun for a pass.
+Lower observed byte-candidate timings do not establish a stable improvement or
+latency distribution. The 50 ms gate has not passed.
+
+The component instrumenter was updated to schema `.2` for this byte source;
+its script SHA-256 is
+`d8ac0fdab5603be83f46e31b65b89c1a9d6d5d8090c877b52259b6772507f722`.
+Fifteen Node regressions pass, including transformed Unicode byte counts,
+encoding/comparison/scan stages and exclusive partition closure. No actual `.2`
+component worker was run; the executed `.1` diagnostic below retains its own
+artifact and cannot be pooled with this candidate.
+
+### Byte S2: path reuse and whole-chain cost
+
+All four runs use the frozen S2 fixture and scorer, one unchanged working-tree
+snapshot and the same `cc4ee46f242d67c4` bundle. The declared background policy
+sets `minIntervalMs: 0` and waits for readiness; it does not measure natural hit
+rate or the default five-second scheduling interval.
+
+| Writer / strategy | Paths at two boundaries | Pauses, ms | Chain wall, ms | All calls / synthetic tokens |
+| --- | --- | --- | ---: | --- |
+| Session / synchronous | sync, sync | 64, 85 | 2,167 | 17 / 399,481 |
+| Session / background | complete, complete | 34, 86 | 3,005 | 17 / 399,481 |
+| Fixed / synchronous | sync, sync | 78, 106 | 2,177 | 25 / 423,368 |
+| Fixed / background | complete, complete | 35, 54 | 3,198 | 25 / 423,368 |
+
+Background readiness waits after trace turns were 46/68 ms for session and
+71/106 ms for fixed; ruling waits were 5/19 and 3/8 ms respectively. Complete
+reuse makes zero foreground writer calls at all four background boundaries, but
+whole-chain wall time is higher in both background runs. All task, preparation,
+foreground and ten probe provider calls per run are included. Both strategies
+have equal synthetic token totals within each writer mode; this is an interface
+fixture, not provider savings or semantic recovery evidence. Cache-write,
+reasoning and billed cost are unknown for every raw synthetic call. These four
+runs do not establish the roadmap's whole-task performance or provider-quality
+acceptance, and arm B remains gated.
+
+## Unreleased v0.4.0 request safety and component diagnostic
+
+This continuation first produced `stock-preview+src.23dd80bdccc4efa4`, full
+preview source SHA-256
+`23dd80bdccc4efa4f74b3c7e15c4b33ff0137cf6e5f1a80b86030981a28b7256`,
+bundle SHA-256
+`daa33d9fd58c8a792fb0f297b4ef4360f2daaf8cf776df2e662cb578d82dd769`,
+archive SHA-256
+`fd580d61f8ecd39b582e31a0620097a5f7823f908b9cfee25eb573eb032b0c40`.
+The resident candidate and unchanged evaluation pin below remain separate.
+
+Readback reuse now requires a complete factory-owned snapshot, with a
+side-effect-free plain-data proof of the entire branch before serialization.
+Per-entry checking was insufficient: a later entry's serializer/accessor could
+mutate an earlier borrowed object and mask divergence from its saved line.
+Focused regressions reproduced that failure before the fix. Serialization hooks,
+accessors, proxies and sparse arrays disable reuse for the whole invocation;
+inherited indexed accessors also disable the proof before its own array operations.
+Unbranded, incomplete and previously consumed snapshots take independent ordinary
+parsing and hashing. No request cache is introduced.
+
+A cheap preparation rejection now consults only owned bounded accounting before
+constructing a large snapshot. It skips exhausted intervals, in-flight work and
+known accounting gaps. An absence of rejection never permits dispatch: start
+and each durable per-call reservation still reread the ledger. Regression cases
+change the ledger after each cheap/start check and verify rejection before a
+provider call. New confirmed checkpoints permit a new interval; paid failed or
+invalidated work remains charged.
+
+Focused readback, ledger/coordinator and controller suites exited 0 with 53, 80
+and 79 checks respectively; the subsequent type check exited 0. These were
+functional checks, not complete stock-Pi acceptance or new S1/S2 results.
+
+One finite `context-memory-preview-request-profile.mjs` diagnostic then exited 0:
+20 checkpoints, 70 synthetic loopback calls, nine original probes and all
+temporary session copies deleted after content-free reports were retained. Its
+script SHA-256 was
+`84d42d07947b44be1131cb1a71aec322fd9a7127e8195b89bace59e3193b2068`.
+The instrumenter builds baseline and temporary instrumented packages from one
+verified source snapshot and checks the baseline bundle against the artifact.
+Its 14 focused Node regressions exited 0. Instrumentation was not included in
+the production package or the S1 acceptance calculation.
+
+Six enabled probes each contain all three distinct request hooks; the three
+disabled probes contain none. The three hooks per probe have identical counts:
+56/58/60 branch entries at 10 checkpoints and 112/114/116 at 20. Each entry is
+serialized, hashed, observed, found on disk, matched canonically and metadata
+checked exactly once per hook. Canonical misses, entry parses and fallback branch
+hashes are zero in this fixture. Exclusive partitions plus unattributed time
+close exactly against each hook's wall time.
+
+| Exclusive component, three hooks per task at 20 checkpoints | Mean wall time, ms |
+| --- | ---: |
+| JSON serialization | 48.265 |
+| SHA update and prefix boundaries | 17.971 |
+| Whole-branch plain-data proof | 6.854 |
+| Fresh full-file read | 6.905 |
+| Full-file UTF-8 decode | 5.200 |
+| Line split | 1.524 |
+| Canonical string lookup | 3.922 |
+| Observer string map | 1.326 |
+| Entry metadata checks | 0.538 |
+
+Observer collection, decoding, split and lookup provide approximately 11.973 ms
+of gross opportunity per task for a bounded byte-readback experiment. New encoding,
+allocation, scanning and byte comparison costs must be deducted; this does not
+support a 50 ms claim. The instrumented 49/97 ms overhead values are diagnostic,
+not acceptance replacements for the preceding candidate's 134/289 ms failure.
+Timed components include scheduling/GC effects and instrumentation overhead.
+`serializedCodeUnits` is UTF-16; `diskBytes` is actual UTF-8. This ASCII fixture
+does not establish arbitrary Unicode or malformed-byte equivalence.
+
+The [authority](archive/instruction-authority-design.md) and
+[historical-prefix](historical-prefix-design.md) proposals are design evidence
+only. Neither activates arm B, retained-tail submission, a new checkpoint format
+or live model work.
+
+## Unreleased v0.4.0 shared validation candidate
+
+This section records the earlier `ea81dc8b879deca2` artifact and its actual
+failures. It does not describe validation of later preview revisions.
+
+The maintainer authorized preparing shared validation and corresponding runtime
+identity changes for review, without committing, pushing or publishing. Shared
+`hashEntryPrefixes` and `validateMemoryCheckpoints` now validate all preview
+checkpoints with one ordered serialization/hash pass and invocation-local source
+indices. The established hash bytes and schema/quote/supersedes/budget/rendered
+summary checks remain unchanged; public `latestMemory` retains latest-only
+behavior. Every preview request hook still validates independently.
+
+Within one synchronous request guard, freshly serialized canonical lines are
+passed directly to disk readback. The store still reads the complete JSONL and
+fresh failure marker, validates every entry's metadata, duplicate/root/parent
+rules and selected branch, and only reuses objects for exact plain-data lines.
+Noncanonical lines, serialization hooks, getters, proxies and other non-plain
+objects take the previous parse/hash path. Both snapshot and map are single-use.
+Status, inspection, staging and commit confirmation retain independent readback.
+There is no cross-hook/request cache or intervening asynchronous dispatch.
+
+The candidate resident stamp is
+`1.1.0-context-memory.0.3.0+src.3706b8258e544710`; its full source hash is
+`3706b8258e54471030d480108f56bab306759bd2586052ab64357591966f3402`.
+The preview artifact is `stock-preview+src.ea81dc8b879deca2`, bundle SHA-256
+`bd458671b23b0b7868897c36f7db7dda28efa364d3963ebc191f163bf714da3c`,
+archive SHA-256
+`af62ee9900a487456d0854d1ee1a4c7b9932b7c259d3301beb93f932201132c1`.
+Version strings are unchanged. The local ignored candidate manifest records
+531 resident files, runtime-content SHA-256
+`b4ef84bbd4813a75fcc9b66aef53e97c1a5ce4e9ab87102ec393e54377e9ef63`,
+the stamp/diff identities and the unchanged frozen fixture/scorer hash.
+
+| Check | Observed result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 1 solely for the deliberate changed-fingerprint gate; offline build, project checks and security checks each exit 0. The candidate stamp was prepared under maintainer authorization; no commit or gate bypass was made. |
+| `context-memory-check.mjs` | Exit 0: static/import/dependency/type checks, 27 Node checks and 368 focused regressions: 94 resident, 76 preview controller/lifecycle, 31 candidate, 27 ledger, 28 writer calls, 40 coordinator/config, 33 shared validation and 39 readback. |
+| `security-regression-check.mjs` | Exit 0: 461 synthetic host security checks. |
+| Offline `eval/pi/preflight.test.ts` and `eval/runner/frozen.test.ts` | Exit 0: nine checks, including all twelve declared fixture arm/checkpoint combinations with disk reopening. `EVAL_WRITE_PREFLIGHT=0`; frozen fixtures were not rewritten. |
+| Direct `assertFrozenInputs()` with the current pin | Exit 1: `EVAL_FROZEN_INPUT_CHANGED:96566c194654407450a8da3f5a18443516f283c6`. This is an actual rejection of the uncommitted shared candidate, not a passed frozen evaluation. |
+| `context-memory-preview-build.mjs` | Exit 0: the candidate identity above, five independent package files and no bundled host runtime. |
+| `context-memory-preview-acceptance.mjs` on official Pi 1.1.0 | Exit 0: 27 package/lifecycle checks; official CLI/SDK/runner/storage bytes unchanged. |
+| Standalone `context-memory-preview-scenarios.mjs --only long-session-overhead --perf-checkpoints 20` | Exit 1: one pass, one remaining 50 ms known gap and one previously listed growth gap now passing. All 20 checkpoints committed; the growth check was then promoted to required. |
+| Complete `context-memory-preview-scenarios.mjs` on official Pi 1.1.0 / 1.0.4 | Exit 1: 125 passed, one 50 ms known gap, one required growth failure, zero unexpected passes or skips. All 20 S1 checkpoints committed. |
+
+An initial preflight invocation omitted its required scratch-directory setting
+and failed before the lifecycle check. The corrected declared offline invocation
+passed the nine checks above. Package acceptance was also initially invoked with
+a nonexistent output-package directory; the corrected builder-reported directory
+passed. These setup failures are not accepted comparison runs.
+
+### S1 final candidate: performance acceptance incomplete
+
+Both runs used the same built artifact, preparation disabled, official Pi 1.1.0,
+the unchanged nine-probe median calculation and 70 loopback HTTP requests
+(50 task, 20 writer). The standalone run finished after other CPU checks; the
+complete scenario suite then reran S1 to verify the deliberate promotion of the
+growth check. The runner retained all raw samples and monotonic probe intervals.
+
+| Run / checkpoints | Session MB | Extension median, ms | Disabled median, ms | Extra overhead, ms | Raw extension samples, ms |
+| --- | --- | --- | --- | --- | --- |
+| Standalone / 10 | 3.0 | 56 | 7 | 49 | 50.344, 55.830, 56.400 |
+| Standalone / 20 | 5.9 | 100 | 7 | 93 | 95.801, 152.956, 100.433 |
+| Complete suite / 10 | 3.0 | 148 | 14 | 134 | 147.932, 151.049, 146.668 |
+| Complete suite / 20 | 5.9 | 303 | 14 | 289 | 303.217, 273.409, 328.161 |
+
+Disabled-control samples were 12.631/4.380/6.947 ms standalone and
+25.651/13.959/9.972 ms in the complete suite. Standalone growth passed
+(`93 <= 2 * 49`), but the promoted required check failed in the complete suite
+(`289 > 2 * 134`). That failure remains visible; the known-gap entry was not
+restored and neither calculation nor threshold was changed. No run was repeated
+solely to obtain a pass.
+
+Both final runs show lower observed request overhead than the earlier opt-in
+baseline below, but they do not meet the 50 ms target or establish stable growth.
+Three probes per milestone, with one extension-disabled control at the end,
+cannot establish a latency distribution, prove superlinear complexity or identify
+CPU contention as the cause. The current source removes the old repeated prefix
+scan; substantial serialization, allocation, map, full-file readback and context
+checks still occur independently in all three hooks.
+
+A prior whole-chain CPU profile informed the readback change, but also included
+compaction work and did not retain usable probe alignment. It is diagnostic
+evidence, not a request-phase attribution or acceptance result.
+
+One subsequent diagnostic was declared in the measurement specification and ran
+the unchanged final worker after other CPU tasks finished: 20 checkpoints, 70
+loopback HTTP calls, a 180-second deadline, a 1,000-microsecond Node CPU profile
+and GC trace. It exited 0 and retained the profile/result before scratch cleanup.
+Its instrumented timings do not replace either acceptance run above.
+
+The profile's monotonic timestamps aligned directly with all nine original probe
+intervals; enabled intervals contained the expected extension stacks, and the
+disabled control contained none. Within the three probes at each milestone:
+
+| Milestone | Total probe wall, ms | Prefix/hash inclusive sampled time, ms | Readback inclusive sampled time, ms | GC sampled time, ms |
+| --- | --- | --- | --- | --- |
+| 10 checkpoints | 171.914 | 96.801 (56.3%) | 29.382 (17.1%) | 0 |
+| 20 checkpoints | 1,024.271 | 518.874 (50.7%) | 216.440 (21.1%) | 127.064 (12.4%) |
+| Disabled control | 66.284 | 0 | 0 | 0 |
+
+These are weighted CPU-stack samples, not exact process CPU accounting;
+inclusive categories must not be summed with their child/self measurements.
+Native stringify and Map operations can be attributed to their caller, so this
+profile cannot precisely separate those components. No `hashEntries` stack was
+sampled inside the nine probes, consistent with canonical readback avoiding the
+extra disk/memory branch hashes. Serialization/prefix hashing and file processing
+remain the main sampled extension costs.
+
+Two 20-checkpoint probes contained approximately 84.9/42.2 ms of sampled GC,
+corroborated by major pauses in the separate GC log. The third had no GC sample
+and still took 281.7 ms, so GC does not explain all remaining cost. The GC log's
+relative clock requires an inferred startup offset and is only corroboration;
+the CPU profile provides probe alignment. Sampling gaps reached 14.9 ms, and
+IO, scheduling and profiling can affect weights. This diagnostic cannot assign
+the exact cause of the earlier unprofiled failure or establish complexity.
+
+Before changing the algorithm again, collect bounded component timing and
+operation counts to distinguish serialization, string-map construction, bytes
+read/decoded, canonical/fallback paths and allocation/GC. See the
+[remaining P1 investigation](v0.4.0-plan.md#p1-reduce-repeated-request-validation).
+
+### S2 final candidate: reuse works, time benefit unestablished
+
+Four fresh `context-memory-preview-latency.mjs` chains ran sequentially on the
+same final artifact and official Pi 1.1.0 cohort. The unchanged recipe SHA-256
+was `4a1db2d1f9628fc51245d66ba0f2dde913d219085b955e09f334130ad49718a2`.
+The explicit preparation policy retained the 2,048-token trigger and default
+budgets, with `minIntervalMs: 0` for this finite experiment. Each chain used five
+task requests, two checkpoints and six independent fresh-process probes.
+
+| Writer / strategy | Manual pauses, ms | Chain wall, ms | Writer calls: preparation / foreground | Total HTTP calls |
+| --- | --- | --- | --- | --- |
+| session / synchronous | 60, 63 | 2,033 | 0 / 2 | 17 |
+| session / background | 78, 143 | 5,877 | 2 / 0 | 17 |
+| fixed / synchronous | 77, 81 | 2,052 | 0 / 10 | 25 |
+| fixed / background | 53, 107 | 2,649 | 10 / 0 | 25 |
+
+All four commands exited 0. Eight checkpoints were confirmed on disk, all 24
+scripted source/permission/action probes passed, and each probe group used 1/1/3
+requests without a forbidden or repeated action. Both background chains selected
+`complete` twice and made zero foreground writer calls; the synchronous chains
+selected `sync`. All paths kept zero raw tail and serialized notes of 624/657
+bytes. Same-writer stale merge retains focused regressions, without a measured
+stock-Pi S2 sample in these four chains.
+
+Read-only readiness polling forced complete candidates before submission. Trace
+waits were 81/160 ms for session and 114/121 ms for fixed; earlier ruling polls
+were 4/31 ms and 3/12 ms. They are included in chain wall time. This is controlled
+reuse evidence, not a natural hit-rate estimate. Background did not show a
+stable pause improvement, and both background chain wall times exceeded their
+matched synchronous observations. One chain per combination cannot attribute
+the differences to environment, shared validation or preparation overhead, nor
+support an overall latency benefit. These results do not meet the roadmap's
+performance acceptance; the default remains synchronous.
+
+Within each writer mode, HTTP counts and synthetic tokens were identical across
+strategies: 399,481 for session and 423,368 for fixed, including probes. The two
+preparation ledgers retained 2/10 reused calls, zero discarded calls, complete
+SDK-normalized observations and no accounting gaps. This construction does not
+measure naturally wasted preparation. Raw cache-write, reasoning and billed
+cost were absent in every synthetic response and remain unknown in the reports;
+catalog estimates and SDK zeros do not prove economic savings. No real model
+quality, provider cache behavior or live billing was evaluated. Scratch
+transcripts/settings/markers were removed; retained evidence is content-free.
+
+### Identity handoff and remaining gates
+
+The evaluation pin remains
+`96566c194654407450a8da3f5a18443516f283c6`; `eval/` has no modifications and the
+fixture/scorer content lock remains `6d19b38a…`. A working-tree content hash is not
+a Git commit pin. The maintainer must first create implementation commit C1 with
+the reviewed runtime, regressions and generated stamp, then update
+`eval/runtime.ts` to C1 in separate maintenance commit C2. Preserve fixture/scorer
+bytes and historical report identities; a squash must retain or reestablish a
+real pin target. Full frozen evaluation and complete CI have not passed this
+uncommitted candidate.
+
+Preparation remains disabled by default. The performance gates, natural candidate
+hit rate, live cache/cost/recovery evidence, historical-prefix contract and arm B
+authority/comparison gates remain incomplete. No provider credentials or live
+model were used, and no release or publication was prepared.
+
+## Unreleased v0.4.0 opt-in integration before shared validation
+
+The preview development runtime now imports the preparation coordinator. It is
+disabled by default; enabling `previewPreparation` schedules the configured
+writer after settled text turns. Complete candidates use zero foreground
+writer calls, source-valid stale candidates use the same writer for a merge,
+and other cases use synchronous compaction. Every path keeps full-branch
+coverage and the existing pending/stage/append/disk-read confirmation gate.
+The resident fingerprint, frozen evaluation pin and version strings are
+unchanged. Historical-prefix submission and arm B remain inactive.
+
+The content-free ledger records reservations before dispatch, separate
+preparation/foreground observations, optional cache/reasoning breakdowns and
+reuse/discard/supersede disposition. Interrupted default-zero usage stays
+unknown; positive interrupted usage is a lower bound until a complete report
+arrives. A staged disk claim survives shutdown until recovery. New preparation
+failure, cancellation or accounting pause cannot create a compaction failure
+marker or abort an ordinary task.
+
+| Check | Observed result |
+| --- | --- |
+| `context-memory-ops.mjs verify` on the final integration source | Exit 0: offline build, complete project checks and host security checks; resident fingerprint gate passed. |
+| `context-memory-check.mjs` after integration | Exit 0: static/dependency/import/type checks, 27 Node checks and 295 project regressions (94 resident, 75 preview controller/lifecycle, 31 candidate, 27 ledger, 28 writer calls and 40 coordinator/config). |
+| `security-regression-check.mjs` | Exit 0: 461 synthetic host security checks. |
+| `eval/runner/frozen.test.ts` | Exit 0: eight frozen-input/preview-separation checks. |
+| `context-memory-preview-build.mjs` | Exit 0: integrated source identity `stock-preview+src.5ac8e318721e7203`, five package files, no bundled host runtime. |
+| `context-memory-preview-acceptance.mjs` on official Pi 1.1.0 | Exit 0: 27 package/lifecycle checks, source tampering, failed writes/cancellation and staged recovery included; official host file bytes unchanged. |
+| `context-memory-preview-scenarios.mjs` on official Pi 1.1.0 / 1.0.4 | Exit 0: 125 passed, two known performance gaps, zero failures/unexpected passes/skips. All 20 S1 checkpoints committed. |
+
+Integration regressions additionally exercise latest user rulings, custom
+focus, paid malformed output, no pending marker during preparation, zero-call
+full coverage, same-writer tail merging with referenced originals, exact disk
+confirmation, restart/staged recovery, multiple attempts over identical inputs,
+unknown/partial usage and corrupt accounting isolation. All services remain
+scripted/loopback or network-denied; no live provider was called.
+
+The first unified verification stopped on formatting in a newly edited test;
+formatting was corrected. A subsequent deadline regression expected complete
+usage from an interrupted stream; the new completeness rule correctly reported
+it as partial, and the assertion was updated to require visible unknown usage
+and cost. These failed runs are not accepted comparisons.
+
+### S1 request baseline on the integrated artifact
+
+The standalone default-settings suite ran after the other checks and S2 chains
+finished. Preparation was disabled. Its manifest records the artifact source
+identity, runner hash and the complete official host cohort; the runner now
+retains the original nine timing samples without changing its median calculation.
+The run made 70 HTTP requests: 50 task requests and 20 session-writer calls.
+
+| Checkpoints | Session MB | Extension median, ms | Disabled median, ms | Extra overhead, ms | Raw extension samples, ms |
+| --- | --- | --- | --- | --- | --- |
+| 10 | 3.0 | 278 | 11 | 267 | 278.450, 317.274, 268.444 |
+| 20 | 5.9 | 1,571 | 11 | 1,560 | 962.189, 1,570.855, 1,908.630 |
+
+Disabled-control samples were 17.924, 10.698 and 8.105 ms. Both the 50 ms target
+and growth bound remain known gaps. The 20-checkpoint samples varied widely;
+this run establishes neither a reliable tail estimate nor unchanged performance
+against the earlier foundation median. Shared request validation was not changed,
+and moving generation off `/compact` does not address this request-side cost.
+
+### S2 matched synthetic execution
+
+Four fresh chains ran sequentially on the same official Pi 1.1.0 installation
+and artifact `stock-preview+src.5ac8e318721e7203`. Each chain used five task
+requests, two manual checkpoints and six independent fresh-process probes.
+The fixture SHA-256 was
+`4a1db2d1f9628fc51245d66ba0f2dde913d219085b955e09f334130ad49718a2`;
+bundle SHA-256 was
+`bcdc32270ea1df5d810d0ed85842784d3fe2c1cd2aa21f18a983b728f33fb856`.
+The experiment policy retained the runtime budgets and 2,048-token trigger,
+with an explicit zero minimum interval for this finite synthetic run.
+
+| Writer / strategy | Manual pauses, ms | Chain wall, ms | Writer calls: preparation / foreground | Total HTTP calls |
+| --- | --- | --- | --- | --- |
+| session / synchronous | 44, 57 | 1,819 | 0 / 2 | 17 |
+| session / background | 25, 52 | 1,967 | 2 / 0 | 17 |
+| fixed / synchronous | 71, 76 | 2,120 | 0 / 10 | 25 |
+| fixed / background | 31, 52 | 2,073 | 10 / 0 | 25 |
+
+All four commands exited 0. Eight checkpoints were confirmed on disk, all 24
+scripted source/permission/actual-action probes passed, and no probe repeated
+completed work or took a forbidden action. Each probe group made 1/1/3 provider
+requests; the action probe executed one permitted action and read originals.
+All paths retained zero raw tail; serialized notes were 624 and 657 bytes.
+Each background boundary selected `complete`; both synchronous boundaries
+selected `sync`. The stale merge path has focused regressions, not a measured
+stock-Pi S2 timing sample in these four runs.
+
+Background runs waited for readiness through read-only status commands before
+manual submission. Trace readiness waits were 36/52 ms for session and 70/84 ms
+for fixed, included in chain wall time. This construction establishes complete
+reuse under controlled timing; it cannot estimate natural full-candidate hit
+rate or a pause distribution. Chain wall time changed in different directions;
+one chain per combination supports no overall task-time improvement claim.
+
+Within each writer mode, total HTTP calls and returned synthetic tokens were
+identical: 399,481 tokens for session and 423,368 for fixed, including task,
+writer and probe calls. Preparation therefore moved work from the commit
+boundary; these runs show no token savings. The two preparation ledgers retained
+2 and 10 reused calls, zero discarded calls, no observation gaps, and 2,668 /
+9,525 bytes of content-free state. This does not exercise natural wasted work;
+the failure/restart/multiple-attempt regressions cover its lifecycle.
+
+Ledger completeness refers to Pi SDK-normalized usage and catalog estimates,
+not provider billing or availability of every raw cache/reasoning field. The
+raw synthetic responses did not report cache-write, reasoning or billed cost;
+the S2 report keeps those fields unknown. SDK zero defaults and zero catalog
+prices do not demonstrate cache hits, free preparation or live cost savings.
+No model semantics, paid-provider behavior, 50 ms request acceptance or full
+arm A/B release comparison was evaluated. Scratch transcripts/settings/markers
+were removed; only content-free evidence remains outside the repository.
+
+### Foundation baseline before integration
+
+At the initial foundation checkpoint, the work added candidate freeze/finalize/classification and bounded
+preparation accounting modules, but the preview entry did not import them.
+There was no background provider dispatch, prepared checkpoint submission or
+new user-facing configuration/status behavior. That independent runtime was
+`stock-preview+src.9ca9dd2123d49293`; the resident fingerprint and
+`eval/runtime.ts` pin were unchanged. See the [plan](v0.4.0-plan.md) and
+[measurement specification](v0.4.0-measurement.md).
+
+Local validation used Node 24.19.0; CI remains on Node 22. All services were
+scripted/loopback or network-blocked. No real provider credentials or model
+service were used. Official test installations use all eight Pi runtime packages
+at 1.1.0, with a separate complete 1.0.4 cohort for the other-host case.
+
+| Command | Result and scope |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0: offline build, static/dependency/import/type checks, 20 Node checks, 218 context regressions at that revision and 461 host security checks. Subsequent ledger refinements are covered by the latest targeted checks below. |
+| `node scripts/context-memory-check.mjs` on final foundation sources | Exit 0: all static/dependency/import/type checks, 20 Node checks and 220 context regressions (94 resident, 69 existing preview, 31 candidate and 26 ledger cases). |
+| `npm run build --workspace @earendil-works/pi-coding-agent` after the final ledger changes | Exit 0: unbundled source and host bundle rebuilt; no source identity changes. |
+| Scoped Biome, `tsc --noEmit`, and `vitest` for `context-memory-preview-ledger.test.ts` | Exit 0 on the final ledger source: 26 passed. The candidate suite separately passed 31 checks. |
+| `vitest` for `eval/runner/frozen.test.ts` | Exit 0: eight frozen-runtime/preview-separation checks. |
+| `node --test scripts/context-memory-prefix-profile.test.mjs scripts/context-memory-preview-stock-install.test.mjs` | Six kernel checks and 14 installer checks are included in the acceptance command above. They use synthetic inputs, mocked npm execution or network-denied SDK imports. |
+| `context-memory-preview-stock-install.mjs --check` for each official installation | Exit 0 for 1.1.0 and 1.0.4: all eight versions/integrity records match and SDK startup passes with networking denied. |
+| `node scripts/context-memory-preview-build.mjs` | Exit 0: five package files, unchanged runtime source identity. The new preparation modules are not bundled. |
+| `context-memory-preview-acceptance.mjs` with the isolated official Pi 1.1.0 installation | Exit 0: all 27 existing package/lifecycle checks, including fresh-process reopening and staged recovery. Official host file bytes remained unchanged. |
+| `context-memory-preview-scenarios.mjs` with both official installations | Exit 0 on a standalone run: 125 passed, two known gaps, zero failures, zero unexpectedly passing gaps and zero skips. |
+| `git diff --check` and design-document relative-link checks | Exit 0. |
+
+Full `context-memory-ops.mjs ci`, release preparation and provider evaluation
+were not run. The checkout remains uncommitted and no release assets, runtime
+pins or fingerprints were advanced.
+
+The candidate regressions cover frozen snapshots/output, same-leaf source edits,
+cross-branch/session identity, new user rulings, stale prefix reuse classification,
+future citations/supersedes, quotes, actual writer identity and submission budget
+bounds. The ledger regressions cover durable dispatch reservations, restart
+orphans, cancellation, duplicate/cumulative reporting, late usage, rotation,
+quotas, corrupt/oversized records and IO failures. Candidate IDs interoperate
+with the ledger; equivalent policy field orders reopen the same state. Missing
+reasoning breakdowns remain unknown, and mixed cost sources are identified.
+
+The first stock installation attempt pinned only `pi-coding-agent@1.1.0`; its
+caret dependencies resolved several Pi components to 1.2.0. Acceptance and the
+overhead scenario stopped at an SDK import failure because the selected
+`pi-codemode/declarations` did not export `MCP_TYPESCRIPT_PREAMBLE`. Both exited 1.
+The new shared installer fixes test setup by pinning the official component
+cohort and checking metadata plus SDK startup; no host file is patched.
+
+An intermediate build exited 2 on an excessively deep recursive readonly type
+in the new candidate module. Explicit bounded readonly interfaces corrected it;
+the subsequent build and type checks passed.
+
+A preliminary overhead run was incorrectly concurrent with other verification
+work. All 20 checkpoints committed, but its 10-checkpoint measurement was 603 ms
+and its 20-checkpoint measurement was 963 ms, with a 5 ms disabled control. The
+growth gap unexpectedly passed, so the runner exited 1. That run is retained as
+interfered evidence, not a fixed gap or an accepted comparison. The standalone
+full-scenario run after other checks ended produced this S1 baseline:
+
+| Checkpoints | Session size | Extension request median | Disabled control median | Extra overhead |
+| --- | --- | --- | --- | --- |
+| 10 | 3.0 MB | 310 ms | 7 ms | 303 ms |
+| 20 | 5.9 MB | 966 ms | 7 ms | 959 ms |
+
+All 20 manual checkpoints committed. The 50 ms overhead target and the growth
+bound both remain known gaps. These timings use three probes per milestone and
+three disabled-control probes in one session; they are not reliable tail
+estimates, model latency, or preview recovery-quality measurements.
+
+The separate `node scripts/context-memory-prefix-profile.mjs` prototype exited 0.
+It compares the current hash byte rule to single-pass SHA-256 copies at prefix
+boundaries on synthetic records. For 10/20/60 boundaries it generated
+1,000/2,000/6,000 entries with 512-byte text, about 0.68/1.35/4.07 MB serialized.
+Every requested boundary hash matched. Three timing samples per case were:
+
+| Boundaries | Repeated-prefix samples in ms | Single-pass samples in ms |
+| --- | --- | --- |
+| 10 | 12.676, 10.763, 11.458 | 2.205, 2.116, 2.753 |
+| 20 | 49.717, 55.191, 52.414 | 4.992, 4.684, 4.399 |
+| 60 | 450.401, 473.697, 433.054 | 12.201, 12.362, 18.450 |
+
+These are kernel-only measurements. They exclude disk readback, schema/quote
+validation, session traversal and the three request hooks. They do not establish
+the 50 ms request target, and the prototype does not change shared runtime code.
+At that checkpoint, the S2 runner, preparation strategy comparison, provider
+cache/cost measurements and v0.4.0 latency/recovery acceptance were pending.
+The later integration results above supersede its implementation status.
+
 ## v0.3.3 existing-session compatibility, 2026-10-12 UTC
 
 The v0.3.3 preview runtime `stock-preview+src.9ca9dd2123d49293` was tested on

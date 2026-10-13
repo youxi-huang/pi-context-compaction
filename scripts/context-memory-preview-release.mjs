@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertFinalMainWorkflows, assertReleaseNotes, releaseNotes } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes } from "./context-memory-preview-release-checks.mjs";
+import { assertScenarioAcceptance, PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 const sourceRoot = process.env.PI_CONTEXT_RELEASE_ROOT;
 assert(!sourceRoot || isAbsolute(sourceRoot), "Release source root must be absolute");
@@ -31,10 +32,7 @@ const build = jsonFile(join(packageDir, "preview-build.json"));
 const pack = jsonFile(join(artifacts, "context-memory-preview-package-report.json"));
 const acceptance = jsonFile(join(artifacts, "context-memory-preview-acceptance", "report.json"));
 assert.equal(manifest.name, "pi-context-compaction-preview");
-assert(/^\d+\.\d+\.\d+$/.test(manifest.version), "Expected a reviewed release version");
-const version = manifest.version;
-const tag = `v${version}`;
-const packageTag = `extension-v${version}`;
+const { version, tag, packageTag } = parseReviewedVersion(manifest.version);
 const sourceCommit = git("rev-parse", "HEAD");
 assert.equal(git("rev-parse", "--show-toplevel"), root, "Release source root must be the Git worktree root");
 const publicationToolingCommit = process.env.PI_CONTEXT_RELEASE_TOOLING_COMMIT ?? sourceCommit;
@@ -57,6 +55,31 @@ assert(acceptance.assertions.length >= 26 && acceptance.assertions.every((entry)
 assert.equal(pack.archive, `${manifest.name}-${version}.tgz`);
 assert.equal(pack.sha256, digest(readFileSync(join(artifacts, pack.archive))));
 
+let scenarioProfile;
+if (version === VERSION) {
+	const reportBytes = readFileSync(join(artifacts, "context-memory-preview-scenarios", "report.json"));
+	const report = JSON.parse(reportBytes.toString("utf8"));
+	const scenarioManifestBytes = readFileSync(join(artifacts, "context-memory-preview-scenarios", "manifest.json"));
+	const scenarioManifest = JSON.parse(scenarioManifestBytes.toString("utf8"));
+	assert.deepEqual(scenarioManifest.package, build, "Scenario source identity must match the final candidate");
+	assert.equal(scenarioManifest.runnerSha256, digest(readFileSync(join(root, "scripts/context-memory-preview-scenarios.mjs"))), "Scenario runner must match the final source");
+	assert.equal(scenarioManifest.only, null, "Publication requires the full scenario suite");
+	assert.equal(scenarioManifest.checkpointTarget, 20, "Publication requires 20 checkpoints");
+	assert.equal(scenarioManifest.host.version, "1.1.0");
+	assert.equal(scenarioManifest.otherHost.version, "1.0.4");
+	const candidate = { version, sourceCommit, build: build.build, sourceHash: build.sourceHash,
+		manifestHash: acceptance.candidate.manifestHash, entryHash: acceptance.candidate.entryHash, buildMetadataHash: acceptance.candidate.buildMetadataHash };
+	const profileAcceptance = assertScenarioAcceptance(report, { profile: PROFILE, candidate });
+	// Content-free release evidence preserves raw grades and measurements; no source/session bodies are copied.
+	scenarioProfile = { candidate, acceptance: profileAcceptance, raw: { passed: report.passed, summary: report.summary, checks: report.checks }, reportSha256: digest(reportBytes), manifestSha256: digest(scenarioManifestBytes), runnerSha256: scenarioManifest.runnerSha256,
+		performance: report.cases.filter((entry) => entry.case === "long-session-overhead").flatMap((entry) => entry.observations.filter((value) => value.step === "overhead per model request").map((value) => ({ pi: entry.pi, rows: value.rows.map((row) => {
+			const measured = Object.fromEntries(["checkpoints", "sessionMB", "extensionMs", "baselineMs", "overheadMs"].map((key) => [key, row[key]]));
+			assert(Object.values(measured).every((number) => typeof number === "number" && Number.isFinite(number) && number >= 0), "Performance evidence must retain numeric measurements");
+			return measured;
+		}) }))) };
+	writeFileSync(join(artifacts, "preview-acceptance-profile.json"), `${JSON.stringify(scenarioProfile, null, 2)}\n`);
+}
+
 const sourceArchive = `pi-context-compaction-${tag}-source.tar.gz`;
 git("archive", "--format=tar.gz", `--prefix=pi-context-compaction-${tag}/`, `--output=${join(artifacts, sourceArchive)}`, sourceCommit);
 const packageFiles = expectedFiles.map((file) => ({ file, sha256: digest(readFileSync(join(packageDir, file))) }));
@@ -66,14 +89,16 @@ assert(section, "Release requires its own changelog section");
 const notes = releaseNotes({
 	repository, branch, tag, packageTag, sourceCommit, build: build.build,
 	acceptanceChecks: acceptance.assertions.length, changes: section.replace(/^ —[^\n]*\n/, "").trim(),
+	scenarioAcceptance: scenarioProfile?.acceptance,
 });
-assertReleaseNotes(notes, { repository, packageTag, branch });
+assertReleaseNotes(notes, { repository, packageTag, branch, scenarioAcceptance: scenarioProfile?.acceptance });
 writeFileSync(join(artifacts, "context-memory-preview-release-notes.md"), notes);
 const provenance = {
 	version, sourceCommit, publicationToolingCommit, sourceTag: tag, packageTag, packageBranch: branch,
 	build: build.build, sourceHash: build.sourceHash, sources: build.sources,
 	supportedPi: build.supportedPi, checkpointSchema: build.checkpointSchema,
 	packageFiles, stockAcceptance: { passed: acceptance.assertions.length, providers: "synthetic loopback only" },
+	...(scenarioProfile ? { scenarioAcceptance: scenarioProfile.acceptance, rawScenarioSummary: scenarioProfile.raw.summary, scenarioReportSha256: scenarioProfile.reportSha256 } : {}),
 };
 
 async function api(path, method = "GET", body) {
@@ -108,6 +133,7 @@ if (publish) {
 }
 writeFileSync(join(artifacts, "release-provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
 const assets = [pack.archive, sourceArchive, "release-provenance.json"];
+if (scenarioProfile) assets.push("preview-acceptance-profile.json");
 const checksums = assets.map((file) => `${digest(readFileSync(join(artifacts, file)))}  ${file}\n`).join("");
 writeFileSync(join(artifacts, "SHA256SUMS"), checksums);
 assets.push("SHA256SUMS");

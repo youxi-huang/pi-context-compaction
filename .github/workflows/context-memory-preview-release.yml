@@ -34,14 +34,18 @@ jobs:
           PI_CONTEXT_TRIGGER_REF: ${{ github.ref_name }}
           PI_CONTEXT_REQUESTED_TAG: ${{ inputs.source_tag }}
         run: |
-          selected_tag="${PI_CONTEXT_REQUESTED_TAG:-${PI_CONTEXT_TRIGGER_REF#release/publish-}}"
-          [[ "$selected_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          selected_tag="$(node --input-type=module <<'NODE'
+          import { selectReviewedSourceTag } from "./scripts/context-memory-preview-release-checks.mjs";
+          process.stdout.write(selectReviewedSourceTag({ requestedTag: process.env.PI_CONTEXT_REQUESTED_TAG, triggerRef: process.env.PI_CONTEXT_TRIGGER_REF }));
+          NODE
+          )"
           git fetch origin main
           tooling_commit="$(git rev-parse HEAD)"
           test -z "$(git status --porcelain)"
           git merge-base --is-ancestor "$tooling_commit" origin/main
-          mkdir -p "$RUNNER_TEMP/context-preview-publisher"
-          cp scripts/context-memory-preview-release.mjs scripts/context-memory-preview-release-checks.mjs "$RUNNER_TEMP/context-preview-publisher/"
+          mkdir -p "$RUNNER_TEMP/context-preview-publisher/scripts" "$RUNNER_TEMP/context-preview-publisher/eval"
+          cp scripts/context-memory-preview-release.mjs scripts/context-memory-preview-release-checks.mjs scripts/context-memory-preview-acceptance-profile.mjs scripts/context-memory-preview-stock-install.mjs "$RUNNER_TEMP/context-preview-publisher/scripts/"
+          cp eval/deny-network.mjs "$RUNNER_TEMP/context-preview-publisher/eval/"
           printf 'source_tag=%s\n' "$selected_tag" >> "$GITHUB_OUTPUT"
           printf 'tooling_commit=%s\n' "$tooling_commit" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -56,19 +60,25 @@ jobs:
       - run: node scripts/context-memory-preview-build.mjs
       - name: Install official Pi baseline
         run: >-
-          npm install --prefix "${{ runner.temp }}/context-preview-stock"
-          --ignore-scripts --no-audit --no-fund --package-lock=false --save-exact
-          @earendil-works/pi-coding-agent@1.1.0
+          node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs"
+          --stock-root "${{ runner.temp }}/context-preview-stock" --version 1.1.0
       - name: Verify the release package on stock Pi
         run: >-
           node scripts/context-memory-preview-acceptance.mjs
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
           --output-dir .artifacts/context-memory-preview-acceptance
+      - name: Verify the explicitly authorized A-preview scope
+        run: |
+          candidate_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".artifacts/context-memory-preview-package/package.json", "utf8")).version);')"
+          if [ "$candidate_version" = "0.4.0-preview.1" ]; then
+            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
+            node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile v0.4.0-preview.1-a-functional
+          fi
       - name: Publish checked package and source archives
         env:
           GH_TOKEN: ${{ github.token }}
           PI_CONTEXT_RELEASE_ROOT: ${{ github.workspace }}
           PI_CONTEXT_RELEASE_TAG: ${{ steps.source.outputs.source_tag }}
           PI_CONTEXT_RELEASE_TOOLING_COMMIT: ${{ steps.source.outputs.tooling_commit }}
-        run: node "$RUNNER_TEMP/context-preview-publisher/context-memory-preview-release.mjs" --publish
+        run: node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-release.mjs" --publish

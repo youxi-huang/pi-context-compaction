@@ -74,7 +74,7 @@ export function readBoundedFile(file: string, limit: number, code: string): Buff
 	return data;
 }
 
-function syncDirectory(path: string): void {
+export function syncDirectory(path: string): void {
 	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
 	try {
 		if (!fstatSync(fd).isDirectory()) throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
@@ -106,8 +106,8 @@ function ensurePrivateDirectory(path: string): void {
 	}
 }
 
-/** The user-selected agentDir may be a symlink; private descendants may not be. */
-export function markerDirectory(agentDir: string): string {
+/** A private `context-memory-preview/<name>` directory. The user-selected agentDir may be a symlink; descendants may not. */
+export function previewDirectory(agentDir: string, name: string): string {
 	const created = mkdirSync(agentDir, { recursive: true, mode: 0o700 });
 	const root = realpathSync(agentDir);
 	if (created !== undefined) {
@@ -121,10 +121,14 @@ export function markerDirectory(agentDir: string): string {
 		}
 	}
 	const preview = join(root, "context-memory-preview");
-	const failures = join(preview, "failures");
+	const directory = join(preview, name);
 	ensurePrivateDirectory(preview);
-	ensurePrivateDirectory(failures);
-	return failures;
+	ensurePrivateDirectory(directory);
+	return directory;
+}
+
+export function markerDirectory(agentDir: string): string {
+	return previewDirectory(agentDir, "failures");
 }
 
 export function canonicalSessionFile(file: string, sessionDir: string): string {

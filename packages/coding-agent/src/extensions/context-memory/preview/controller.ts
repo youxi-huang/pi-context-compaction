@@ -24,11 +24,13 @@ import {
 	latestMemory,
 	type MemoryNote,
 	noteBytes,
-	noteIncrements,
 	renderNote,
 	shrinkLineage,
+	validateMemoryCheckpoints,
+	validateNote,
 } from "../notes.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
+import type { CallJournal } from "./call-journal.ts";
 import type {
 	InactiveReason,
 	PreviewCompaction,
@@ -37,7 +39,27 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
-import { modelName, resolveWriterModel, type WriterProgress, writeMemory } from "./writer.ts";
+import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
+import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
+import {
+	assertUserMessages,
+	carriedUserMessages,
+	coveredUserMessages,
+	mergeWorkNotes,
+	renderUserMessages,
+	workNotes,
+	writerSources,
+} from "./work-notes.ts";
+import {
+	modelName,
+	resolveWriterModel,
+	sumMemoryUsage,
+	type WriteMemoryResult,
+	type WriterProgress,
+	writeMemory,
+	writerContractHashes,
+	writerReasoning,
+} from "./writer.ts";
 
 const PREVIEW_CODES = new Set([
 	"CONTEXT_PREVIEW_UNSUPPORTED",
@@ -85,7 +107,11 @@ export function assertToolPairs(messages: readonly AgentMessage[]): void {
 	if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the tool batch to finish");
 }
 
-/** Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. */
+/**
+ * Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. The cut
+ * follows the previous checkpoint: stock Pi keeps every entry from the cut onwards, so an earlier
+ * checkpoint inside that range would reappear as a second summary.
+ */
 export function chooseCut(
 	branch: readonly SessionEntry[],
 	keepRecentTokens: number,
@@ -93,8 +119,11 @@ export function chooseCut(
 ): number {
 	if (keepRecentTokens <= 0) return branch.length;
 	const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
+	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
 	const starts = branch.flatMap((entry, index) =>
-		entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : [],
+		index > previous && entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length
+			? [index]
+			: [],
 	);
 	if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
 	let accumulated = 0;
@@ -104,6 +133,75 @@ export function chooseCut(
 		if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
 	}
 	return starts[starts.length - 1];
+}
+
+/**
+ * The latest turn start at or before `coveredIndex + 1` and `cut`, so that only covered entries leave
+ * context. It must follow the previous checkpoint: stock Pi keeps every entry from the cut onwards,
+ * so an earlier checkpoint inside that range would reappear as a second summary.
+ */
+export function prefixCut(
+	branch: readonly SessionEntry[],
+	projection: SessionProjection,
+	coveredIndex: number,
+	cut: number,
+): number | undefined {
+	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
+	const projected = new Set(
+		projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+	);
+	for (let index = Math.min(cut, coveredIndex + 1); index > previous; index--) {
+		const entry = branch[index];
+		if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
+	}
+	return undefined;
+}
+
+/** The interval a preparation belongs to: the latest checkpoint on the branch, or none yet. */
+export function checkpointInterval(branch: readonly SessionEntry[]): string {
+	return branch.findLast((entry) => entry.type === "compaction")?.id ?? "none";
+}
+
+/**
+ * Context size at which optional preparation starts: a band below Pi's default threshold compaction point,
+ * 12.5% of it and between 8,192 and 32,768 tokens. Pi's own compaction settings are not visible to extensions.
+ */
+export function preparationStart(contextWindow: number): number {
+	const threshold = contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	return threshold - Math.min(32_768, Math.max(8_192, Math.floor(threshold * 0.125)));
+}
+
+/** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
+function piTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+/**
+ * The request guard's limit: Pi's threshold, window minus Pi's default reserve. Pi compacts above it after a
+ * turn or before a prompt, so a request below it is never stopped. The model's output maximum does not lower it.
+ */
+export function requestLimit(model: { contextWindow: number }): number {
+	const limit = model.contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	if (!Number.isFinite(limit) || limit < 2048)
+		throw new Error("CONTEXT_CAPACITY: model window is too small or unknown");
+	return limit;
+}
+
+/** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
+function fittedSummary(
+	note: MemoryNote,
+	branch: readonly SessionEntry[],
+	retainedTokens: number,
+	limit: number,
+	userMessages = "",
+): string | undefined {
+	let lineage = checkpointLineage(branch);
+	let summary = renderNote(note, lineage) + userMessages;
+	while (lineage.length && textTokens(summary) + retainedTokens > limit) {
+		lineage = shrinkLineage(lineage);
+		summary = renderNote(note, lineage) + userMessages;
+	}
+	return textTokens(summary) + retainedTokens > limit ? undefined : summary;
 }
 
 /** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
@@ -153,31 +251,6 @@ function interruptedTurnStart(branch: readonly SessionEntry[]): number | undefin
 	return undefined;
 }
 
-function withPendingNotes(
-	messages: readonly AgentMessage[],
-	increments: readonly MemoryNote[],
-	noteTokens: number,
-): AgentMessage[] {
-	const result = messages.filter(
-		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
-	);
-	if (increments.length) {
-		const content = `Unverified note candidates. Original evidence and current user instructions take precedence.\n${increments.map((note) => renderNote(note)).join("\n\n")}`;
-		if (textTokens(content) <= noteTokens) {
-			const candidate: AgentMessage = {
-				role: "custom",
-				customType: "context-memory-pending",
-				content,
-				display: false,
-				timestamp: 0,
-			};
-			// Preserve a projected leading system message so Pi continues to own prompt/tool state.
-			result.splice(result[0]?.role === "system" ? 1 : 0, 0, candidate);
-		}
-	}
-	return result;
-}
-
 export function isPreviewCheckpoint(entry: SessionEntry): entry is CompactionEntry {
 	return (
 		entry.type === "compaction" &&
@@ -186,6 +259,17 @@ export function isPreviewCheckpoint(entry: SessionEntry): entry is CompactionEnt
 		typeof entry.details.build === "string" &&
 		entry.details.build.startsWith("stock-preview")
 	);
+}
+
+/** Entry content this preview cannot check. */
+function unsupportedContent(entry: SessionEntry): InactiveReason | undefined {
+	if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
+		if (entry.message.content.some((part) => part.type === "image")) return "image";
+	}
+	if (entry.type === "custom_message" && Array.isArray(entry.content)) {
+		if (entry.content.some((part) => part.type !== "text")) return "non-text";
+	}
+	return undefined;
 }
 
 /** Host or session content this preview cannot check. Read-only: no IO beyond the session object. */
@@ -200,12 +284,8 @@ export function unsupportedReason(session: PreviewSession, version: string = VER
 	}
 	if (branch.some((entry) => entry.type === "compaction" && !isPreviewCheckpoint(entry))) return "foreign-checkpoint";
 	for (const entry of branch) {
-		if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-			if (entry.message.content.some((part) => part.type === "image")) return "image";
-		}
-		if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-			if (entry.content.some((part) => part.type !== "text")) return "non-text";
-		}
+		const reason = unsupportedContent(entry);
+		if (reason) return reason;
 	}
 	return undefined;
 }
@@ -221,14 +301,26 @@ const UNSUPPORTED_ERRORS: Record<InactiveReason, string> = {
 };
 
 /** The preview neither migrates existing checkpoints nor accepts a second compactor's summary. */
-export function assertPreviewSession(session: PreviewSession, version: string = VERSION): void {
+export function assertPreviewSession(
+	session: PreviewSession,
+	version: string = VERSION,
+	branch?: readonly SessionEntry[],
+): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-	const branch = session.getBranch();
-	for (const [index, entry] of branch.entries()) {
-		// Validate each stored source prefix, schema, budget and quotation, including older checkpoints.
-		if (entry.type === "compaction") latestMemory(branch.slice(0, index + 1));
-	}
+	const sources = branch ?? session.getBranch();
+	const latest = validateMemoryCheckpoints(sources);
+	assertUserMessages(sources);
+	return latest;
+}
+
+/** What the last full source validation proved, reused only while the same entry objects extend it. */
+interface VerifiedBranch {
+	session: PreviewSession;
+	sessionId: string;
+	length: number;
+	tip: SessionEntry | undefined;
+	checkpoint: ReturnType<typeof latestMemory>;
 }
 
 export interface PreviewControllerOptions {
@@ -238,6 +330,11 @@ export interface PreviewControllerOptions {
 	configError?: string;
 	/** The running Pi version; tests substitute other releases. */
 	hostVersion?: string;
+	preparation?: PreviewPreparation;
+	/** Records every writer call; without one, calls are observed only in memory. */
+	journal?: CallJournal;
+	/** Arm B: commit merged work notes without a writer call when the prefix path allows it. */
+	workNotes?: PreviewSwitch;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -249,20 +346,159 @@ export class PreviewMemoryController {
 	private readonly observedFailures = new Map<string, string>();
 	private readonly activeCompactions = new Set<string>();
 	private readonly stagedCompactions = new Set<string>();
+	private readonly compactionStartedAt = new Map<string, number>();
 	readonly hostVersion: string;
 	private activeTools: () => Tool[] = () => [];
 	private lastProgress?: WriterProgress;
+	private verified?: VerifiedBranch;
 	readonly notices = new NoticeGate();
+	private readonly preparation?: PreviewPreparation;
+	private readonly journal?: CallJournal;
+	private readonly workNotes: PreviewSwitch;
+	private lastCompaction?: {
+		path: "complete" | "prefix" | "notes" | "sync";
+		candidateId?: string;
+		foregroundCalls: number;
+		stageMs: number;
+		pauseMs?: number;
+		diskConfirmed: boolean;
+	};
 
 	constructor(options: PreviewControllerOptions) {
 		this.config = options.config;
 		this.store = options.failureStore;
 		this.configError = options.configError;
 		this.hostVersion = options.hostVersion ?? VERSION;
+		this.preparation = options.preparation;
+		this.journal = options.journal;
+		this.workNotes = options.workNotes ?? { enabled: false };
 	}
 
 	bindTools(tools: () => Tool[]): void {
 		this.activeTools = tools;
+	}
+
+	private preparationSubmission(ctx: ExtensionContext, customInstructions?: string): PreparationSubmission {
+		if (!this.config || !ctx.model || !this.preparation) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
+		const model = resolveWriterModel(this.config, ctx.modelRegistry, ctx.model);
+		const branch = ctx.sessionManager.getBranch();
+		const previous = latestMemory(branch);
+		const projection = ctx.sessionManager.buildSessionProjection();
+		const budget = memoryBudget(ctx.model, this.config);
+		const cut = chooseCut(branch, budget.recentTokens, projection);
+		const active = new Set(
+			projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+		);
+		return {
+			sessionId: ctx.sessionManager.getSessionId(),
+			epoch: this.preparation.currentEpoch,
+			branch,
+			writer: {
+				role: this.config.writerModel === SESSION_WRITER ? "session" : "fixed",
+				model: modelName(model),
+				effort: writerReasoning(model, this.config, ctx.thinkingLevel),
+				policyHash: hashEntries([
+					{ writerModel: this.config.writerModel, writerEffort: this.config.writerEffort, model },
+				]),
+				...writerContractHashes(PREVIEW_BUILD_ID),
+				contextHash:
+					this.config.writerModel === SESSION_WRITER
+						? hashEntries([ctx.getSystemPrompt(), this.activeTools()])
+						: null,
+			},
+			noteBudget: selectNoteBudget(
+				this.config,
+				budget.threshold,
+				compactedSourceTokens(branch.slice(0, cut).filter((entry) => active.has(entry.id))),
+				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
+			),
+			customInstructions,
+		};
+	}
+
+	/**
+	 * A settled turn may start optional preparation, once per checkpoint interval, when the context has entered
+	 * the band just below Pi's compaction threshold. No commit state is entered here.
+	 */
+	prepare(ctx: ExtensionContext): void {
+		if (!this.preparation?.enabled || !this.config || !ctx.model) return;
+		try {
+			const sessionId = ctx.sessionManager.getSessionId();
+			const interval = checkpointInterval(ctx.sessionManager.getBranch());
+			if (!this.preparation.mayStart(sessionId, interval)) return;
+			const usage = ctx.getContextUsage();
+			if (!usage?.tokens || usage.tokens < preparationStart(usage.contextWindow)) return;
+			if (this.safeInactive(ctx) || this.configError || ctx.hasPendingMessages()) return;
+			assertPreviewSession(ctx.sessionManager, this.hostVersion);
+			if (this.store.inspect(ctx.sessionManager).state !== "ready" || this.stickyFailures.has(sessionId)) return;
+			const projection = ctx.sessionManager.buildSessionProjection();
+			assertToolPairs(projection.messages);
+			const last = [...projection.messages].reverse().find((message) => message.role !== "system");
+			if (last?.role !== "assistant" || !(last.stopReason === "stop" || last.stopReason === "length")) return;
+			this.preparation.activate(sessionId);
+			const submission = this.preparationSubmission(ctx);
+			const branch = structuredClone(ctx.sessionManager.getBranch());
+			const leafId = ctx.sessionManager.getLeafId();
+			if (!leafId) return;
+			const previous = latestMemory(branch);
+			const uncovered = writerSources(branch, previous);
+			const input = freezePreparationInput({
+				...submission,
+				branch,
+				coveredThrough: leafId,
+				processedUserEntryIds: branch
+					.filter((entry) => entry.type === "message" && entry.message.role === "user")
+					.map((entry) => entry.id),
+			});
+			const model = structuredClone(resolveWriterModel(this.config, ctx.modelRegistry, ctx.model));
+			const sessionModel = structuredClone(ctx.model);
+			const registry = ctx.modelRegistry;
+			const capturedRegistry = {
+				find: (provider: string, id: string) =>
+					provider === model.provider && id === model.id ? model : undefined,
+				hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
+				streamSimple: registry.streamSimple.bind(registry),
+			};
+			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
+			const messages = structuredClone(convertToLlm(projection.messages));
+			const prefix = getInitialSystemMessage(messages)
+				? { messages }
+				: { messages, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
+			const config = { ...this.config, noteRepair: false };
+			const thinking = ctx.thinkingLevel;
+			this.preparation.start(
+				{
+					input,
+					run: (signal, callHooks) =>
+						writeMemory({
+							config,
+							registry: capturedRegistry,
+							sessionModel,
+							sessionThinkingLevel: thinking,
+							prefix: config.writerModel === SESSION_WRITER ? prefix : undefined,
+							previous: previous?.memory.note,
+							increments,
+							uncovered,
+							branch,
+							noteTokens: submission.noteBudget.hardTokens,
+							baseNoteTokens: submission.noteBudget.baseTokens,
+							signal,
+							callHooks,
+						}),
+				},
+				interval,
+			);
+		} catch {
+			// Optional work must never call fail(), begin() or abort the user's task.
+		}
+	}
+
+	invalidatePreparation(reason: string): void {
+		this.preparation?.invalidate(reason);
+	}
+
+	shutdownPreparation(): void {
+		this.preparation?.dispose();
 	}
 
 	/**
@@ -367,6 +603,20 @@ export class PreviewMemoryController {
 	/** Machine-readable status. Earlier fields keep their names; protection and eligibility are additions. */
 	status(ctx: ExtensionContext) {
 		const diagnosis = this.diagnose(ctx);
+		let prepared: ReturnType<PreviewPreparation["status"]> | undefined;
+		if (this.preparation) {
+			try {
+				prepared = this.preparation.status(this.preparation.enabled ? this.preparationSubmission(ctx) : undefined);
+			} catch {
+				prepared = { ...this.preparation.status(), state: "paused", reason: "writer-or-source-unavailable" };
+			}
+		}
+		let calls: ReturnType<CallJournal["summary"]> | undefined;
+		try {
+			calls = this.journal?.summary(ctx.sessionManager.getSessionId());
+		} catch {
+			// The journal is advisory for status; its own gap state is reported when it can be read.
+		}
 		return {
 			build: diagnosis.build,
 			enabled: this.config?.enabled ?? true,
@@ -378,26 +628,79 @@ export class PreviewMemoryController {
 			checkpointId: diagnosis.checkpointId,
 			noteBudgetMode: this.config?.noteTokens === undefined ? "tiered" : "fixed",
 			noteRepair: this.config?.noteRepair,
-			manualOnly: true,
+			// Threshold compaction after a completed turn is handled; overflow recovery still needs /compact.
+			manualOnly: false,
 			lastWriter: this.lastProgress,
 			host: diagnosis.host,
 			supportedHost: diagnosis.supportedHost,
 			protection: diagnosis.protection,
 			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
 			manualCompaction: diagnosis.manualCompaction,
+			...(prepared ? { preparation: prepared } : {}),
+			...(calls ? { calls } : {}),
+			...(this.lastCompaction ? { lastCompaction: this.lastCompaction } : {}),
 		};
 	}
 
-	assertReady(ctx: ExtensionContext): void {
+	/**
+	 * Request guard. Sources and checkpoints are validated in full at trust boundaries: session start, a branch
+	 * change, a new checkpoint, compaction, recovery and after any failure. Between them a request checks only
+	 * the entries added since, and the store checks the session file's identity and length.
+	 */
+	assertReady(ctx: ExtensionContext): ReturnType<typeof latestMemory> {
 		if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-		assertPreviewSession(ctx.sessionManager, this.hostVersion);
-		const sticky = this.stickyFailures.get(ctx.sessionManager.getSessionId());
+		const session = ctx.sessionManager;
+		const branch = session.getBranch();
+		let checkpoint: ReturnType<typeof latestMemory>;
+		if (this.verified && this.extendsVerified(this.verified, session, branch)) {
+			checkpoint = this.verified.checkpoint;
+		} else {
+			this.verified = undefined;
+			checkpoint = assertPreviewSession(session, this.hostVersion, branch);
+		}
+		const sticky = this.stickyFailures.get(session.getSessionId());
 		if (sticky) throw new Error(sticky);
-		this.store.assertReady(ctx.sessionManager);
+		this.store.assertReady(session);
+		this.verified = {
+			session,
+			sessionId: session.getSessionId(),
+			length: branch.length,
+			tip: branch.at(-1),
+			checkpoint,
+		};
+		return checkpoint;
+	}
+
+	/** The same entry objects as the last full validation, followed only by ordinary new entries. */
+	private extendsVerified(
+		verified: VerifiedBranch,
+		session: PreviewSession,
+		branch: readonly SessionEntry[],
+	): boolean {
+		if (verified.session !== session || verified.sessionId !== session.getSessionId()) return false;
+		if (branch.length < verified.length || branch[verified.length - 1] !== verified.tip) return false;
+		for (let index = verified.length; index < branch.length; index++) {
+			const entry = branch[index];
+			// A new checkpoint, a recovery edit or unsupported content needs the full validation and its error.
+			if (entry.type === "compaction" || entry.type === "context_edit" || unsupportedContent(entry)) return false;
+		}
+		return true;
+	}
+
+	/** The next request validates sources and reads the session file back in full. */
+	private forgetVerified(): void {
+		this.verified = undefined;
+		this.store.forgetReadback();
+	}
+
+	/** Tree navigation is a trust boundary, even when the selected branch extends the previous one. */
+	branchChanged(): void {
+		this.forgetVerified();
 	}
 
 	/** In-process stickiness covers a marker write that failed before it could reach disk. */
 	fail(ctx: ExtensionContext, code: string): void {
+		this.forgetVerified();
 		const sessionId = ctx.sessionManager.getSessionId();
 		this.observedFailures.set(sessionId, code);
 		this.stickyFailures.set(sessionId, code);
@@ -426,6 +729,8 @@ export class PreviewMemoryController {
 
 	/** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
 	sessionStart(ctx: ExtensionContext): void {
+		this.forgetVerified();
+		this.preparation?.activate(ctx.sessionManager.getSessionId());
 		const reason = this.safeInactive(ctx);
 		if (reason) {
 			this.standAside(ctx, reason);
@@ -473,53 +778,73 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return messages;
 		}
-		let result = messages;
 		this.guard(ctx, () => {
-			this.assertReady(ctx);
+			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-			const branch = ctx.sessionManager.getBranch();
-			const checkpoint = latestMemory(branch);
 			if (checkpoint) {
 				const restored = messages.filter((message) => message.role === "compactionSummary");
 				if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary) {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
 				}
 			}
-			const budget = memoryBudget(ctx.model, this.config);
-			result = withPendingNotes(messages, noteIncrements(branch, checkpoint?.entry.id), budget.noteTokens);
-			assertToolPairs(result);
+			assertToolPairs(messages);
 			const estimate =
-				result.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(result) ? 0 : textTokens(ctx.getSystemPrompt()));
-			if (estimate > budget.inputLimit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
+				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
+			if (estimate > requestLimit(ctx.model)) throw new Error("CONTEXT_INPUT_TOO_LARGE");
 		});
-		return result;
+		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
+		// under another role would change their authority and invalidate the provider prefix cache.
+		return messages;
 	}
 
 	beforeRequest(payload: unknown, ctx: ExtensionContext): void {
 		if (this.safeInactive(ctx)) return;
 		this.guard(ctx, () => {
-			this.assertReady(ctx);
+			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			const serialized = JSON.stringify(payload);
-			const checkpoint = latestMemory(ctx.sessionManager.getBranch());
 			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1))) {
 				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost the validated checkpoint");
 			}
-			if (textTokens(serialized ?? "") > memoryBudget(ctx.model, this.config).inputLimit) {
-				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
-			}
+			// JSON escaping and tool schemas sit outside Pi's estimate, so only a payload beyond the window is stopped here.
+			if (piTokens(serialized ?? "") > ctx.model.contextWindow) throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
 		});
 	}
 
+	/**
+	 * Whether Pi's threshold compaction may run now: a completed turn, no queued input and a session that is
+	 * not blocked. Otherwise it is left for a later settled turn and nothing is recorded; a blocked session
+	 * still needs an explicit /compact.
+	 */
+	thresholdReady(ctx: ExtensionContext): boolean {
+		try {
+			const session = ctx.sessionManager;
+			if (this.configError || !this.config || ctx.hasPendingMessages()) return false;
+			if (this.stickyFailures.has(session.getSessionId()) || this.store.inspect(session).state !== "ready")
+				return false;
+			const last = [...session.buildSessionProjection().messages]
+				.reverse()
+				.find((message) => message.role !== "system");
+			return last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+		} catch {
+			return false;
+		}
+	}
+
 	async compact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<PreviewCompaction> {
+		const started = performance.now();
+		this.forgetVerified();
+		this.compactionStartedAt.set(ctx.sessionManager.getSessionId(), started);
+		this.preparation?.cancel("compaction");
 		this.activeCompactions.add(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
-			if (event.reason !== "manual" || event.willRetry) {
-				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: this preview compacts only on an explicit /compact");
+			// Pi's threshold compaction runs after a completed turn, exactly where /compact may run.
+			if (!(event.reason === "manual" || event.reason === "threshold") || event.willRetry) {
+				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: overflow recovery needs an explicit /compact");
 			}
 			event.signal.throwIfAborted();
 			const branch = structuredClone(ctx.sessionManager.getBranch());
@@ -537,8 +862,8 @@ export class PreviewMemoryController {
 				throw new Error("CONTEXT_TOOL_BOUNDARY: manual compaction requires a completed turn with no queued input");
 			}
 			if (!ctx.model || !ctx.sessionManager.getLeafId()) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-			// An explicit manual retry replaces blocked/pending with a new durable pending attempt.
-			const attempt = this.store.begin(ctx.sessionManager, true);
+			// Only an explicit manual retry replaces blocked/pending with a new durable pending attempt.
+			const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual");
 			this.observedFailures.delete(attempt.sessionId);
 			const snapshot = {
 				sessionId: attempt.sessionId,
@@ -550,15 +875,20 @@ export class PreviewMemoryController {
 			const interrupted = !completed ? interruptedTurnStart(branch) : undefined;
 			const cut = Math.min(chooseCut(branch, budget.recentTokens, projection), interrupted ?? branch.length);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT");
-			const keptIds = new Set(branch.slice(cut).map((entry) => entry.id));
-			const kept = projection.entries
-				.filter((entry) => entry.sourceEntry.type !== "compaction" && keptIds.has(entry.sourceEntry.id))
-				.flatMap((entry) => entry.messages);
+			const retainedFrom = (start: number) => {
+				const ids = new Set(branch.slice(start).map((entry) => entry.id));
+				return projection.entries
+					.filter((entry) => entry.sourceEntry.type !== "compaction" && ids.has(entry.sourceEntry.id))
+					.flatMap((entry) => entry.messages);
+			};
+			let kept = retainedFrom(cut);
 			assertToolPairs(kept);
-			const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			let coveredIndex = branch.length - 1;
 			const previous = latestMemory(branch);
-			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
-			const increments = noteIncrements(branch, previous?.entry.id);
+			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
+			const notes = workNotes(branch, previous?.memory.coveredThrough);
+			const increments = notes.map((item) => item.note);
 			const activeIds = new Set(
 				projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id),
 			);
@@ -576,31 +906,115 @@ export class PreviewMemoryController {
 					projectedMessages.pop();
 				} else break;
 			}
-			const prefixMessages = convertToLlm(withPendingNotes(projectedMessages, increments, budget.noteTokens));
+			const prefixMessages = convertToLlm(projectedMessages);
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
 			const prefix = getInitialSystemMessage(prefixMessages)
 				? { messages: prefixMessages }
 				: { systemPrompt: ctx.getSystemPrompt(), messages: prefixMessages, tools: this.activeTools() };
 			this.lastProgress = undefined;
-			const written = await writeMemory({
-				config: this.config,
-				registry: ctx.modelRegistry,
-				sessionModel: ctx.model,
-				prefix: sessionWriter ? prefix : undefined,
-				sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
-				previous: previous?.memory.note,
-				increments,
-				uncovered: branch.slice(after + 1),
-				branch,
-				noteTokens: policy.hardTokens,
-				baseNoteTokens: policy.baseTokens,
-				signal: event.signal,
-				customInstructions: event.customInstructions,
-				onProgress: (progress) => {
-					this.lastProgress = progress;
-				},
-			});
+			const submission = this.preparation?.enabled
+				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }
+				: undefined;
+			const available = submission ? this.preparation?.take(submission) : undefined;
+			let path: "complete" | "prefix" | "notes" | "sync" =
+				available?.classification.status === "current-full" ? "complete" : "sync";
+			const systemTokens = textTokens(ctx.getSystemPrompt());
+			const beforeTokens =
+				systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+			let userMessages: SessionEntry[] = [];
+			/**
+			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
+			 * releases nothing uncovered, the context shrinks and the result fits within `share` of the threshold.
+			 */
+			const commitPrefix = (note: MemoryNote, end: number, share: number, users: SessionEntry[] = []): boolean => {
+				const start = prefixCut(branch, projection, end, cut);
+				if (start === undefined) return false;
+				const retained = retainedFrom(start);
+				const retainedTokens = systemTokens + retained.reduce((sum, message) => sum + estimateTokens(message), 0);
+				const section = users.length ? renderUserMessages(users) : "";
+				// Beyond this bound the writer consolidates the user's messages instead.
+				if (textTokens(section) > Math.min(6000, Math.floor(budget.threshold * 0.05))) return false;
+				const summary = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section);
+				if (!summary || textTokens(summary) + retainedTokens >= beforeTokens) return false;
+				assertToolPairs(retained);
+				kept = retained;
+				firstKeptEntryId = branch[start].id;
+				coveredIndex = end;
+				userMessages = users;
+				return true;
+			};
+			if (path === "sync" && available && interrupted === undefined) {
+				const end = reusablePrefix(available.candidate, available.classification, branch);
+				if (end !== undefined && commitPrefix(available.written.note, end, 0.8)) path = "prefix";
+			}
+			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.
+			let notesNote: MemoryNote | undefined;
+			if (
+				path === "sync" &&
+				this.workNotes.enabled &&
+				notes.length &&
+				interrupted === undefined &&
+				!event.customInstructions?.trim()
+			) {
+				const end = notes[notes.length - 1].index;
+				const merged = mergeWorkNotes(previous?.memory.note, increments);
+				try {
+					notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+				} catch {
+					notesNote = undefined;
+				}
+				const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+				// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
+				// worth more than a commit that barely compacts.
+				if (notesNote && commitPrefix(notesNote, end, 0.5, users)) path = "notes";
+			}
+			// A candidate that is not committed as it stands is discarded; its calls remain in the journal.
+			const reused = path === "complete" || path === "prefix" ? available : undefined;
+			const ready = reused
+				? {
+						...reused.written,
+						note: validateNote(
+							structuredClone(reused.written.note),
+							branch.slice(0, coveredIndex + 1),
+							policy.hardTokens,
+						),
+					}
+				: path === "notes" && notesNote
+					? { note: notesNote, writerModel: modelName(ctx.model), writerEffort: "off" as const }
+					: undefined;
+			let written: WriteMemoryResult;
+			if (ready) {
+				written = { ...ready, usage: sumMemoryUsage([]), chunkCount: 0 };
+				this.lastProgress = {
+					writerModel: written.writerModel,
+					writerEffort: written.writerEffort,
+					writerCalls: 0,
+					usageReports: 0,
+					repairUsed: false,
+					writerCallDetails: [],
+				};
+			} else {
+				written = await writeMemory({
+					config: this.config,
+					registry: ctx.modelRegistry,
+					sessionModel: ctx.model,
+					prefix: sessionWriter ? prefix : undefined,
+					sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
+					previous: previous?.memory.note,
+					increments,
+					uncovered: writerSources(branch, previous),
+					branch,
+					noteTokens: policy.hardTokens,
+					baseNoteTokens: policy.baseTokens,
+					signal: event.signal,
+					customInstructions: event.customInstructions,
+					callHooks: this.journal?.hooks(attempt.sessionId, "compaction", attempt.lastCheckpointId ?? "none"),
+					onProgress: (progress) => {
+						this.lastProgress = progress;
+					},
+				});
+			}
 			event.signal.throwIfAborted();
 			if (
 				snapshot.sessionId !== ctx.sessionManager.getSessionId() ||
@@ -609,15 +1023,14 @@ export class PreviewMemoryController {
 			) {
 				throw new Error("CONTEXT_SOURCE_CHANGED: discard the generated candidate");
 			}
-			const fixedAfter =
-				textTokens(ctx.getSystemPrompt()) + kept.reduce((sum, message) => sum + estimateTokens(message), 0);
-			let lineage = checkpointLineage(branch);
-			let summary = renderNote(written.note, lineage);
-			while (lineage.length && textTokens(summary) + fixedAfter > budget.threshold) {
-				lineage = shrinkLineage(lineage);
-				summary = renderNote(written.note, lineage);
-			}
-			if (textTokens(summary) + fixedAfter > budget.threshold) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
+			const summary = fittedSummary(
+				written.note,
+				branch,
+				systemTokens + kept.reduce((sum, message) => sum + estimateTokens(message), 0),
+				budget.threshold,
+				userMessages.length ? renderUserMessages(userMessages) : "",
+			);
+			if (!summary) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
 			const candidate: PreviewCompaction = {
 				summary,
 				firstKeptEntryId,
@@ -627,26 +1040,55 @@ export class PreviewMemoryController {
 					kind: CONTEXT_MEMORY_KIND,
 					version: CONTEXT_MEMORY_VERSION,
 					note: written.note,
-					coveredThrough: attempt.leafId,
-					sourceHash: attempt.sourceHash,
+					coveredThrough: branch[coveredIndex].id,
+					sourceHash:
+						coveredIndex === branch.length - 1
+							? attempt.sourceHash
+							: hashEntries(branch.slice(0, coveredIndex + 1)),
 					snapshot,
 					writerModel: written.writerModel,
 					chunkCount: written.chunkCount,
 					build: PREVIEW_BUILD_ID,
 					noteBudget: policy,
+					...(userMessages.length ? { userMessages: userMessages.map((entry) => entry.id) } : {}),
+					...(this.preparation?.enabled || this.workNotes.enabled
+						? {
+								preparation: {
+									version: 1 as const,
+									path,
+									...(reused
+										? {
+												candidateId: reused.candidate.input.candidateId,
+												callIds: [...reused.candidate.provenance.callIds],
+											}
+										: {}),
+									...(path === "notes" ? { noteIds: notes.map((item) => item.id) } : {}),
+								},
+							}
+						: {}),
 				},
 			};
 			this.store.stage(ctx.sessionManager, attempt, candidate);
+			this.preparation?.staged(reused?.candidate.input.candidateId);
 			this.stagedCompactions.add(attempt.sessionId);
+			this.lastCompaction = {
+				path,
+				...(reused ? { candidateId: reused.candidate.input.candidateId } : {}),
+				foregroundCalls: this.lastProgress?.writerCalls ?? 0,
+				stageMs: Math.round(performance.now() - started),
+				diskConfirmed: false,
+			};
 			return candidate;
 		} catch (error) {
 			const code = previewErrorCode(error, event.signal.aborted);
+			this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
 			this.fail(ctx, code);
 			throw new Error(code);
 		}
 	}
 
 	committed(event: SessionCompactEvent, ctx: ExtensionContext): void {
+		this.forgetVerified();
 		const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 		// Pi's own compaction of a session this preview does not protect is not a commit of this package.
@@ -659,6 +1101,13 @@ export class PreviewMemoryController {
 			}
 			// The marker owner reads the exact checkpoint and sources back from persistent JSONL.
 			this.store.commit(ctx.sessionManager, event.compactionEntry);
+			const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
+			this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
+			if (this.lastCompaction) {
+				this.lastCompaction.diskConfirmed = true;
+				if (started !== undefined) this.lastCompaction.pauseMs = Math.round(performance.now() - started);
+			}
+			this.preparation?.committed();
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
 		} catch (error) {
@@ -675,6 +1124,7 @@ export class PreviewMemoryController {
 	 * and failures inside the confirmation are recorded by the failure store itself.
 	 */
 	recover(ctx: ExtensionContext): void {
+		this.forgetVerified();
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
@@ -688,6 +1138,7 @@ export class PreviewMemoryController {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
 			this.store.recover(ctx.sessionManager, leaf);
+			this.preparation?.committed();
 			this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
@@ -697,6 +1148,7 @@ export class PreviewMemoryController {
 	}
 
 	compactionFailed(event: SessionCompactFailedEvent, ctx: ExtensionContext): void {
+		this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
 		// Preparation can reject "nothing to compact" before this extension's hook runs.
 		// No writer or staged candidate existed in that case, so retain the existing state.
 		if (!this.activeCompactions.delete(ctx.sessionManager.getSessionId())) return;

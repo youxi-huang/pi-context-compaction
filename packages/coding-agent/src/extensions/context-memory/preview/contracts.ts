@@ -2,7 +2,20 @@ import type { CompactionEntry, CompactionResult, ExtensionContext } from "@earen
 import type { MemoryCheckpoint } from "../notes.ts";
 
 export type PreviewSession = ExtensionContext["sessionManager"];
-export type PreviewCompaction = CompactionResult<MemoryCheckpoint>;
+export interface PreviewCheckpoint extends MemoryCheckpoint {
+	/** Preview-only observational metadata; no extension of checkpoint source scope. */
+	preparation?: {
+		version: 1;
+		path: "complete" | "prefix" | "notes" | "sync";
+		candidateId?: string;
+		callIds?: string[];
+		/** Work notes merged by the notes path. */
+		noteIds?: string[];
+	};
+	/** User messages rendered verbatim after the note by the notes path; re-rendered at every full validation. */
+	userMessages?: string[];
+}
+export type PreviewCompaction = CompactionResult<PreviewCheckpoint>;
 
 export interface PreviewAttempt {
 	attemptId: string;
@@ -49,7 +62,10 @@ export interface PreviewStatus {
 
 /** Operational markers contain hashes and identifiers, never transcript or note text. */
 export interface PreviewFailureStoreContract {
+	/** Request guard: full readback after a trust boundary, then only a file identity and length check. */
 	assertReady(session: PreviewSession): void;
+	/** Make the next request read the whole session file back. */
+	forgetReadback(): void;
 	status(session: PreviewSession): PreviewStatus;
 	/** Like status, without latching a newly observed failure. */
 	inspect(session: PreviewSession): PreviewStatus;

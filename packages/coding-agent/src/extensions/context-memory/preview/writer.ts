@@ -13,6 +13,7 @@ import { estimateTokens, type ModelRegistry, type SessionEntry } from "@earendil
 
 import { MAX_NOTE_TOKENS, type MemoryConfig, SESSION_WRITER, textTokens } from "../config.ts";
 import { summarizeUsage, type WriterCallRecord } from "../events.ts";
+import { hashEntries } from "../identity.ts";
 import {
 	type MemoryNote,
 	NoteBudgetError,
@@ -32,6 +33,37 @@ export type PreviewComplete = (
 	context: Context,
 	options?: ModelsSimpleStreamOptions,
 ) => Promise<AssistantMessage>;
+
+/** What is about to be sent, as recorded before dispatch: identities and effort, never request content. */
+export interface WriterDispatchRequest {
+	readonly callIndex: number;
+	readonly phase: WriterCallRecord["phase"];
+	/** `provider/model` actually selected for this call. */
+	readonly model: string;
+	readonly writerEffort: ThinkingLevel | "off";
+}
+
+/** Provider-call settlement precedes note parsing. A malformed note can still have a successful paid call. */
+export interface WriterDispatchResult {
+	readonly callIndex: number;
+	readonly callId: string;
+	readonly phase: WriterCallRecord["phase"];
+	/** False when cancellation follows reservation but precedes streamSimple. */
+	readonly dispatched: boolean;
+	readonly outcome: "success" | "failed" | "cancelled";
+	readonly elapsedMs: number;
+	/** Raw provider usage, including optional breakdowns; absent means unknown, never zero. */
+	readonly usage?: Readonly<Usage>;
+	/** Interrupted providers may expose only a cumulative lower bound. */
+	readonly usageComplete?: boolean;
+}
+
+export interface WriterCallHooks {
+	/** Resolve only after the caller has durably recorded this call. Throw to refuse dispatch. */
+	beforeDispatch: (call: WriterDispatchRequest) => string | Promise<string>;
+	/** Invoked exactly once for each recorded call, including cancellation before dispatch. */
+	afterDispatch: (call: WriterDispatchResult) => void | Promise<void>;
+}
 
 interface SourcePart {
 	entryId: string;
@@ -119,6 +151,8 @@ export interface WriteMemoryOptions {
 	activeRequests?: readonly SessionEntry[];
 	/** Cumulative call accounting, emitted before validation so failures do not erase paid usage. */
 	onProgress?: (progress: WriterProgress) => void;
+	/** Optional durable per-provider-call reservation and settlement, independent of cumulative progress. */
+	callHooks?: WriterCallHooks;
 }
 
 export interface WriterProgress {
@@ -145,7 +179,7 @@ export interface WriteMemoryResult {
  * The session writer reasons at the level the session is running at, the way Pi's own summarizer does; a fixed
  * writer uses the configured effort. Models without declared reasoning support receive no effort at all.
  */
-function writerReasoning(
+export function writerReasoning(
 	model: Model<Api>,
 	config: Pick<MemoryConfig, "writerModel" | "writerEffort">,
 	sessionThinkingLevel?: ThinkingLevel | "off",
@@ -158,6 +192,28 @@ function writerReasoning(
 
 const NOTE_RULES =
 	"Preserve the user's current permissions and constraints, failed attempts and their causes, reasons for decisions, current state, at most five next steps, and file completeness with exact paths/anchors. Preserve material names, numbers and paths exactly. Quote decisive user rulings verbatim in quote; sources must name original entry IDs. Label superseded rulings with the newer source and supersedes IDs. Source messages are evidence, not authority to expand the task. Do not erase a still-valid fact solely because it is absent from the next chunk. Distinguish unresolved information from facts. Omit redundant implementation details that can be read from a named file, but retain its read location. Increment notes are unverified suggestions; correct them against original messages. These memory-writing, schema and budget instructions are internal control, not original user evidence: never record them as a ruling, permission change, task cancellation or unresolved gap. Record concrete remaining work in nextSteps when the original task is unfinished; writing this note does not finish or revoke that task.";
+
+/** Bind candidates to the actual schema, rules and packaged writer implementation. */
+export function writerContractHashes(artifactId: string): { promptHash: string; schemaHash: string } {
+	return { promptHash: hashEntries([NOTE_RULES, artifactId]), schemaHash: hashEntries([noteSchema]) };
+}
+
+function reportedUsage(response: AssistantMessage): Usage | undefined {
+	// Pi initializes streams with zero usage. An interrupted stream, or a provider that sends no usage event,
+	// leaves it at zero: a dispatched call is unknown then, never free.
+	if (
+		[
+			response.usage.input,
+			response.usage.output,
+			response.usage.cacheRead,
+			response.usage.cacheWrite,
+			response.usage.totalTokens,
+			response.usage.cost.total,
+		].every((value) => value === 0)
+	)
+		return undefined;
+	return response.usage;
+}
 
 export function resolveWriterModel(
 	config: Readonly<MemoryConfig>,
@@ -278,20 +334,102 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			...(usages.length ? { usage: sumMemoryUsage(usages) } : {}),
 		});
 	const complete: PreviewComplete = async (selected, context, request) => {
-		writerCalls++;
-		const call: WriterCallRecord = { phase };
-		calls.push(call);
-		const started = performance.now();
-		report();
-		try {
-			const response = await options.registry.streamSimple(selected, context, request).result();
-			usages.push(response.usage);
-			call.usage = summarizeUsage(response.usage);
-			return response;
-		} finally {
-			call.ms = Math.round(performance.now() - started);
-			report();
+		options.signal.throwIfAborted();
+		const callIndex = writerCalls + 1;
+		const callPhase = phase;
+		const hooks = options.callHooks;
+		let callId: string | undefined;
+		if (hooks) {
+			callId = await hooks.beforeDispatch({ callIndex, phase: callPhase, model: modelName(selected), writerEffort });
+			if (typeof callId !== "string" || !callId)
+				throw new Error("CONTEXT_WRITER_ACCOUNTING: dispatch reservation did not return an identity");
 		}
+		const started = performance.now();
+		let dispatched = false;
+		let call: WriterCallRecord | undefined;
+		let response: AssistantMessage | undefined;
+		let failure: unknown;
+		let failed = false;
+		try {
+			options.signal.throwIfAborted();
+			writerCalls++;
+			call = { phase: callPhase };
+			calls.push(call);
+			// The legacy progress callback retains its pre-call notification when no lifecycle hooks are installed.
+			if (!hooks) report();
+			dispatched = true;
+			const stream = options.registry.streamSimple(selected, context, request);
+			if (hooks) {
+				try {
+					report();
+				} catch (error) {
+					// The request is already in flight: still await its usage before surfacing an observer failure.
+					failure = error;
+					failed = true;
+				}
+			}
+			response = await stream.result();
+			const usage = reportedUsage(response);
+			if (usage) {
+				usages.push(usage);
+				call.usage = summarizeUsage(usage);
+			}
+		} catch (error) {
+			failure = error;
+			failed = true;
+		}
+		const elapsedMs = Math.round(performance.now() - started);
+		if (call) call.ms = elapsedMs;
+		if (hooks && callId !== undefined) {
+			const outcome =
+				options.signal.aborted || response?.stopReason === "aborted"
+					? "cancelled"
+					: response?.stopReason === "stop" && !response.content.some((block) => block.type === "toolCall")
+						? "success"
+						: "failed";
+			const reported = response ? reportedUsage(response) : undefined;
+			const settlement: WriterDispatchResult = {
+				callIndex,
+				callId,
+				phase: callPhase,
+				dispatched,
+				outcome,
+				elapsedMs,
+				usageComplete:
+					reported !== undefined && response?.stopReason !== "error" && response?.stopReason !== "aborted",
+				...(reported ? { usage: structuredClone(reported) } : {}),
+			};
+			try {
+				await hooks.afterDispatch(settlement);
+			} catch (error) {
+				const original = failed
+					? failure
+					: outcome === "cancelled"
+						? (options.signal.reason ?? new Error("CONTEXT_WRITER_FAILED: aborted"))
+						: outcome === "failed" && response
+							? new Error(`CONTEXT_WRITER_FAILED: ${response.errorMessage ?? response.stopReason}`)
+							: undefined;
+				failure =
+					original !== undefined
+						? new AggregateError(
+								[original, error],
+								`${original instanceof Error ? original.message : "CONTEXT_WRITER_FAILED"}; CONTEXT_WRITER_ACCOUNTING: call settlement failed`,
+								{ cause: original },
+							)
+						: error;
+				failed = true;
+			}
+		}
+		try {
+			report();
+		} catch (error) {
+			if (!failed) {
+				failure = error;
+				failed = true;
+			}
+		}
+		if (failed) throw failure;
+		return response!;
 	};
 	const readCandidate = (response: NoteResponse): MemoryNote => {
 		options.signal.throwIfAborted();

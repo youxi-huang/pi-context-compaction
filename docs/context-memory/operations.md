@@ -31,8 +31,10 @@ services and synthetic credentials; it is not a real-provider result.
 Both preview runners load a copy of the package from a temporary directory
 outside any Node project, so its Pi imports reach the official host under test
 rather than this repository's workspace build; do not bypass that check.
-Both official Pi versions are installed only when their isolated cache is absent
-or incomplete. Scenarios report listed known gaps; new failures or a listed gap
+Both official Pi versions use `context-memory-preview-stock-install.mjs`, which
+pins all eight official runtime components to the reviewed version and checks
+registry integrity and SDK startup with networking denied. A complete matching
+cache skips npm; a mixed or incomplete cache is repaired. Scenarios report listed known gaps; new failures or a listed gap
 that starts passing fail the step until the gap becomes a required regression.
 
 Dependency and official Pi installation may download packages. As in CI, build

@@ -1,5 +1,44 @@
 # Validation record
 
+## Unreleased: B never shortens a user message, 2026-10-13 UTC
+
+The maintainer chose to keep B's promise after the Haiku run lost a fact in the
+middle of a pasted log. The start-and-end rendering of long user messages is
+removed; a notes commit happens only when every covered user message fits in
+full within the section's bound, and otherwise the writer compacts and reads
+them all. `details.preparation.notesFallback` records why B fell back.
+
+A new regression pastes a 600-line log with a fact in its middle: the
+compaction goes to the writer (`user-messages`), the writer's request carries
+the middle line and the note as a hint, and the call is journaled. It fails
+when the bound check is removed. The B happy-path and 50% tests now take their
+large content from the model's reply, as a tool's output would arrive; so does
+the official-Pi `work-notes` case, which passes 12/12.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` at `0c52d18` | Exit 0. 100 script and 314 runtime checks; security 461 |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` at `0c52d18` with an uncommitted handoff edit | Exit 1 at release prepare, which refuses an unclean source as designed; every earlier step passed, with the results below |
+| The same at `2ff75ff`, clean | Exit 0. Acceptance 27/27 on `stock-preview+src.aa4e949f8d0edc7d`; scenarios 145 pass, profile accepted; release checks and prepare pass. Overhead raw ms: 10 checkpoints 71.41, 5.23, 4.73; 20 checkpoints 150.27, 5.57, 5.94; control 7.25, 3.55, 3.34; extra median 1 / 2 ms |
+
+A/B runner, scripted, `--latency-ms 1000`, B's fallback rate by where the long
+logs come from:
+
+| `--logs` | Arm | Paths | Pause per compaction, ms | Turn time, ms | Total tokens | B fallbacks | Probes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| user (pasted) | sync | sync, sync | 1,119, 1,160 | 6,241 | 650,353 | — | 8/8 |
+| user (pasted) | A | prefix, prefix | 70, 130 | 6,328 | 650,399 | — | 8/8 |
+| user (pasted) | B | sync, sync | 1,113, 1,168 | 14,523 | 1,521,163 | 2/2, both `user-messages` | 8/8 |
+| model | sync | sync, sync | 1,101, 1,151 | 6,239 | 650,389 | — | 8/8 |
+| model | A | prefix, prefix | 70, 139 | 6,308 | 650,436 | — | 8/8 |
+| model | B | notes, notes | 72, 137 | 14,507 | 1,319,402 | 0/2 | 8/8 |
+
+With pasted logs B pays for its note rounds and still needs the writer each
+time, so it is the costliest arm there; with logs from the model it commits
+from notes and keeps about 5k tokens of context. Real sessions will fall
+between the two, which the fallback rate in the record of each checkpoint now
+lets an evaluation measure.
+
 ## Unreleased: request guards, B's 50% rule and a Haiku-answered A/B run, 2026-10-13 UTC
 
 The maintainer's follow-ups to step 7, in the order 2 → 3 → 1 → 4. All

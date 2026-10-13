@@ -17,7 +17,7 @@ retained input must be reported separately.
 An old note may contain an instruction that a newer user ruling revokes. Keeping
 the newer original gives the model evidence; it does not prove that the old note
 was reconciled. The proposal therefore needs both temporal scoping and the
-[instruction-authority contract](instruction-authority-design.md). Until the
+[instruction-authority contract](archive/instruction-authority-design.md). Until the
 consumer can mechanically keep historical model prose out of its authoritative
 instruction lane, use the current merge or synchronous path.
 

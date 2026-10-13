@@ -1,7 +1,14 @@
-# Instruction-authority gate design
+# Instruction-authority gate design (archived)
+
+Archived on 2026-10-13. The ownership bridge, refusal guards and bootstrap
+drivers this design prepared were never enabled or published, and their code was
+removed. B now keeps candidate notes as data and carries user instructions
+deterministically instead of through an authority protocol; see the
+[v0.4.0 plan](../v0.4.0-plan.md). The text below is kept unchanged as a record
+of the analysis, including the failure modes it found.
 
 Status: design proposal for the dedicated instruction-authority milestone in the
-[roadmap](roadmap.md). Its release number is unassigned. No runtime change,
+[roadmap](../roadmap.md). Its release number is unassigned. No runtime change,
 checkpoint migration, new input protocol or arm B experiment is enabled by this
 document. The maintainer has selected preparation of a compatibility bridge and
 minimum supported rollback reader. Intake/projection enablement and release
@@ -10,7 +17,7 @@ identities remain separate decisions.
 Latest handoff direction: the maintainer authorizes reassessing or deleting this
 design. The complete strict protocol and unused prototypes are not presumed
 necessary for B's first candidate-data experiment. Evaluate the narrower
-[cloud handoff](claude-handoff.md) first; retain any required mechanical boundary
+[cloud handoff](../claude-handoff.md) first; retain any required mechanical boundary
 and explicitly defer stronger promises. Ordinary input should not acquire a
 mandatory repeated review workflow.
 
@@ -38,7 +45,7 @@ branch summaries and compaction summaries into provider `user` messages. Thus
 provider role cannot recover the original text's authority, and protecting only
 the section named `instructions` leaves several promotion paths open.
 
-The [validation record](validation.md#v023-budget-and-recovery-checks-2026-09-13-utc)
+The [validation record](../validation.md#v023-budget-and-recovery-checks-2026-09-13-utc)
 already describes an internal writer instruction being recovered as a user
 restriction despite passing numeric recovery assertions. A prompt correction
 and targeted rerun addressed that observed pattern; neither constitutes a
@@ -121,7 +128,7 @@ alone is not authentication.
 
 Read-only inspection of the actual official Pi 1.1.0 npm cohort first established
 the following possibilities. Subsequent bounded bootstrap and bridge-refusal
-experiments are recorded in [validation](validation.md#unreleased-authority-bridge-and-public-api-prototypes).
+experiments are recorded in [validation](../validation.md#unreleased-authority-bridge-and-public-api-prototypes).
 They are synthetic component proofs, not an enabled authority UI or a completed
 intake/projection/rollback milestone. The public renderer limitation below is a
 later correction to the initial source-only assessment.
@@ -635,21 +642,21 @@ The next-session sequence is:
 
 ## Inspected sources
 
-- [Roadmap](roadmap.md): dedicated authority milestone, arm B prerequisite and
+- [Roadmap](../roadmap.md): dedicated authority milestone, arm B prerequisite and
   separate recovery components.
-- [Notes](../../packages/coding-agent/src/extensions/context-memory/notes.ts):
+- [Notes](../../../packages/coding-agent/src/extensions/context-memory/notes.ts):
   schema, source/quotation validation, rendering, lineage and continuation.
-- [Preview controller](../../packages/coding-agent/src/extensions/context-memory/preview/controller.ts):
+- [Preview controller](../../../packages/coding-agent/src/extensions/context-memory/preview/controller.ts):
   pending note injection, delivered user horizon and commit paths.
-- [Preview extension](../../packages/coding-agent/src/extensions/context-memory/preview/extension.ts):
+- [Preview extension](../../../packages/coding-agent/src/extensions/context-memory/preview/extension.ts):
   `context_note` registration and current public lifecycle events.
-- [Preview writer](../../packages/coding-agent/src/extensions/context-memory/preview/writer.ts):
+- [Preview writer](../../../packages/coding-agent/src/extensions/context-memory/preview/writer.ts):
   writer control rules, size repair and session-prefix mode.
-- [Provider message conversion](../../packages/coding-agent/src/core/messages.ts):
+- [Provider message conversion](../../../packages/coding-agent/src/core/messages.ts):
   custom/branch/compaction content becomes provider user messages.
-- [Public input types](../../packages/coding-agent/src/core/extensions/types.ts),
-  [input handler chain](../../packages/coding-agent/src/core/extensions/runner.ts)
-  and [prompt routing](../../packages/coding-agent/src/core/agent-session.ts):
+- [Public input types](../../../packages/coding-agent/src/core/extensions/types.ts),
+  [input handler chain](../../../packages/coding-agent/src/core/extensions/runner.ts)
+  and [prompt routing](../../../packages/coding-agent/src/core/agent-session.ts):
   available origin labels, input transformations and command-before-input order.
-- [Validation record](validation.md): observed internal-writer contamination and
+- [Validation record](../validation.md): observed internal-writer contamination and
   limits of the subsequent prompt correction.

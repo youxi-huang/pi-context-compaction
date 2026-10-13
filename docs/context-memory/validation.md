@@ -468,7 +468,7 @@ Timed components include scheduling/GC effects and instrumentation overhead.
 `serializedCodeUnits` is UTF-16; `diskBytes` is actual UTF-8. This ASCII fixture
 does not establish arbitrary Unicode or malformed-byte equivalence.
 
-The [authority](instruction-authority-design.md) and
+The [authority](archive/instruction-authority-design.md) and
 [historical-prefix](historical-prefix-design.md) proposals are design evidence
 only. Neither activates arm B, retained-tail submission, a new checkpoint format
 or live model work.

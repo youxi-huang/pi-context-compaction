@@ -10,6 +10,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - Note in `AGENTS.md` that the repository must not gain a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads `AGENTS.md` only when none of these files exists, so adding one would silently drop the shared agent instructions from Claude Code sessions while Codex kept following them.
 - Add a light and dark introductory README illustration showing how a source-linked handover leads back to original session entries. The illustration follows the documented port example and is not a screenshot or benchmark comparison.
+- Remove the unused instruction-authority prototypes: the ownership bridge, refusal guards, bootstrap and guard drivers, and their tests. None was bundled, enabled or published. The authority design moves to `docs/context-memory/archive/`; B will keep notes as data and carry user messages verbatim instead.
 
 ## [v0.4.0-preview.1] — candidate, not released
 

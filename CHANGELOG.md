@@ -8,7 +8,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Changed
 
-- Validate sources and read the session back in full at trust boundaries instead of on every request in the independent preview. Session start, branch changes, new checkpoints, compaction, recovery and failures still run the complete checks. Requests in between check only entries added since and compare the session file's identity and length with Pi's appends, so a failed or foreign append, truncation or replacement is still found at once. Same-length rewrites and in-place edits of loaded entries are found at the next boundary. The whole-branch plain-data proof, canonical-line reuse and the request-component diagnostic that profiled them are removed.
+- Validate sources and read the session back in full at trust boundaries instead of on every request in the independent preview. Session start, branch changes, new checkpoints, compaction, recovery and failures still run the complete checks. Requests in between check only entries added since and compare the session file's identity and length with Pi's appends, so a failed or foreign append, truncation or replacement is still found at once. Same-length rewrites and in-place edits of loaded entries are found at the next boundary. The whole-branch plain-data proof, canonical-line reuse and the request-component diagnostic that profiled them are removed. In the synthetic long-session scenario, extra median overhead per request falls from 46/84 ms to 1–4 ms at 10/20 checkpoints, and the 50 ms check becomes a required regression; the first request after each checkpoint still pays one full check.
 
 ### Fixed
 

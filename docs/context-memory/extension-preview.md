@@ -7,12 +7,13 @@ It is distributed through the `extension-preview` Git branch and immutable
 **v0.4.0-preview.1 is an experimental A-stage pre-release candidate.** Its PR
 does not publish the immutable package tag; stable v0.3.3 remains available.
 Optional background
-preparation uses the same configured writer and is disabled by default. B and
-the new instruction-authority protocol remain future work. The required growth
-check failed in earlier runs; final C2 passes growth while the 50 ms target is
-still unmet. Performance/cost/recovery benefits
-have not been accepted. The maintainer permits the growth failure only for this
-functional experiment; full v0.4.0 retains its performance and A/B gates.
+preparation uses the same configured writer and is disabled by default. B
+remains future work. Since sources are validated at trust boundaries instead of
+on every request, the synthetic long-session scenario meets both the 50 ms
+request target and the growth bound under the strict profile; the first request
+after each checkpoint still pays one full check (see the
+[validation record](validation.md)). Pause, cost and recovery benefits have not
+been accepted; full v0.4.0 retains its A/B gates.
 See the [release scope and evidence](v0.4.0-preview.1-release.md).
 
 ## Install, update and remove
@@ -297,7 +298,7 @@ confirmation. The S2 runner also measures the whole manual-compaction boundary.
 This experiment keeps full-branch checkpoint coverage. It does not enable the
 historical-prefix/retained-tail proposal, automatic scheduling or arm B.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
-quality, cache economics and the 50 ms request target still require evidence.
+quality and cache economics still require evidence.
 
 ## Verification
 

@@ -1,5 +1,48 @@
 # Validation record
 
+## Unreleased: validation at trust boundaries, 2026-10-13 UTC
+
+Three changes on `claude/affectionate-cray-21pzua`, after the handoff head
+`da6276b`: the unused authority prototypes are removed, `context_note`
+candidates no longer enter the request context, and full source validation and
+session readback move from every request to trust boundaries (decision D15 in
+the [plan](v0.4.0-plan.md)). The resident runtime, its fingerprint, the shared
+`notes.ts`/`identity.ts` and the evaluation pin are unchanged.
+
+All results below use the offline loopback provider and synthetic credentials.
+They are not real-provider latency, cost or recovery results.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` on `da6276b`, before any change | Exit 0. 137 script and 520 runtime checks; security regressions exit 0 |
+| `context-memory-check.mjs` after the three changes | Exit 0. 107 script and 368 runtime checks. The removed checks belonged to the authority prototypes (15 script, 79 runtime), the request-component diagnostic (15 script) and the canonical-line readback (96 runtime, replaced by 21); two preview regressions are new |
+| `security-regression-check.mjs` | Exit 0. 461 checks, unchanged |
+| `ops preview`, strict profile, before promoting the known gap | Acceptance 27/27 on official Pi 1.1.0. Scenarios 126 pass, 0 fail; the run exits 1 because the listed 50 ms gap now passes, as the runner requires |
+| `ops preview`, strict profile, gap promoted to a required check | Acceptance 27/27. Scenarios 127 pass, 0 known gaps, 0 fail; profile accepted, raw gate passed. Release prepare refuses a strict-profile report, as designed |
+| `ops preview`, CI profile `v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27; scenarios 127 pass, raw gate passed, 0 declared performance exceptions; release checks and prepare pass |
+
+Runtime build `stock-preview+src.dbdbdab7626c83e6` in all three preview runs;
+source commits `ef2a288`, then `7246581`, which changes only the scenario
+runner's known-gap list.
+
+Long-session overhead, three probes per milestone, raw milliseconds. The probe
+is a short prompt with exactly one provider request; the median of three is
+compared with the median of the extension-disabled control.
+
+| Run | 10 checkpoints, 3.0 MB | 20 checkpoints, 5.9 MB | Control | Overhead 10 / 20 |
+| --- | --- | --- | --- | --- |
+| Strict, before promotion | 79.75, 5.43, 5.02 | 139.43, 5.47, 5.72 | 7.74, 3.80, 4.11 | 1 / 2 ms |
+| Strict, promoted | 102.21, 8.03, 7.61 | 139.28, 4.95, 5.26 | 7.63, 3.68, 4.01 | 4 / 1 ms |
+| CI profile | 68.66, 4.98, 4.51 | 142.26, 4.58, 4.56 | 6.60, 3.42, 3.66 | 1 / 1 ms |
+
+The handoff's final C2 measured 46 / 84 ms on the earlier design. The first
+probe after each checkpoint is consistently slower: it is the first request
+after a trust boundary and pays one full validation and readback, about 60–95 ms
+at 3.0 MB and 130–136 ms at 5.9 MB above the control's first probe. That cost
+still grows with history size, but it is paid once per checkpoint, session start
+or branch change, not on every request. The median hides it by construction, so
+it is recorded here rather than claimed as removed.
+
 ## v0.4.0-preview.1 PR and cloud handoff preparation
 
 ### Final clean C2 verification

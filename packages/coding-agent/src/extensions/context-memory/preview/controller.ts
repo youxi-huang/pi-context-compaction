@@ -37,7 +37,6 @@ import type {
 	PreviewFailureStoreContract,
 	PreviewSession,
 } from "./contracts.ts";
-import { createPreviewBranchSnapshot } from "./failure-store.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
 import { freezePreparationInput, type PreparationSubmission } from "./preparation-candidate.ts";
 import type { PreviewPreparationCoordinator } from "./preparation-coordinator.ts";
@@ -176,6 +175,17 @@ export function isPreviewCheckpoint(entry: SessionEntry): entry is CompactionEnt
 	);
 }
 
+/** Entry content this preview cannot check. */
+function unsupportedContent(entry: SessionEntry): InactiveReason | undefined {
+	if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
+		if (entry.message.content.some((part) => part.type === "image")) return "image";
+	}
+	if (entry.type === "custom_message" && Array.isArray(entry.content)) {
+		if (entry.content.some((part) => part.type !== "text")) return "non-text";
+	}
+	return undefined;
+}
+
 /** Host or session content this preview cannot check. Read-only: no IO beyond the session object. */
 export function unsupportedReason(session: PreviewSession, version: string = VERSION): InactiveReason | undefined {
 	if (version !== SUPPORTED_PI) return "host";
@@ -188,12 +198,8 @@ export function unsupportedReason(session: PreviewSession, version: string = VER
 	}
 	if (branch.some((entry) => entry.type === "compaction" && !isPreviewCheckpoint(entry))) return "foreign-checkpoint";
 	for (const entry of branch) {
-		if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-			if (entry.message.content.some((part) => part.type === "image")) return "image";
-		}
-		if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-			if (entry.content.some((part) => part.type !== "text")) return "non-text";
-		}
+		const reason = unsupportedContent(entry);
+		if (reason) return reason;
 	}
 	return undefined;
 }
@@ -213,11 +219,19 @@ export function assertPreviewSession(
 	session: PreviewSession,
 	version: string = VERSION,
 	branch?: readonly SessionEntry[],
-	onSerializedEntry?: (index: number, serialized: string) => void,
 ): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-	return validateMemoryCheckpoints(branch ?? session.getBranch(), onSerializedEntry);
+	return validateMemoryCheckpoints(branch ?? session.getBranch());
+}
+
+/** What the last full source validation proved, reused only while the same entry objects extend it. */
+interface VerifiedBranch {
+	session: PreviewSession;
+	sessionId: string;
+	length: number;
+	tip: SessionEntry | undefined;
+	checkpoint: ReturnType<typeof latestMemory>;
 }
 
 export interface PreviewControllerOptions {
@@ -243,6 +257,7 @@ export class PreviewMemoryController {
 	readonly hostVersion: string;
 	private activeTools: () => Tool[] = () => [];
 	private lastProgress?: WriterProgress;
+	private verified?: VerifiedBranch;
 	readonly notices = new NoticeGate();
 	private readonly preparation?: PreviewPreparationCoordinator;
 	private lastCompaction?: {
@@ -521,20 +536,65 @@ export class PreviewMemoryController {
 		};
 	}
 
+	/**
+	 * Request guard. Sources and checkpoints are validated in full at trust boundaries: session start, a branch
+	 * change, a new checkpoint, compaction, recovery and after any failure. Between them a request checks only
+	 * the entries added since, and the store checks the session file's identity and length.
+	 */
 	assertReady(ctx: ExtensionContext): ReturnType<typeof latestMemory> {
 		if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-		const branch = ctx.sessionManager.getBranch();
-		const factory = createPreviewBranchSnapshot(branch);
-		const checkpoint = assertPreviewSession(ctx.sessionManager, this.hostVersion, branch, factory?.onSerializedEntry);
-		const sticky = this.stickyFailures.get(ctx.sessionManager.getSessionId());
+		const session = ctx.sessionManager;
+		const branch = session.getBranch();
+		let checkpoint: ReturnType<typeof latestMemory>;
+		if (this.verified && this.extendsVerified(this.verified, session, branch)) {
+			checkpoint = this.verified.checkpoint;
+		} else {
+			this.verified = undefined;
+			checkpoint = assertPreviewSession(session, this.hostVersion, branch);
+		}
+		const sticky = this.stickyFailures.get(session.getSessionId());
 		if (sticky) throw new Error(sticky);
-		// There is no await or handler dispatch between serialization and this fresh disk check.
-		this.store.assertReady(ctx.sessionManager, factory?.snapshot);
+		this.store.assertReady(session);
+		this.verified = {
+			session,
+			sessionId: session.getSessionId(),
+			length: branch.length,
+			tip: branch.at(-1),
+			checkpoint,
+		};
 		return checkpoint;
+	}
+
+	/** The same entry objects as the last full validation, followed only by ordinary new entries. */
+	private extendsVerified(
+		verified: VerifiedBranch,
+		session: PreviewSession,
+		branch: readonly SessionEntry[],
+	): boolean {
+		if (verified.session !== session || verified.sessionId !== session.getSessionId()) return false;
+		if (branch.length < verified.length || branch[verified.length - 1] !== verified.tip) return false;
+		for (let index = verified.length; index < branch.length; index++) {
+			const entry = branch[index];
+			// A new checkpoint, a recovery edit or unsupported content needs the full validation and its error.
+			if (entry.type === "compaction" || entry.type === "context_edit" || unsupportedContent(entry)) return false;
+		}
+		return true;
+	}
+
+	/** The next request validates sources and reads the session file back in full. */
+	private forgetVerified(): void {
+		this.verified = undefined;
+		this.store.forgetReadback();
+	}
+
+	/** Tree navigation is a trust boundary, even when the selected branch extends the previous one. */
+	branchChanged(): void {
+		this.forgetVerified();
 	}
 
 	/** In-process stickiness covers a marker write that failed before it could reach disk. */
 	fail(ctx: ExtensionContext, code: string): void {
+		this.forgetVerified();
 		const sessionId = ctx.sessionManager.getSessionId();
 		this.observedFailures.set(sessionId, code);
 		this.stickyFailures.set(sessionId, code);
@@ -563,6 +623,7 @@ export class PreviewMemoryController {
 
 	/** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
 	sessionStart(ctx: ExtensionContext): void {
+		this.forgetVerified();
 		this.preparation?.activate(ctx.sessionManager.getSessionId());
 		if (this.preparation?.enabled) {
 			try {
@@ -670,6 +731,7 @@ export class PreviewMemoryController {
 
 	async compact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<PreviewCompaction> {
 		const started = performance.now();
+		this.forgetVerified();
 		this.compactionStartedAt.set(ctx.sessionManager.getSessionId(), started);
 		this.preparation?.cancel("compaction");
 		this.activeCompactions.add(ctx.sessionManager.getSessionId());
@@ -866,6 +928,7 @@ export class PreviewMemoryController {
 	}
 
 	committed(event: SessionCompactEvent, ctx: ExtensionContext): void {
+		this.forgetVerified();
 		const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 		// Pi's own compaction of a session this preview does not protect is not a commit of this package.
@@ -915,6 +978,7 @@ export class PreviewMemoryController {
 	 * and failures inside the confirmation are recorded by the failure store itself.
 	 */
 	recover(ctx: ExtensionContext): void {
+		this.forgetVerified();
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);

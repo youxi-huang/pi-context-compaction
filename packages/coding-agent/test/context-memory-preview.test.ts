@@ -215,7 +215,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(JSON.stringify(requests.at(-1))).toContain(marker);
 	});
 	it.each(["ready", "failed"])(
-		"skips expensive optional preparation after a paid %s attempt without caching request validation",
+		"skips expensive optional preparation after a paid %s attempt while request guards still see disk changes",
 		async (state) => {
 			if (state === "failed") output = "malformed paid output";
 			await prepare();
@@ -230,11 +230,22 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 			expect(store.markerPresent(session)).toBe(false);
 			expect(() => controller.assertReady(ctx)).not.toThrow();
 			if (!session.file) throw new Error("Missing synthetic session file");
-			fs.writeFileSync(session.file, fs.readFileSync(session.file, "utf8").replace("4317", "4316"));
+			const original = fs.readFileSync(session.file, "utf8");
+			// A rewrite that changes the length is found by the next request.
+			fs.writeFileSync(session.file, original.replace("4317", "43170"));
 			expect(() => controller.assertReady(ctx)).toThrow("CONTEXT_SOURCE_CHANGED");
 			expect(ctx.abort).not.toHaveBeenCalled();
 		},
 	);
+	it("finds a same-length disk rewrite at the next compaction boundary", async () => {
+		expect(() => controller.assertReady(ctx)).not.toThrow();
+		if (!session.file) throw new Error("Missing synthetic session file");
+		fs.writeFileSync(session.file, fs.readFileSync(session.file, "utf8").replace("4317", "4316"));
+		expect(() => controller.assertReady(ctx)).not.toThrow();
+		await expect(controller.compact(event(), ctx)).rejects.toThrow("CONTEXT_SOURCE_CHANGED");
+		expect(store.status(session).state).toBe("blocked");
+		expect(() => controller.assertReady(ctx)).toThrow("CONTEXT_SOURCE_CHANGED");
+	});
 	it("allows a new paid preparation after a confirmed checkpoint changes the interval", async () => {
 		await prepare();
 		const value = await controller.compact(event(), ctx);
@@ -294,7 +305,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		await expect(controller.compact(event(), ctx)).rejects.toThrow(/CONTEXT_SOURCE_CHANGED/);
 		expect(requests).toHaveLength(1);
 	});
-	it("freshly validates same-leaf source edits between the independent request hooks", async () => {
+	it("finds same-leaf in-place source edits at the next trust boundary", async () => {
 		await prepare();
 		const value = await controller.compact(event(), ctx);
 		const entry = saved(session, value);
@@ -310,10 +321,13 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		const source = session.entries[0];
 		if (source.type !== "message" || source.message.role !== "user") throw new Error("Missing source");
 		source.message.content = "Same leaf, changed original evidence.";
+		// The edited source is covered by the checkpoint, so requests carry no changed text until a boundary.
 		controller.context(messages, ctx);
 		controller.beforeRequest({ messages: [{ content: entry.summary }] }, ctx);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		controller.sessionStart(ctx);
 		expect(session.getLeafId()).toBe(unchangedLeaf);
-		expect(ctx.abort).toHaveBeenCalledTimes(2);
+		expect(ctx.abort).toHaveBeenCalledTimes(1);
 		expect(store.status(session).state).toBe("blocked");
 	});
 

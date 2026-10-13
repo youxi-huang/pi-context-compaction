@@ -243,10 +243,15 @@ marker remains blocking if a later stage or checkpoint write fails.
 
 Readback is bounded to 64 MiB and 250,000 JSONL records per session. Larger
 files are blocked explicitly; they are outside this first candidate's support.
-Each model request re-validates every stored checkpoint and reads the session
-file back from disk, three times per request. The cost grows with the number
-of checkpoints and the size of the history; the
-[validation record](validation.md) has measurements.
+Stored checkpoints and their sources are validated in full, and the session
+file is read back from disk, at trust boundaries: session start or reload, a
+branch change, a new checkpoint, `/compact`, `/compaction-recover` and after
+any failure. Between them a request checks only the entries added since and
+compares the file's identity and length with what Pi's appends should produce.
+A failed or foreign append, a truncated file or a replaced file is therefore
+found by the next request. A rewrite that keeps the same file and length, or an
+in-place edit of entries Pi has already loaded, is found at the next boundary
+instead; it cannot pass a checkpoint commit.
 
 Pi owns checkpoint append and may expose it in memory before the extension
 confirms disk state. The package checks publication before resuming requests;

@@ -1,12 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { types } from "node:util";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries, isRecord } from "../identity.ts";
 import type {
 	PreviewAttempt,
-	PreviewBranchSnapshot,
 	PreviewCompaction,
 	PreviewFailureStoreContract,
 	PreviewSession,
@@ -151,177 +149,15 @@ function candidateHash(candidate: PreviewCompaction | CompactionEntry): string {
 	]);
 }
 
-function arrayIndex(key: string): number | undefined {
-	if (key.length > 10) return undefined;
-	const index = Number(key);
-	return Number.isInteger(index) && index >= 0 && index < 2 ** 32 - 1 && String(index) === key ? index : undefined;
+interface SessionFile {
+	entries: Map<string, SessionEntry>;
+	/** Exact length of the bytes that were parsed. */
+	bytes: number;
 }
 
-interface PrototypeTable {
-	keys: readonly PropertyKey[];
-	descriptors: ReadonlyMap<PropertyKey, PropertyDescriptor>;
-}
-
-function prototypeTable(prototype: object): PrototypeTable {
-	const keys = Reflect.ownKeys(prototype);
-	const descriptors = new Map<PropertyKey, PropertyDescriptor>();
-	for (let index = 0; index < keys.length; index++) {
-		const descriptor = Object.getOwnPropertyDescriptor(prototype, keys[index]);
-		if (descriptor) descriptors.set(keys[index], descriptor);
-	}
-	return { keys: Object.freeze(keys), descriptors };
-}
-
-// The Node intrinsics and this extension's code are trusted at module initialization.
-// This is a source-hook eligibility proof, not a sandbox for pre-load/global builtin rewrites.
-const objectPrototypeTable = prototypeTable(Object.prototype);
-const arrayPrototypeTable = prototypeTable(Array.prototype);
-
-function samePrototypeTable(prototype: object, baseline: PrototypeTable): boolean {
-	const keys = Reflect.ownKeys(prototype);
-	if (keys.length !== baseline.keys.length) return false;
-	// Do not invoke an altered Array iterator or push while deciding whether it is safe.
-	for (let index = 0; index < keys.length; index++) {
-		const key = keys[index];
-		if (key !== baseline.keys[index]) return false;
-		const expected = baseline.descriptors.get(key);
-		const descriptor = Object.getOwnPropertyDescriptor(prototype, key);
-		if (
-			!expected ||
-			!descriptor ||
-			descriptor.enumerable !== expected.enumerable ||
-			descriptor.configurable !== expected.configurable
-		)
-			return false;
-		const data = Object.hasOwn(descriptor, "value");
-		if (data !== Object.hasOwn(expected, "value")) return false;
-		if (data) {
-			if (!Object.is(descriptor.value, expected.value) || descriptor.writable !== expected.writable) return false;
-		} else if (descriptor.get !== expected.get || descriptor.set !== expected.set) return false;
-	}
-	return true;
-}
-
-/** Reject hooks without invoking them; memoization lives only inside one preflight. */
-function plainData(value: unknown, verified: WeakSet<object>): boolean {
-	// A changed parent can supply inherited serializer hooks absent on either
-	// standard prototype itself. Refuse it before creating any work arrays.
-	if (Object.getPrototypeOf(Array.prototype) !== Object.prototype) return false;
-	// Validation also reads inherited schema/fact properties after serialization.
-	// Refuse any new contribution, including a data container holding nested hooks.
-	// The native __proto__ accessor is allowed only with its exact initial descriptor.
-	if (
-		!samePrototypeTable(Object.prototype, objectPrototypeTable) ||
-		!samePrototypeTable(Array.prototype, arrayPrototypeTable)
-	)
-		return false;
-	const pending: unknown[] = [value];
-	const seen = new WeakSet<object>();
-	const checked: object[] = [];
-	while (pending.length) {
-		const current = pending.pop();
-		if (current === null || current === undefined) continue;
-		if (typeof current !== "object") {
-			if (!["string", "number", "boolean"].includes(typeof current)) return false;
-			continue;
-		}
-		if (verified.has(current) || seen.has(current)) continue;
-		if (types.isProxy(current)) return false;
-		const prototype = Object.getPrototypeOf(current);
-		if (Array.isArray(current) ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null)
-			return false;
-		if (
-			(prototype !== null && Object.getOwnPropertyDescriptor(Object.prototype, "toJSON")) ||
-			(Array.isArray(current) && Object.getOwnPropertyDescriptor(Array.prototype, "toJSON"))
-		)
-			return false;
-		seen.add(current);
-		checked.push(current);
-		const arrayLength = Array.isArray(current) ? current.length : undefined;
-		let arrayIndices = 0;
-		for (const key of Reflect.ownKeys(current)) {
-			if (typeof key !== "string" || key === "toJSON") return false;
-			const descriptor = Object.getOwnPropertyDescriptor(current, key);
-			if (!descriptor || !Object.hasOwn(descriptor, "value")) return false;
-			if (arrayLength !== undefined) {
-				const index = arrayIndex(key);
-				if (index !== undefined && index < arrayLength) arrayIndices++;
-			}
-			pending.push(descriptor.value);
-		}
-		// Holes can invoke inherited indexed getters during JSON.stringify. Count
-		// only actual data indices, without iterating a potentially enormous length.
-		if (arrayLength !== undefined && arrayIndices !== arrayLength) return false;
-	}
-	for (const object of checked) verified.add(object);
-	return true;
-}
-
-const ownedSnapshots = new WeakSet<PreviewBranchSnapshot>();
-
-/** Required metadata must survive JSON serialization without normalization or inheritance. */
-function canonicalMetadata(entry: SessionEntry): boolean {
-	for (const key of ["id", "type", "timestamp", "parentId"] as const) {
-		const descriptor = Object.getOwnPropertyDescriptor(entry, key);
-		if (!descriptor?.enumerable || !Object.hasOwn(descriptor, "value")) return false;
-		const value: unknown = descriptor.value;
-		if (key === "id" && !identifier(value)) return false;
-		if (key === "type" && (typeof value !== "string" || value === "session")) return false;
-		if (key === "timestamp" && typeof value !== "string") return false;
-		if (key === "parentId" && value !== null && !identifier(value)) return false;
-	}
-	return true;
-}
-
-/**
- * Preflight before the shared validator serializes anything: a later hook must not
- * modify an already captured source. Non-data branches keep the ordinary readback.
- * The collector and its completed snapshot belong to this one synchronous frame.
- */
-export function createPreviewBranchSnapshot(branch: readonly SessionEntry[]):
-	| {
-			snapshot: PreviewBranchSnapshot;
-			onSerializedEntry(index: number, serialized: string): void;
-	  }
-	| undefined {
-	if (!plainData(branch, new WeakSet<object>()) || !branch.every(canonicalMetadata)) return undefined;
-	const canonicalLines: Buffer[] = [];
-	const snapshot = Object.freeze({ branch, canonicalLines });
-	let nextIndex = 0;
-	let valid = true;
-	if (branch.length === 0) {
-		Object.freeze(canonicalLines);
-		ownedSnapshots.add(snapshot);
-	}
-	return {
-		snapshot,
-		onSerializedEntry(index, serialized) {
-			if (!valid || index !== nextIndex || index >= branch.length) {
-				valid = false;
-				ownedSnapshots.delete(snapshot);
-				return;
-			}
-			canonicalLines.push(Buffer.from(serialized, "utf8"));
-			nextIndex++;
-			if (nextIndex === branch.length) {
-				Object.freeze(canonicalLines);
-				ownedSnapshots.add(snapshot);
-			}
-		},
-	};
-}
-
-function readSession(identity: SessionIdentity): Map<string, SessionEntry>;
-function readSession(
-	identity: SessionIdentity,
-	allowUnflushed: true,
-	snapshot?: PreviewBranchSnapshot,
-): Map<string, SessionEntry> | undefined;
-function readSession(
-	identity: SessionIdentity,
-	allowUnflushed = false,
-	snapshot?: PreviewBranchSnapshot,
-): Map<string, SessionEntry> | undefined {
+function readSession(identity: SessionIdentity): SessionFile;
+function readSession(identity: SessionIdentity, allowUnflushed: true): SessionFile | undefined;
+function readSession(identity: SessionIdentity, allowUnflushed = false): SessionFile | undefined {
 	try {
 		const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID");
 		if (data.at(-1) !== 10) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
@@ -336,14 +172,9 @@ function readSession(
 			throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 		const entries = new Map<string, SessionEntry>();
 		let roots = 0;
-		let nextAncestor = 0;
 		for (let start = headerEnd + 1; start < data.length; ) {
 			const end = data.indexOf(10, start);
-			const canonical = snapshot?.canonicalLines[nextAncestor];
-			// Parent order places selected ancestors in branch order, even with interleaved siblings.
-			// Compare exact bytes before decoding; every noncanonical record retains the lossy UTF8 parser.
-			const exact = canonical !== undefined && data.compare(canonical, 0, canonical.length, start, end) === 0;
-			const entry: unknown = exact ? snapshot?.branch[nextAncestor] : JSON.parse(data.toString("utf8", start, end));
+			const entry: unknown = JSON.parse(data.toString("utf8", start, end));
 			if (
 				!isRecord(entry) ||
 				!identifier(entry.id) ||
@@ -357,11 +188,9 @@ function readSession(
 				throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			if (entry.parentId === null && ++roots !== 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
 			entries.set(entry.id, entry as unknown as SessionEntry);
-			// A selected ancestor with whitespace or alternate escaping still advances the byte cursor.
-			if (snapshot && entry.id === snapshot.branch[nextAncestor]?.id) nextAncestor++;
 			start = end + 1;
 		}
-		return entries;
+		return { entries, bytes: data.length };
 	} catch (error) {
 		if (allowUnflushed && missing(error)) return undefined;
 		throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_SESSION_IO"));
@@ -380,16 +209,33 @@ function branchAt(entries: ReadonlyMap<string, SessionEntry>, leafId: string): S
 	return branch.reverse();
 }
 
-function sameEntries(left: readonly SessionEntry[], right: readonly SessionEntry[]): boolean {
-	return left.length === right.length && left.every((entry, index) => entry === right[index]);
+/**
+ * What the last full readback proved about the session file. Pi only appends
+ * `JSON.stringify(entry)` plus a newline for each new entry, so between trust
+ * boundaries a request compares the file's identity and length with that
+ * arithmetic instead of reading it again. A failed or foreign append, a
+ * truncation or a replaced file changes the length or identity and forces a
+ * full readback. A same-length rewrite in place is found at the next boundary.
+ */
+interface ReadbackFrontier {
+	session: PreviewSession;
+	sessionId: string;
+	file: string;
+	entries: number;
+	last: SessionEntry | undefined;
+	bytes: number;
+	dev: bigint;
+	ino: bigint;
 }
 
-function currentSnapshot(
-	snapshot: PreviewBranchSnapshot,
-	branch: readonly SessionEntry[],
-	leafId: string | null,
-): boolean {
-	return leafId === (snapshot.branch.at(-1)?.id ?? null) && sameEntries(snapshot.branch, branch);
+/** Undefined for anything but a readable regular file; the caller then reads the file back in full. */
+function fileIdentity(file: string): { dev: bigint; ino: bigint; size: bigint } | undefined {
+	try {
+		const stat = lstatSync(file, { bigint: true, throwIfNoEntry: false });
+		return stat?.isFile() ? { dev: stat.dev, ino: stat.ino, size: stat.size } : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Operational failure state only; original history remains in Pi's JSONL. */
@@ -397,8 +243,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	private readonly agentDir: string;
 	private readonly latched = new Map<string, string>();
 	private readonly recoveryMarkers = new Map<string, Marker>();
-	private readonly consumedSnapshots = new WeakSet<PreviewBranchSnapshot>();
-	private readonly consumedCanonicalLines = new WeakSet<readonly Buffer[]>();
+	private frontier?: ReadbackFrontier;
 	private directory?: string;
 
 	constructor(agentDir: string) {
@@ -518,32 +363,38 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	private evaluate(session: PreviewSession, latch: boolean, snapshot?: PreviewBranchSnapshot): PreviewStatus {
+	private evaluate(session: PreviewSession, latch: boolean, request = false): PreviewStatus {
 		try {
 			const identity = this.identity(session);
 			const marker = this.readMarker(identity, latch);
 			if (marker) return { state: marker.state, code: marker.code };
 			const latched = this.latched.get(identity.sessionId);
 			if (latched) return { state: "blocked", code: latched };
+			if (request && this.unchangedSinceReadback(session, identity)) return { state: "ready" };
+			if (request) this.frontier = undefined;
 			// Stock Pi allocates a path before its first user message. Empty persistent sessions may start normally.
-			const current =
-				snapshot && currentSnapshot(snapshot, session.getBranch(), session.getLeafId()) ? snapshot : undefined;
-			const disk = readSession(identity, true, current);
+			const disk = readSession(identity, true);
 			if (!disk) {
 				if (session.getEntries().some((entry) => entry.type === "message" || entry.type === "compaction"))
 					throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
 			} else {
 				const leafId = session.getLeafId();
-				if (leafId !== null) {
-					const memoryBranch = session.getBranch();
-					const diskBranch = branchAt(disk, leafId);
-					const identical =
-						current &&
-						snapshot &&
-						currentSnapshot(snapshot, memoryBranch, leafId) &&
-						sameEntries(diskBranch, memoryBranch);
-					if (!identical && hashEntries(diskBranch) !== hashEntries(memoryBranch))
-						throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				if (leafId !== null && hashEntries(branchAt(disk.entries, leafId)) !== hashEntries(session.getBranch()))
+					throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				const file = fileIdentity(identity.file);
+				// Another writer between the read and this stat simply leaves no frontier.
+				if (request && file?.size === BigInt(disk.bytes)) {
+					const entries = session.getEntries();
+					this.frontier = {
+						session,
+						sessionId: identity.sessionId,
+						file: identity.file,
+						entries: entries.length,
+						last: entries.at(-1),
+						bytes: disk.bytes,
+						dev: file.dev,
+						ino: file.ino,
+					};
 				}
 			}
 			return { state: "ready" };
@@ -554,24 +405,42 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	assertReady(session: PreviewSession, snapshot?: PreviewBranchSnapshot): void {
-		const current =
-			snapshot &&
-			ownedSnapshots.has(snapshot) &&
-			!this.consumedSnapshots.has(snapshot) &&
-			!this.consumedCanonicalLines.has(snapshot.canonicalLines)
-				? snapshot
-				: undefined;
-		if (snapshot) {
-			ownedSnapshots.delete(snapshot);
-			this.consumedSnapshots.add(snapshot);
-			this.consumedCanonicalLines.add(snapshot.canonicalLines);
-		}
-		const status = this.evaluate(session, true, current);
+	/** True only if the file grew by exactly the entries Pi appended since the last full readback. */
+	private unchangedSinceReadback(session: PreviewSession, identity: SessionIdentity): boolean {
+		const frontier = this.frontier;
+		if (
+			!frontier ||
+			frontier.session !== session ||
+			frontier.sessionId !== identity.sessionId ||
+			frontier.file !== identity.file
+		)
+			return false;
+		const entries = session.getEntries();
+		if (entries.length < frontier.entries || entries[frontier.entries - 1] !== frontier.last) return false;
+		let bytes = frontier.bytes;
+		for (let index = frontier.entries; index < entries.length; index++)
+			bytes += Buffer.byteLength(JSON.stringify(entries[index]), "utf8") + 1;
+		const file = fileIdentity(identity.file);
+		if (!file || file.dev !== frontier.dev || file.ino !== frontier.ino || file.size !== BigInt(bytes)) return false;
+		frontier.entries = entries.length;
+		frontier.last = entries.at(-1);
+		frontier.bytes = bytes;
+		return true;
+	}
+
+	/** Request guard. Full readback at a trust boundary, then only the length check until the next one. */
+	assertReady(session: PreviewSession): void {
+		const status = this.evaluate(session, true, true);
 		if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
 	}
 
+	/** A trust boundary: session start, compaction, recovery and every failure read the whole file again. */
+	forgetReadback(): void {
+		this.frontier = undefined;
+	}
+
 	begin(session: PreviewSession, explicitRetry = false): PreviewAttempt {
+		this.frontier = undefined;
 		try {
 			const identity = this.identity(session);
 			if (!explicitRetry) this.assertReady(session);
@@ -594,7 +463,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				lastCheckpointId: [...branch].reverse().find((entry) => entry.type === "compaction")?.id ?? null,
 				sourceHash: hashEntries(branch),
 			};
-			if (hashEntries(branchAt(readSession(identity), leafId)) !== attempt.sourceHash)
+			if (hashEntries(branchAt(readSession(identity).entries, leafId)) !== attempt.sourceHash)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			writeMarker(this.path(identity), {
 				version: 1,
@@ -639,6 +508,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	stage(session: PreviewSession, attempt: PreviewAttempt, candidate: PreviewCompaction): void {
+		this.frontier = undefined;
 		try {
 			const identity = this.identity(session);
 			const marker = this.pending(identity);
@@ -649,7 +519,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			this.assertCandidate(attempt, candidate);
-			const branch = branchAt(readSession(identity), attempt.leafId);
+			const branch = branchAt(readSession(identity).entries, attempt.leafId);
 			if (
 				hashEntries(branch) !== attempt.sourceHash ||
 				(candidate.firstKeptEntryId !== CONTEXT_KEEP_NONE &&
@@ -671,6 +541,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	private confirm(session: PreviewSession, entry: CompactionEntry, explicitRecovery: boolean): void {
+		this.frontier = undefined;
 		let recoveryMarker: Marker | undefined;
 		try {
 			const identity = this.identity(session);
@@ -694,7 +565,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			// Explicit same-process recovery first restores that evidence durably, then rechecks everything.
 			if (!persisted) this.recordFailure(session, marker.code, marker);
 			this.assertCandidate(marker.attempt, entry);
-			const disk = readSession(identity);
+			const disk = readSession(identity).entries;
 			const stored = disk.get(entry.id);
 			if (
 				stored?.type !== "compaction" ||
@@ -721,6 +592,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	fail(session: PreviewSession, code: string): void {
+		this.frontier = undefined;
 		const controlled = CODES.has(code) ? code : "CONTEXT_WRITER_FAILED";
 		this.latched.set(session.getSessionId(), controlled);
 		try {

@@ -146,6 +146,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
 	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
 	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
+	pi.on("session_tree", () => controller.branchChanged());
 	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
 	pi.on("session_shutdown", () => controller.shutdownPreparation());
 	pi.registerTool({

@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Changed
+
+- Validate sources and read the session back in full at trust boundaries instead of on every request in the independent preview. Session start, branch changes, new checkpoints, compaction, recovery and failures still run the complete checks. Requests in between check only entries added since and compare the session file's identity and length with Pi's appends, so a failed or foreign append, truncation or replacement is still found at once. Same-length rewrites and in-place edits of loaded entries are found at the next boundary. The whole-branch plain-data proof, canonical-line reuse and the request-component diagnostic that profiled them are removed.
+
 ### Fixed
 
 - Stop re-inserting `context_note` candidates at the head of every request in the independent preview. They arrived as a user-role message headed "Instructions", although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The notes already appear in context as the model's own tool calls; they still reach the writer as candidates at compaction. The resident runtime has the same injection and keeps it until a fingerprint change is approved.

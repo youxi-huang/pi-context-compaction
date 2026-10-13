@@ -1,25 +1,7 @@
-import type {
-	CompactionEntry,
-	CompactionResult,
-	ExtensionContext,
-	SessionEntry,
-} from "@earendil-works/pi-coding-agent";
+import type { CompactionEntry, CompactionResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { MemoryCheckpoint } from "../notes.ts";
 
 export type PreviewSession = ExtensionContext["sessionManager"];
-/**
- * Owned by one synchronous validation invocation, never reused across requests.
- * Lines are exact UTF8 JSON.stringify(entry) bytes freshly produced in branch order;
- * branch contains the corresponding objects. The caller must not mutate these
- * objects between serialization and assertReady, or retain this hint as a cache.
- * A store consumes both snapshot and lines once; subsequent uses take the ordinary path.
- * Only the factory's whole-branch plain-data preflight, before any serialization,
- * can authorize this hint. Unbranded hints always use ordinary disk parsing.
- */
-export interface PreviewBranchSnapshot {
-	readonly branch: readonly SessionEntry[];
-	readonly canonicalLines: readonly Buffer[];
-}
 export interface PreviewCheckpoint extends MemoryCheckpoint {
 	/** Preview-only observational metadata; no extension of checkpoint source scope. */
 	preparation?: {
@@ -77,7 +59,10 @@ export interface PreviewStatus {
 
 /** Operational markers contain hashes and identifiers, never transcript or note text. */
 export interface PreviewFailureStoreContract {
-	assertReady(session: PreviewSession, snapshot?: PreviewBranchSnapshot): void;
+	/** Request guard: full readback after a trust boundary, then only a file identity and length check. */
+	assertReady(session: PreviewSession): void;
+	/** Make the next request read the whole session file back. */
+	forgetReadback(): void;
 	status(session: PreviewSession): PreviewStatus;
 	/** Like status, without latching a newly observed failure. */
 	inspect(session: PreviewSession): PreviewStatus;

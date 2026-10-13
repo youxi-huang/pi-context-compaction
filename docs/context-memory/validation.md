@@ -20,6 +20,7 @@ They are not real-provider latency, cost or recovery results.
 | `ops preview`, strict profile, before promoting the known gap | Acceptance 27/27 on official Pi 1.1.0. Scenarios 126 pass, 0 fail; the run exits 1 because the listed 50 ms gap now passes, as the runner requires |
 | `ops preview`, strict profile, gap promoted to a required check | Acceptance 27/27. Scenarios 127 pass, 0 known gaps, 0 fail; profile accepted, raw gate passed. Release prepare refuses a strict-profile report, as designed |
 | `ops preview`, CI profile `v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27; scenarios 127 pass, raw gate passed, 0 declared performance exceptions; release checks and prepare pass |
+| Same, after the prefix commit path (`bea9497`) | Exit 0. Acceptance 27/27 on `stock-preview+src.a23a816475767026`; scenarios 127 pass, 0 known gaps. `context-memory-check.mjs` exit 0 with 107 script and 374 runtime checks. Scenarios run with preparation disabled, so the prefix path is covered by focused tests only |
 
 Runtime build `stock-preview+src.dbdbdab7626c83e6` in all three preview runs;
 source commits `ef2a288`, then `7246581`, which changes only the scenario
@@ -34,14 +35,16 @@ compared with the median of the extension-disabled control.
 | Strict, before promotion | 79.75, 5.43, 5.02 | 139.43, 5.47, 5.72 | 7.74, 3.80, 4.11 | 1 / 2 ms |
 | Strict, promoted | 102.21, 8.03, 7.61 | 139.28, 4.95, 5.26 | 7.63, 3.68, 4.01 | 4 / 1 ms |
 | CI profile | 68.66, 4.98, 4.51 | 142.26, 4.58, 4.56 | 6.60, 3.42, 3.66 | 1 / 1 ms |
+| CI profile, prefix path | 75.32, 5.37, 4.91 | 148.11, 5.23, 4.77 | 6.69, 5.08, 6.89 | 0 / 0 ms |
 
 The handoff's final C2 measured 46 / 84 ms on the earlier design. The first
 probe after each checkpoint is consistently slower: it is the first request
 after a trust boundary and pays one full validation and readback, about 60–95 ms
-at 3.0 MB and 130–136 ms at 5.9 MB above the control's first probe. That cost
+at 3.0 MB and 130–142 ms at 5.9 MB above the control's first probe. That cost
 still grows with history size, but it is paid once per checkpoint, session start
 or branch change, not on every request. The median hides it by construction, so
-it is recorded here rather than claimed as removed.
+it is recorded here rather than claimed as removed. In the last run the control's
+median (7 ms) exceeded the extension's (5 ms), so its 0 ms is noise, not a gain.
 
 ## v0.4.0-preview.1 PR and cloud handoff preparation
 

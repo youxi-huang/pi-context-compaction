@@ -24,10 +24,12 @@ reason, with a focused regression that fails without the fix.
 | --- | --- |
 | `context-memory-ops.mjs verify` | Exit 0. 100 script and 312 runtime checks; security 461, unchanged |
 | `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` | Exit 0. Acceptance 27/27 on `stock-preview+src.71713207c248a39e`; scenarios 145 pass (126 + 19), 0 known gaps, profile accepted; release checks and prepare pass |
+| Both again at `6382b88`, which adds only the A/B runner and documents | Verify exit 0 with the same counts. Preview exit 0 with the same build, acceptance 27/27 and scenarios 145 pass |
 
-Long-session overhead in that run, raw ms: 10 checkpoints 73.07, 5.42, 4.79;
-20 checkpoints 153.31, 6.82, 10.89; control 6.47, 3.36, 2.90. Extra median
-overhead 2 / 8 ms.
+Long-session overhead, raw ms: at `882096f`, 10 checkpoints 73.07, 5.42, 4.79;
+20 checkpoints 153.31, 6.82, 10.89; control 6.47, 3.36, 2.90; extra median
+overhead 2 / 8 ms. At `6382b88`, 79.26, 9.07, 8.82; 172.55, 6.43, 5.02; control
+10.90, 5.44, 5.50; extra median overhead 3 / 0 ms.
 
 ### A/B runner, first synthetic results
 

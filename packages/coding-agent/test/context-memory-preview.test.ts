@@ -239,6 +239,30 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(requests).toHaveLength(1);
 		expect(controller.status(ctx).calls).toMatchObject({ preparationCalls: 1, unsettled: 0 });
 	});
+	it("lets requests through up to Pi's threshold on text near 4 bytes per token, and stops real overflow", () => {
+		// Pi compacts above window - 16,384 by its own estimate; the guards must not fire below that point.
+		const threshold = 128_000 - 16_384;
+		const text = (tokens: number) => "log 0000: local check ok, port healthy\n".repeat(Math.floor((tokens * 4) / 39));
+		const request = (body: string): AgentMessage[] => [{ role: "user", content: body, timestamp: 1 }];
+		const payload = (body: string) => ({
+			model: "preview-test",
+			messages: [
+				{ role: "system", content: "Synthetic system prompt." },
+				{ role: "user", content: body },
+			],
+		});
+		for (const maxTokens of [8192, 64_000]) {
+			const sized = { ...ctx, model: { ...model, maxTokens } } as ExtensionContext;
+			const below = text(threshold - 2_000);
+			controller.context(request(below), sized);
+			controller.beforeRequest(payload(below), sized);
+			expect(ctx.abort).not.toHaveBeenCalled();
+		}
+		controller.context(request(text(threshold + 2_000)), ctx);
+		expect(ctx.abort).toHaveBeenCalledTimes(1);
+		controller.beforeRequest(payload(text(128_000 + 2_000)), ctx);
+		expect(ctx.abort).toHaveBeenCalledTimes(2);
+	});
 	it("keeps note candidates out of the request context and gives them only to the writer", async () => {
 		const marker = "Candidate-only observation about port 4317.";
 		session.append({
@@ -1728,8 +1752,8 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 		session.append({ type: "message", id, parentId: session.getLeafId(), timestamp, message: assistant() });
 	}
 	/** A turn in which the model records a work note, in the order stock Pi appends it. */
-	function noteTurn(id: string, data: JsonObject): void {
-		user(id, `Continue with ${id}.`);
+	function noteTurn(id: string, data: JsonObject, text = `Continue with ${id}.`): void {
+		user(id, text);
 		session.append({
 			type: "message",
 			id: `call-${id}`,
@@ -1858,6 +1882,20 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 		expect(value.details?.preparation?.path).toBe("sync");
 		expect(requests).toHaveLength(2);
 		expect(JSON.stringify(requests[1])).toContain("The deployment permission no longer applies.");
+	});
+	it("leaves a commit that would keep half the threshold or more in context to the writer", async () => {
+		user("trace-1", trace);
+		reply("trace-reply-1");
+		// The note's own turn stays verbatim: about 60k estimated tokens, above half of the 102,400 threshold.
+		noteTurn(
+			"work-1",
+			{ state: [{ text: "The long check passed.", sources: ["trace-1"] }] },
+			`Check:\n${"local check ok, port 4317 healthy\n".repeat(7000)}`,
+		);
+		const value = await controller.compact(event(), ctx);
+		expect(value.details?.preparation?.path).toBe("sync");
+		expect(requests.length).toBeGreaterThan(0);
+		expect(controller.status(ctx).calls).toMatchObject({ compactionCalls: requests.length, unsettled: 0 });
 	});
 	it("leaves user messages beyond their bound to the writer, which receives the notes and is journaled", async () => {
 		for (let index = 0; index < 12; index++) {

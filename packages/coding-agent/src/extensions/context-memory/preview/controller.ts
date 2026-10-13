@@ -171,6 +171,22 @@ export function preparationStart(contextWindow: number): number {
 	return threshold - Math.min(32_768, Math.max(8_192, Math.floor(threshold * 0.125)));
 }
 
+/** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
+function piTokens(text: string): number {
+	return Math.ceil(text.length / 4);
+}
+
+/**
+ * The request guard's limit: Pi's threshold, window minus Pi's default reserve. Pi compacts above it after a
+ * turn or before a prompt, so a request below it is never stopped. The model's output maximum does not lower it.
+ */
+export function requestLimit(model: { contextWindow: number }): number {
+	const limit = model.contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	if (!Number.isFinite(limit) || limit < 2048)
+		throw new Error("CONTEXT_CAPACITY: model window is too small or unknown");
+	return limit;
+}
+
 /** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
 function fittedSummary(
 	note: MemoryNote,
@@ -774,8 +790,8 @@ export class PreviewMemoryController {
 			assertToolPairs(messages);
 			const estimate =
 				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(messages) ? 0 : textTokens(ctx.getSystemPrompt()));
-			if (estimate > memoryBudget(ctx.model, this.config).inputLimit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
+			if (estimate > requestLimit(ctx.model)) throw new Error("CONTEXT_INPUT_TOO_LARGE");
 		});
 		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
 		// under another role would change their authority and invalidate the provider prefix cache.
@@ -791,9 +807,8 @@ export class PreviewMemoryController {
 			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1))) {
 				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost the validated checkpoint");
 			}
-			if (textTokens(serialized ?? "") > memoryBudget(ctx.model, this.config).inputLimit) {
-				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
-			}
+			// JSON escaping and tool schemas sit outside Pi's estimate, so only a payload beyond the window is stopped here.
+			if (piTokens(serialized ?? "") > ctx.model.contextWindow) throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
 		});
 	}
 
@@ -910,9 +925,9 @@ export class PreviewMemoryController {
 			let userMessages: SessionEntry[] = [];
 			/**
 			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
-			 * releases nothing uncovered, the context shrinks and the result leaves room before the next compaction.
+			 * releases nothing uncovered, the context shrinks and the result fits within `share` of the threshold.
 			 */
-			const commitPrefix = (note: MemoryNote, end: number, users: SessionEntry[] = []): boolean => {
+			const commitPrefix = (note: MemoryNote, end: number, share: number, users: SessionEntry[] = []): boolean => {
 				const start = prefixCut(branch, projection, end, cut);
 				if (start === undefined) return false;
 				const retained = retainedFrom(start);
@@ -920,7 +935,7 @@ export class PreviewMemoryController {
 				const section = users.length ? renderUserMessages(users) : "";
 				// Beyond this bound the writer consolidates the user's messages instead.
 				if (textTokens(section) > Math.min(6000, Math.floor(budget.threshold * 0.05))) return false;
-				const summary = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * 0.8), section);
+				const summary = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section);
 				if (!summary || textTokens(summary) + retainedTokens >= beforeTokens) return false;
 				assertToolPairs(retained);
 				kept = retained;
@@ -931,7 +946,7 @@ export class PreviewMemoryController {
 			};
 			if (path === "sync" && available && interrupted === undefined) {
 				const end = reusablePrefix(available.candidate, available.classification, branch);
-				if (end !== undefined && commitPrefix(available.written.note, end)) path = "prefix";
+				if (end !== undefined && commitPrefix(available.written.note, end, 0.8)) path = "prefix";
 			}
 			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.
 			let notesNote: MemoryNote | undefined;
@@ -950,7 +965,9 @@ export class PreviewMemoryController {
 					notesNote = undefined;
 				}
 				const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
-				if (notesNote && commitPrefix(notesNote, end, users)) path = "notes";
+				// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
+				// worth more than a commit that barely compacts.
+				if (notesNote && commitPrefix(notesNote, end, 0.5, users)) path = "notes";
 			}
 			// A candidate that is not committed as it stands is discarded; its calls remain in the journal.
 			const reused = path === "complete" || path === "prefix" ? available : undefined;

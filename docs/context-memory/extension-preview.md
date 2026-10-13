@@ -346,8 +346,9 @@ originals, so an edited message blocks the session like an edited quote.
 The writer compacts synchronously instead, with the notes as hints, when those
 messages exceed 5% of the compaction threshold (at most 6,000 estimated
 tokens), when a note supersedes the source of a carried instruction, when the
-merge exceeds the note schema or budget, when the prefix conditions fail, or
-with custom focus. That writer also reads the user messages an earlier notes
+merge exceeds the note schema or budget, when the prefix conditions fail, when
+the commit would leave half the compaction threshold or more in context (the
+turn of the last note stays verbatim), or with custom focus. That writer also reads the user messages an earlier notes
 checkpoint carried. `details.preparation.path` is `notes` for these
 checkpoints, with `noteIds` naming the merged notes.
 

@@ -21,6 +21,7 @@ not state the old port as current.
 | --- | --- |
 | `context-memory-ops.mjs verify`, source of `5f03ff4` | Exit 0. 100 script and 314 runtime checks; security 461 |
 | `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` at `dd14b50` | Exit 0. Acceptance 27/27 on `stock-preview+src.771b52ad8b1ebfbc`; scenarios 145 pass, profile accepted; release checks and prepare pass. Overhead raw ms: 10 checkpoints 71.63, 5.34, 4.87; 20 checkpoints 145.86, 5.00, 4.64; control 6.29, 3.18, 3.30; extra median 2 / 2 ms |
+| Both again at `912383e`, after the runner fixes and these records | Verify exit 0, same counts. Preview exit 0, same build, acceptance 27/27, scenarios 145 pass. Overhead raw ms: 70.55, 4.73, 4.17; 137.67, 4.79, 4.49; control 6.48, 2.97, 3.00; extra median 2 / 2 ms |
 
 With the guard fixed, the scripted runner counts about 4 bytes per token and
 no arm is blocked. At `--latency-ms 1000`:

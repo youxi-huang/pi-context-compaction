@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop re-inserting `context_note` candidates at the head of every request in the independent preview. They arrived as a user-role message headed "Instructions", although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The notes already appear in context as the model's own tool calls; they still reach the writer as candidates at compaction. The resident runtime has the same injection and keeps it until a fingerprint change is approved.
+
 ### Maintenance
 
 - Note in `AGENTS.md` that the repository must not gain a `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads `AGENTS.md` only when none of these files exists, so adding one would silently drop the shared agent instructions from Claude Code sessions while Codex kept following them.

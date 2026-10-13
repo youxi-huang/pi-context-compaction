@@ -23,7 +23,12 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
 import { freezeHistory, queryHistory } from "../src/extensions/context-memory/history.ts";
-import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries } from "../src/extensions/context-memory/identity.ts";
+import {
+	CONTEXT_MEMORY_KIND,
+	CONTEXT_MEMORY_VERSION,
+	CONTEXT_NOTE_TYPE,
+	hashEntries,
+} from "../src/extensions/context-memory/identity.ts";
 import {
 	latestMemory,
 	type MemoryCheckpoint,
@@ -189,6 +194,25 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(controller.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(1);
 		expect(controller.status(ctx).lastCompaction).toMatchObject({ foregroundCalls: 0, diskConfirmed: true });
 		expect(ctx.abort).not.toHaveBeenCalled();
+	});
+	it("keeps note candidates out of the request context and gives them only to the writer", async () => {
+		const marker = "Candidate-only observation about port 4317.";
+		session.append({
+			type: "custom",
+			customType: CONTEXT_NOTE_TYPE,
+			id: "note-1",
+			parentId: session.getLeafId(),
+			timestamp,
+			data: { ...note(), state: [{ text: marker, sources: ["source-1"] }] },
+		});
+		const messages = session.buildSessionProjection().messages;
+		const before = JSON.stringify(messages);
+		const result = controller.context(messages, ctx);
+		expect(result).toBe(messages);
+		expect(JSON.stringify(result)).toBe(before);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		await controller.compact(event(), ctx);
+		expect(JSON.stringify(requests.at(-1))).toContain(marker);
 	});
 	it.each(["ready", "failed"])(
 		"skips expensive optional preparation after a paid %s attempt without caching request validation",

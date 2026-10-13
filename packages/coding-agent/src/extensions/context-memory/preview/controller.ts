@@ -22,7 +22,6 @@ import {
 	compactedSourceTokens,
 	hashEntries,
 	latestMemory,
-	type MemoryNote,
 	noteBytes,
 	noteIncrements,
 	renderNote,
@@ -165,31 +164,6 @@ function interruptedTurnStart(branch: readonly SessionEntry[]): number | undefin
 		if (entry.type === "message" && entry.message.role === "user") return index;
 	}
 	return undefined;
-}
-
-function withPendingNotes(
-	messages: readonly AgentMessage[],
-	increments: readonly MemoryNote[],
-	noteTokens: number,
-): AgentMessage[] {
-	const result = messages.filter(
-		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
-	);
-	if (increments.length) {
-		const content = `Unverified note candidates. Original evidence and current user instructions take precedence.\n${increments.map((note) => renderNote(note)).join("\n\n")}`;
-		if (textTokens(content) <= noteTokens) {
-			const candidate: AgentMessage = {
-				role: "custom",
-				customType: "context-memory-pending",
-				content,
-				display: false,
-				timestamp: 0,
-			};
-			// Preserve a projected leading system message so Pi continues to own prompt/tool state.
-			result.splice(result[0]?.role === "system" ? 1 : 0, 0, candidate);
-		}
-	}
-	return result;
 }
 
 export function isPreviewCheckpoint(entry: SessionEntry): entry is CompactionEntry {
@@ -375,11 +349,7 @@ export class PreviewMemoryController {
 				streamSimple: registry.streamSimple.bind(registry),
 			};
 			const increments = noteIncrements(branch, previous?.entry.id);
-			const messages = structuredClone(
-				convertToLlm(
-					withPendingNotes(projection.messages, increments, memoryBudget(ctx.model, this.config).noteTokens),
-				),
-			);
+			const messages = structuredClone(convertToLlm(projection.messages));
 			const prefix = getInitialSystemMessage(messages)
 				? { messages }
 				: { messages, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
@@ -663,26 +633,24 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return messages;
 		}
-		let result = messages;
 		this.guard(ctx, () => {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-			const branch = ctx.sessionManager.getBranch();
 			if (checkpoint) {
 				const restored = messages.filter((message) => message.role === "compactionSummary");
 				if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary) {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
 				}
 			}
-			const budget = memoryBudget(ctx.model, this.config);
-			result = withPendingNotes(messages, noteIncrements(branch, checkpoint?.entry.id), budget.noteTokens);
-			assertToolPairs(result);
+			assertToolPairs(messages);
 			const estimate =
-				result.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(result) ? 0 : textTokens(ctx.getSystemPrompt()));
-			if (estimate > budget.inputLimit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
+				(getInitialSystemMessage(messages) ? 0 : textTokens(ctx.getSystemPrompt()));
+			if (estimate > memoryBudget(ctx.model, this.config).inputLimit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
 		});
-		return result;
+		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
+		// under another role would change their authority and invalidate the provider prefix cache.
+		return messages;
 	}
 
 	beforeRequest(payload: unknown, ctx: ExtensionContext): void {
@@ -767,7 +735,7 @@ export class PreviewMemoryController {
 					projectedMessages.pop();
 				} else break;
 			}
-			const prefixMessages = convertToLlm(withPendingNotes(projectedMessages, increments, budget.noteTokens));
+			const prefixMessages = convertToLlm(projectedMessages);
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
 			const prefix = getInitialSystemMessage(prefixMessages)

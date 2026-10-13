@@ -89,6 +89,16 @@ Two recorded S1 runs fail both the 50 ms goal and required growth bound:
 | Standalone hardened candidate | 57 ms | 122 ms | Fail: 122 > 2 × 57 |
 | Complete scenario suite | 54 ms | 121 ms | Fail: 121 > 2 × 54 |
 
+The final clean C2 full CI command exits 0: 137 script, 520 runtime, 461 security,
+27 official-package and 89 frozen scripted evaluator checks pass. Its scenario
+summary is 126 pass, one 50 ms known gap, zero failures/unexpected passes/skips.
+C2 is `1f7576e41639c616c683454e1687db859d6dd589`; extra overhead is 46/84 ms,
+so this one run passes growth (`84 <= 92`) while failing the absolute target
+(`84 > 50`). It uses the same a8fc runtime, with clean C2 package metadata. The
+documentation-only follow-up preserves this as C2 evidence, not a new measurement
+or exact-package validation of a later commit. Retain the conflicting earlier
+runs rather than declaring stable performance acceptance.
+
 The absolute 50 ms check remains a known gap. The maintainer accepts the growth
 failure **only for this functional preview version**. The profile records raw
 failures and the scope exception; it must not become a performance pass or a

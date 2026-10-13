@@ -10,7 +10,7 @@ The goal is **continuity with a route back to the source**, not perfect memory.
 
 **Stable preview:** [v0.3.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.3.3) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It compacts on request (`/compact`) in persistent, text-only sessions, and leaves sessions it cannot check to Pi. It does **not** compact automatically.
 
-**Experimental pre-release candidate:** v0.4.0-preview.1 prepares optional background work by the same configured writer, disabled by default. It is being reviewed in a PR and has not been published. B, the new instruction-authority protocol and the full A/B comparison remain unfinished. The required performance-growth check fails and the 50 ms goal is unmet; this version has an explicit experimental exception, without a claim of better pause, total cost or recovery. See the [scope and evidence](docs/context-memory/v0.4.0-preview.1-release.md).
+**Experimental pre-release candidate:** v0.4.0-preview.1 prepares optional background work by the same configured writer, disabled by default. It is being reviewed in a PR and has not been published. B, the new instruction-authority protocol and the full A/B comparison remain unfinished. The growth check failed in earlier runs; the final C2 run passes growth but still exceeds the 50 ms goal; this version has an explicit experimental exception, without a claim of better pause, total cost or recovery. See the [scope and evidence](docs/context-memory/v0.4.0-preview.1-release.md).
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
 

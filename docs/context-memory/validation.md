@@ -2,6 +2,52 @@
 
 ## v0.4.0-preview.1 PR and cloud handoff preparation
 
+### Final clean C2 verification
+
+`node scripts/context-memory-ops.mjs ci --acceptance-profile
+v0.4.0-preview.1-a-functional` exits 0 on clean source commit
+`1f7576e41639c616c683454e1687db859d6dd589` (C2). This is the single final
+committed-artifact verification run, after source/pin maintenance; it is not a
+retry of an unchanged S1 result to seek a pass. The documentation-only successor
+records C2 evidence; any later publication must verify its own final clean source.
+
+| Check | Result |
+| --- | --- |
+| Offline build, stamp and fingerprint | Exit 0; no generated source diff |
+| Project static/dependency/import/type checks | Exit 0 |
+| Self-contained script checks | 137 passed, zero failed/skipped |
+| Focused runtime checks | 520 passed across 11 files |
+| Synthetic host-security checks | 461 passed |
+| Exact official Pi 1.1.0 package acceptance | 27 passed |
+| Default scenarios with Pi 1.1.0 and 1.0.4 | 126 pass, one 50 ms known gap, zero fail/now-passes/skipped; raw `passed: true` |
+| Preview release checks and local `--prepare` | Exit 0; no publication |
+| Frozen scripted evaluator | 89 passed across 10 files; fixture/scorer locks unchanged |
+
+The final C2 scenario uses 20 checkpoints, 70 loopback requests and the unchanged
+nine-probe calculation. Growth passes in this run; the absolute target fails.
+Earlier two growth failures below remain separate results on the same runtime.
+
+| Milestone | Raw samples, ms | Rounded extension/control median | Extra overhead |
+| --- | --- | ---: | ---: |
+| 10 checkpoints | 52.409547, 46.291738, 58.420072 | 52 | 46 ms |
+| 20 checkpoints | 89.836717, 109.522654, 90.022501 | 90 | 84 ms |
+| Extension-disabled control | 10.516734, 5.610550, 4.713208 | 6 | — |
+
+`84 <= 2 * 46` passes growth; `84 > 50` fails the absolute budget. The authorized
+profile reports only the existing absolute known gap as an exception in this
+run. No required growth failure was reclassified or omitted. Neither the new
+pass nor the scope profile establishes stable pause/cost/recovery acceptance.
+
+C2 package version is `0.4.0-preview.1`, runtime source/bundle remain a8fc/2c72
+as recorded below, and exact archive SHA-256 is
+`a38ed48d971c8eb1aeaa9317a335727e737384b9d1c34afce151d778d3e5c290`.
+Manifest SHA-256 is
+`34d92b2626da5db04ac5031d886f79dcb7c12150af72f37cd6a4d40bce253a8b`;
+build metadata SHA-256 is
+`5db76e897b7fda5a4a1fcdc57e05863c21cb6ea1dd1bc9e6524bbdb836739108`.
+These identify C2, not a future source/package tag. No main update, merge,
+tag, release, live-provider run or final-main/CodeQL success is claimed.
+
 The maintainer selected an unmerged PR and cloud handoff as this session's
 endpoint, with no tags, package-branch update or release. Arm A remains an
 opt-in experiment; B remains disabled. The next worker may reassess or delete

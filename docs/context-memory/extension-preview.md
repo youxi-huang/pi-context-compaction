@@ -9,7 +9,8 @@ does not publish the immutable package tag; stable v0.3.3 remains available.
 Optional background
 preparation uses the same configured writer and is disabled by default. B and
 the new instruction-authority protocol remain future work. The required growth
-check fails, the 50 ms target is unmet and performance/cost/recovery benefits
+check failed in earlier runs; final C2 passes growth while the 50 ms target is
+still unmet. Performance/cost/recovery benefits
 have not been accepted. The maintainer permits the growth failure only for this
 functional experiment; full v0.4.0 retains its performance and A/B gates.
 See the [release scope and evidence](v0.4.0-preview.1-release.md).

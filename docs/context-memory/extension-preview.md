@@ -151,10 +151,12 @@ repository with its development dependencies installed.
 Use Node.js 22.19 or newer and a persistent text session. Keep one Pi
 writer process per session and load this package through normal CLI/TUI/SDK
 extension discovery. Finish turns until Pi has older history to compact, use
-`/compact`, inspect `/compaction-status`, and continue. The model can submit
-optional source-linked candidates with `context_note` and retrieve original
-records on the current branch with `context_history`. The JSONL remains the
-only history store.
+`/compact`, inspect `/compaction-status`, and continue. The model can record
+optional work notes with `context_note`: where the work stands, decisions and
+their reasons, failed approaches, files and the current plan, each fact on one
+line with the original entries it rests on. A note has no field for
+instructions. The model retrieves original records on the current branch with
+`context_history`. The JSONL remains the only history store.
 
 For SDK use, select the same agent directory through `PI_CODING_AGENT_DIR`
 before importing Pi and pass it consistently to the session/resource loader.
@@ -310,9 +312,44 @@ summary and `lastCompaction`; `lastCompaction.stageMs` ends at staging and
 `pauseMs` is set after disk confirmation.
 
 Checkpoints from the complete and synchronous paths cover the whole branch;
-prefix checkpoints cover what their candidate saw. Arm B is not enabled.
+prefix and notes checkpoints cover what their candidate or notes saw.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
+
+### Work notes (arm B)
+
+Arm B has its own switch, also off by default:
+
+```json
+{
+  "previewWorkNotes": {
+    "enabled": true
+  }
+}
+```
+
+With it, a one-line tool guideline asks the session model for a work note after
+a decision, a failed approach or a completed subtask. At compaction the
+extension merges the previous checkpoint's note with the valid notes since, in
+order, without a model call. A fact that supersedes a source drops the earlier
+facts citing it, and the newest plan replaces the older one. Instructions from
+the previous checkpoint are carried unchanged; no note can add or drop one. The
+merged note covers the branch through the last work note and is committed
+through the prefix path above, so everything after it stays verbatim.
+
+The extension then appends the user's own messages up to that point, verbatim
+and in order, as JSON lines after the note. A long message keeps its start and
+end; the model reads the rest with `context_history`. The checkpoint records
+their entry IDs, and every full validation renders them again from the
+originals, so an edited message blocks the session like an edited quote.
+
+The writer compacts synchronously instead, with the notes as hints, when those
+messages exceed 5% of the compaction threshold (at most 6,000 estimated
+tokens), when a note supersedes the source of a carried instruction, when the
+merge exceeds the note schema or budget, when the prefix conditions fail, or
+with custom focus. That writer also reads the user messages an earlier notes
+checkpoint carried. `details.preparation.path` is `notes` for these
+checkpoints, with `noteIds` naming the merged notes.
 
 ## Verification
 

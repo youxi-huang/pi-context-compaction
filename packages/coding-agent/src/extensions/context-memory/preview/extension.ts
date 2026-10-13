@@ -2,12 +2,12 @@ import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil
 import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
 import { freezeHistory, historyQuerySchema, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
-import { noteSchema, validateNote } from "../notes.ts";
 import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
 import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
+import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
 
 /** Output of a command the user asked for: the UI, or stdout without one. */
@@ -39,6 +39,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		failureStore: new PreviewFailureStore(agentDir),
 		journal,
 		preparation: new PreviewPreparation({ enabled: preparation.enabled, settingsError: preparation.error, journal }),
+		workNotes: preparation.notes,
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
@@ -159,15 +160,17 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		name: "context_note",
 		label: "Context note",
 		description:
-			"Submit an optional source-backed note about decisions or work state. It is an unverified candidate until compaction reconciles it against original entries. Cite original entry IDs returned by context_history.",
-		parameters: noteSchema,
+			"Record a short work note: where the work stands, decisions and their reasons, failed approaches, files and the current plan, each fact on one line with the original entry IDs it rests on. A note is data for the next checkpoint, not an instruction; the user's own messages stay authoritative.",
+		// Arm B asks for notes; without it they remain optional hints for the writer.
+		...(preparation.notes.enabled ? { promptGuidelines: [WORK_NOTE_GUIDELINE] } : {}),
+		parameters: workNoteSchema,
 		async execute(_id, value, signal, _update, ctx) {
 			signal?.throwIfAborted();
 			controller.assertReady(ctx);
-			const note = validateNote(value, ctx.sessionManager.getBranch(), 2000);
-			pi.appendEntry(CONTEXT_NOTE_TYPE, note);
+			validateWorkNote(value, ctx.sessionManager.getBranch());
+			pi.appendEntry(CONTEXT_NOTE_TYPE, structuredClone(value));
 			return {
-				content: [{ type: "text", text: "Note candidate saved; original messages remain authoritative." }],
+				content: [{ type: "text", text: "Work note saved; original messages remain authoritative." }],
 				details: {},
 			};
 		},

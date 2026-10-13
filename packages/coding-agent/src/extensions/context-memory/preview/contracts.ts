@@ -6,11 +6,14 @@ export interface PreviewCheckpoint extends MemoryCheckpoint {
 	/** Preview-only observational metadata; no extension of checkpoint source scope. */
 	preparation?: {
 		version: 1;
-		strategy: "background";
-		path: "complete" | "prefix" | "merge" | "sync";
+		path: "complete" | "prefix" | "notes" | "sync";
 		candidateId?: string;
 		callIds?: string[];
+		/** Work notes merged by the notes path. */
+		noteIds?: string[];
 	};
+	/** User messages rendered verbatim after the note by the notes path; re-rendered at every full validation. */
+	userMessages?: string[];
 }
 export type PreviewCompaction = CompactionResult<PreviewCheckpoint>;
 

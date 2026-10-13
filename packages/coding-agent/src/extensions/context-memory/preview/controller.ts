@@ -24,7 +24,6 @@ import {
 	latestMemory,
 	type MemoryNote,
 	noteBytes,
-	noteIncrements,
 	renderNote,
 	shrinkLineage,
 	validateMemoryCheckpoints,
@@ -40,8 +39,17 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
-import type { PreviewPreparation } from "./preparation.ts";
+import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
+import {
+	assertUserMessages,
+	carriedUserMessages,
+	coveredUserMessages,
+	mergeWorkNotes,
+	renderUserMessages,
+	workNotes,
+	writerSources,
+} from "./work-notes.ts";
 import {
 	modelName,
 	resolveWriterModel,
@@ -169,12 +177,13 @@ function fittedSummary(
 	branch: readonly SessionEntry[],
 	retainedTokens: number,
 	limit: number,
+	userMessages = "",
 ): string | undefined {
 	let lineage = checkpointLineage(branch);
-	let summary = renderNote(note, lineage);
+	let summary = renderNote(note, lineage) + userMessages;
 	while (lineage.length && textTokens(summary) + retainedTokens > limit) {
 		lineage = shrinkLineage(lineage);
-		summary = renderNote(note, lineage);
+		summary = renderNote(note, lineage) + userMessages;
 	}
 	return textTokens(summary) + retainedTokens > limit ? undefined : summary;
 }
@@ -283,7 +292,10 @@ export function assertPreviewSession(
 ): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-	return validateMemoryCheckpoints(branch ?? session.getBranch());
+	const sources = branch ?? session.getBranch();
+	const latest = validateMemoryCheckpoints(sources);
+	assertUserMessages(sources);
+	return latest;
 }
 
 /** What the last full source validation proved, reused only while the same entry objects extend it. */
@@ -305,6 +317,8 @@ export interface PreviewControllerOptions {
 	preparation?: PreviewPreparation;
 	/** Records every writer call; without one, calls are observed only in memory. */
 	journal?: CallJournal;
+	/** Arm B: commit merged work notes without a writer call when the prefix path allows it. */
+	workNotes?: PreviewSwitch;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -324,8 +338,9 @@ export class PreviewMemoryController {
 	readonly notices = new NoticeGate();
 	private readonly preparation?: PreviewPreparation;
 	private readonly journal?: CallJournal;
+	private readonly workNotes: PreviewSwitch;
 	private lastCompaction?: {
-		path: "complete" | "prefix" | "sync";
+		path: "complete" | "prefix" | "notes" | "sync";
 		candidateId?: string;
 		foregroundCalls: number;
 		stageMs: number;
@@ -340,6 +355,7 @@ export class PreviewMemoryController {
 		this.hostVersion = options.hostVersion ?? VERSION;
 		this.preparation = options.preparation;
 		this.journal = options.journal;
+		this.workNotes = options.workNotes ?? { enabled: false };
 	}
 
 	bindTools(tools: () => Tool[]): void {
@@ -409,8 +425,7 @@ export class PreviewMemoryController {
 			const leafId = ctx.sessionManager.getLeafId();
 			if (!leafId) return;
 			const previous = latestMemory(branch);
-			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
-			const uncovered = branch.slice(after + 1);
+			const uncovered = writerSources(branch, previous);
 			const input = freezePreparationInput({
 				...submission,
 				branch,
@@ -428,7 +443,7 @@ export class PreviewMemoryController {
 				hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
 				streamSimple: registry.streamSimple.bind(registry),
 			};
-			const increments = noteIncrements(branch, previous?.memory.coveredThrough);
+			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
 			const messages = structuredClone(convertToLlm(projection.messages));
 			const prefix = getInitialSystemMessage(messages)
 				? { messages }
@@ -856,9 +871,9 @@ export class PreviewMemoryController {
 			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
 			let coveredIndex = branch.length - 1;
 			const previous = latestMemory(branch);
-			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
 			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
-			const increments = noteIncrements(branch, previous?.memory.coveredThrough);
+			const notes = workNotes(branch, previous?.memory.coveredThrough);
+			const increments = notes.map((item) => item.note);
 			const activeIds = new Set(
 				projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id),
 			);
@@ -887,45 +902,73 @@ export class PreviewMemoryController {
 				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }
 				: undefined;
 			const available = submission ? this.preparation?.take(submission) : undefined;
-			let path: "complete" | "prefix" | "sync" =
+			let path: "complete" | "prefix" | "notes" | "sync" =
 				available?.classification.status === "current-full" ? "complete" : "sync";
 			const systemTokens = textTokens(ctx.getSystemPrompt());
+			const beforeTokens =
+				systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+			let userMessages: SessionEntry[] = [];
+			/**
+			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
+			 * releases nothing uncovered, the context shrinks and the result leaves room before the next compaction.
+			 */
+			const commitPrefix = (note: MemoryNote, end: number, users: SessionEntry[] = []): boolean => {
+				const start = prefixCut(branch, projection, end, cut);
+				if (start === undefined) return false;
+				const retained = retainedFrom(start);
+				const retainedTokens = systemTokens + retained.reduce((sum, message) => sum + estimateTokens(message), 0);
+				const section = users.length ? renderUserMessages(users) : "";
+				// Beyond this bound the writer consolidates the user's messages instead.
+				if (textTokens(section) > Math.min(6000, Math.floor(budget.threshold * 0.05))) return false;
+				const summary = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * 0.8), section);
+				if (!summary || textTokens(summary) + retainedTokens >= beforeTokens) return false;
+				assertToolPairs(retained);
+				kept = retained;
+				firstKeptEntryId = branch[start].id;
+				coveredIndex = end;
+				userMessages = users;
+				return true;
+			};
 			if (path === "sync" && available && interrupted === undefined) {
-				// D16: commit the prepared note for the prefix it covers and keep everything after it verbatim.
 				const end = reusablePrefix(available.candidate, available.classification, branch);
-				const start = end === undefined ? undefined : prefixCut(branch, projection, end, cut);
-				if (end !== undefined && start !== undefined) {
-					const retained = retainedFrom(start);
-					const retainedTokens =
-						systemTokens + retained.reduce((sum, message) => sum + estimateTokens(message), 0);
-					const beforeTokens =
-						systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-					const summary = fittedSummary(
-						available.written.note,
-						branch,
-						retainedTokens,
-						Math.floor(budget.threshold * 0.8),
-					);
-					// Commit only if the context shrinks and leaves room before the next compaction.
-					if (summary && textTokens(summary) + retainedTokens < beforeTokens) {
-						assertToolPairs(retained);
-						path = "prefix";
-						kept = retained;
-						firstKeptEntryId = branch[start].id;
-						coveredIndex = end;
-					}
+				if (end !== undefined && commitPrefix(available.written.note, end)) path = "prefix";
+			}
+			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.
+			let notesNote: MemoryNote | undefined;
+			if (
+				path === "sync" &&
+				this.workNotes.enabled &&
+				notes.length &&
+				interrupted === undefined &&
+				!event.customInstructions?.trim()
+			) {
+				const end = notes[notes.length - 1].index;
+				const merged = mergeWorkNotes(previous?.memory.note, increments);
+				try {
+					notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+				} catch {
+					notesNote = undefined;
 				}
+				const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+				if (notesNote && commitPrefix(notesNote, end, users)) path = "notes";
 			}
 			// A candidate that is not committed as it stands is discarded; its calls remain in the journal.
-			const reused = path === "sync" ? undefined : available;
+			const reused = path === "complete" || path === "prefix" ? available : undefined;
+			const ready = reused
+				? {
+						...reused.written,
+						note: validateNote(
+							structuredClone(reused.written.note),
+							branch.slice(0, coveredIndex + 1),
+							policy.hardTokens,
+						),
+					}
+				: path === "notes" && notesNote
+					? { note: notesNote, writerModel: modelName(ctx.model), writerEffort: "off" as const }
+					: undefined;
 			let written: WriteMemoryResult;
-			if (reused) {
-				const note = validateNote(
-					structuredClone(reused.written.note),
-					branch.slice(0, coveredIndex + 1),
-					policy.hardTokens,
-				);
-				written = { ...reused.written, note, usage: sumMemoryUsage([]), chunkCount: 0 };
+			if (ready) {
+				written = { ...ready, usage: sumMemoryUsage([]), chunkCount: 0 };
 				this.lastProgress = {
 					writerModel: written.writerModel,
 					writerEffort: written.writerEffort,
@@ -943,7 +986,7 @@ export class PreviewMemoryController {
 					sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
 					previous: previous?.memory.note,
 					increments,
-					uncovered: branch.slice(after + 1),
+					uncovered: writerSources(branch, previous),
 					branch,
 					noteTokens: policy.hardTokens,
 					baseNoteTokens: policy.baseTokens,
@@ -968,6 +1011,7 @@ export class PreviewMemoryController {
 				branch,
 				systemTokens + kept.reduce((sum, message) => sum + estimateTokens(message), 0),
 				budget.threshold,
+				userMessages.length ? renderUserMessages(userMessages) : "",
 			);
 			if (!summary) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
 			const candidate: PreviewCompaction = {
@@ -989,11 +1033,11 @@ export class PreviewMemoryController {
 					chunkCount: written.chunkCount,
 					build: PREVIEW_BUILD_ID,
 					noteBudget: policy,
-					...(this.preparation?.enabled
+					...(userMessages.length ? { userMessages: userMessages.map((entry) => entry.id) } : {}),
+					...(this.preparation?.enabled || this.workNotes.enabled
 						? {
 								preparation: {
 									version: 1 as const,
-									strategy: "background" as const,
 									path,
 									...(reused
 										? {
@@ -1001,6 +1045,7 @@ export class PreviewMemoryController {
 												callIds: [...reused.candidate.provenance.callIds],
 											}
 										: {}),
+									...(path === "notes" ? { noteIds: notes.map((item) => item.id) } : {}),
 								},
 							}
 						: {}),

@@ -15,28 +15,37 @@ import type { WriteMemoryResult, WriterCallHooks } from "./writer.ts";
 /** A run still going after this long is cancelled; its calls stay in the journal. */
 const DEADLINE_MS = 120_000;
 
-const settingsCache = new Map<string, { enabled: boolean; error?: "invalid-config" }>();
+export interface PreviewSwitch {
+	enabled: boolean;
+	error?: "invalid-config";
+}
+
+const settingsCache = new Map<string, PreviewSwitch & { notes: PreviewSwitch }>();
+
+function previewSwitch(section: unknown): PreviewSwitch {
+	if (section === undefined) return { enabled: false };
+	return isRecord(section) && (section.enabled === undefined || typeof section.enabled === "boolean")
+		? { enabled: section.enabled === true }
+		: { enabled: false, error: "invalid-config" };
+}
 
 /**
- * `previewPreparation.enabled` in pi-context-memory.json, latched for the process like the other settings.
- * Keys from the earlier experiment (call, token and cost budgets) are ignored; an invalid value disables it.
+ * `previewPreparation.enabled` (arm A) and `previewWorkNotes.enabled` (arm B) in pi-context-memory.json, latched
+ * for the process like the other settings. Keys from the earlier experiment (call, token and cost budgets) are
+ * ignored; an invalid value disables its switch.
  */
-export function readPreparationSettings(agentDir: string): { enabled: boolean; error?: "invalid-config" } {
+export function readPreparationSettings(agentDir: string): PreviewSwitch & { notes: PreviewSwitch } {
 	const path = join(agentDir, "pi-context-memory.json");
 	const cached = settingsCache.get(path);
 	if (cached) return cached;
-	let result: { enabled: boolean; error?: "invalid-config" };
+	let result: PreviewSwitch & { notes: PreviewSwitch };
 	try {
 		const value: unknown = JSON.parse(readBoundedFile(path, 64 * 1024, "preparation-config").toString("utf8"));
-		const section = isRecord(value) ? value.previewPreparation : undefined;
-		result =
-			section === undefined
-				? { enabled: false }
-				: isRecord(section) && (section.enabled === undefined || typeof section.enabled === "boolean")
-					? { enabled: section.enabled === true }
-					: { enabled: false, error: "invalid-config" };
+		const record = isRecord(value) ? value : {};
+		result = { ...previewSwitch(record.previewPreparation), notes: previewSwitch(record.previewWorkNotes) };
 	} catch (error) {
-		result = missing(error) ? { enabled: false } : { enabled: false, error: "invalid-config" };
+		const off: PreviewSwitch = missing(error) ? { enabled: false } : { enabled: false, error: "invalid-config" };
+		result = { ...off, notes: off };
 	}
 	settingsCache.set(path, result);
 	return result;

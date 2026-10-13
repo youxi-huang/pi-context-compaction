@@ -111,7 +111,13 @@ function environment(agentDir) {
 function renderMessages(messages) {
 	return messages
 		.map((message) => {
-			const content = typeof message.content === "string" ? message.content : JSON.stringify(message.content ?? "");
+			// Text parts keep their own line breaks, so long logs stay readable line by line.
+			const content =
+				typeof message.content === "string"
+					? message.content
+					: Array.isArray(message.content)
+						? message.content.map((part) => (part?.type === "text" ? part.text : JSON.stringify(part))).join("\n")
+						: JSON.stringify(message.content ?? "");
 			const calls = message.tool_calls ? `\n[tool calls] ${JSON.stringify(message.tool_calls.map((call) => call.function))}` : "";
 			return `## ${message.role}${message.tool_call_id ? ` (result of ${message.tool_call_id})` : ""}\n${content}${calls}`;
 		})
@@ -287,7 +293,12 @@ async function worker() {
 		}
 	}
 	// Optional preparation runs after the turn. The script lets it finish so every arm submits the same next turn.
+	// Pi starts it from agent_settled, just after the prompt returns, so A first waits a moment for it to begin.
 	const settle = async () => {
+		if (arm === "a") {
+			for (const until = Date.now() + (bridge ? 3_000 : 1_000); Date.now() < until && (await status()).preparation?.state !== "preparing"; )
+				await new Promise((done) => setTimeout(done, 50));
+		}
 		for (const deadline = Date.now() + (bridge ? BRIDGE_WAIT_MS : 5_000); Date.now() < deadline && (await status()).preparation?.state === "preparing"; )
 			await new Promise((done) => setTimeout(done, bridge ? 500 : 25));
 	};

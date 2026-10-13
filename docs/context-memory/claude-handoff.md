@@ -4,7 +4,7 @@
 
 This section is the brief for the next session. It supersedes the original
 handoff below wherever they differ; the original stays for context. Steps 1–7
-are done; the open items are decisions, listed below.
+are done, with the maintainer's follow-ups; one decision is open, below.
 
 ### Where things are
 
@@ -52,29 +52,32 @@ Steps 1–5 implement D15–D17, step 6 implements D18 and step 7 measures them:
    compares sync, A and B on one synthetic script; its first results are in
    the [validation record](validation.md).
 
-### Decisions for the maintainer
+### Decisions taken after step 7
 
-Each needs the maintainer, not the next worker alone.
+The maintainer ruled on the four questions step 7 raised:
 
-1. **Instructions on the writer path.** The writer (sync and A) still restates
-   user rulings in `instructions`. Options: keep it until real A/B data
-   (recommended); in the preview only, render the verbatim section on every path
-   and accept only writer instructions that quote a cited user message; or remove
-   `instructions` from the shared schema (fingerprint and frozen evaluation).
-2. **Payload guard versus A's band and Pi's threshold.** The final payload guard
-   counts bytes / 3 against `window − max(16,384, maxTokens)`. For text near 4
-   bytes per token it blocks, durably in a protected session, before A's band and
-   before Pi's threshold compaction. Aligning the scales is a policy change; the
-   preview could do it locally, the resident runtime shares `memoryBudget`.
-3. **B keeps the turn of its last note.** Coverage ends at the note, so that turn
-   stays verbatim until a later note. In the synthetic run that left 104k tokens
-   after compaction against 3k. Options: accept the lag; ask for notes at the end
-   of a turn and allow a cut right after the note's tool result; or let the
-   writer cover the rest.
-4. **Real-provider runs.** The A/B runner is synthetic. Running it against a
-   provider needs the maintainer's credentials and an explicit budget. At the
-   synthetic prices the current script costs about $1.86 for sync, $1.86 for A
-   and $4.37 for B per run without prompt caching; a smaller script is cheaper.
+1. **Instructions on the writer path** stay. The A/B runner gained two
+   restatement probes (exact numbers, an overturned port); with Haiku as the
+   writer both passed in every arm, so there is no evidence for a change yet.
+2. **Request guards** now share Pi's scale: Pi's estimate against Pi's
+   threshold, `window − 16,384`, and the payload guard only above the window.
+   Preview only; the resident `memoryBudget` is unchanged and differs.
+3. **B's fit share** is 50% of the threshold; a commit that would keep more
+   goes to the writer.
+4. **Real-provider runs** are deferred until a key and a budget exist (the
+   maintainer may use a DeepSeek key). Meanwhile one run used Haiku subagents
+   through the runner's `--bridge`; see the [validation record](validation.md).
+
+### Open decision
+
+**B loses facts in the middle of a long user message.** The checkpoint keeps
+the start and end of a long paste, and a writer that later consolidates sees
+only that and an 80-character opening. In the Haiku run the model did not note
+either pasted log, so a mid-log fact was lost on B's path and kept by sync and
+A. Options: B hands the compaction to the writer whenever a covered user
+message would be shortened; the session writer receives the full text of the
+messages a notes checkpoint carried; or accept it and rely on
+`context_history`.
 
 ### Rules that keep this lean
 

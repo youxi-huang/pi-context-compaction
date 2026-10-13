@@ -1,5 +1,81 @@
 # Validation record
 
+## Unreleased: request guards, B's 50% rule and a Haiku-answered A/B run, 2026-10-13 UTC
+
+The maintainer's follow-ups to step 7, in the order 2 → 3 → 1 → 4. All
+results use official Pi 1.1.0 and a loopback provider; none comes from a
+provider API.
+
+**Request guards (2).** A new regression fails on the earlier code: text near
+4 bytes per token just below Pi's threshold was blocked, with an 8k- and a
+64k-output model. Both guards now use Pi's estimate; the context guard stops
+above `window − 16,384`, the payload guard above the window.
+**B's fit share (3).** A notes commit must leave the context below 50% of the
+threshold instead of 80%. Its regression fails when the share is put back to
+80%. **Probes (1).** The runner's script adds a rule with exact numbers
+("retry limit to 7", "2,500 ms") and a port that a later message overturns;
+two probes check that the context after a restart keeps the numbers and does
+not state the old port as current.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify`, source of `5f03ff4` | Exit 0. 100 script and 314 runtime checks; security 461 |
+| `context-memory-ops.mjs preview --acceptance-profile v0.4.0-preview.1-a-functional` at `dd14b50` | Exit 0. Acceptance 27/27 on `stock-preview+src.771b52ad8b1ebfbc`; scenarios 145 pass, profile accepted; release checks and prepare pass. Overhead raw ms: 10 checkpoints 71.63, 5.34, 4.87; 20 checkpoints 145.86, 5.00, 4.64; control 6.29, 3.18, 3.30; extra median 2 / 2 ms |
+
+With the guard fixed, the scripted runner counts about 4 bytes per token and
+no arm is blocked. At `--latency-ms 1000`:
+
+| Arm | Paths | Pause per compaction, ms | Turn time, ms | Writer calls (foreground) | Main requests | Total tokens | Context after cycle 2 | Probes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| sync | sync, sync | 1,103, 1,154 | 6,247 | 2 (2) | 9 | 650,342 | 2,267 | 8/8 |
+| A | prefix, prefix | 83, 135 | 6,329 | 2 (0) | 9 | 650,388 | 2,297 | 8/8 |
+| B | notes, sync | 105, 1,175 | 14,460 | 1 (1) | 17 | 1,427,582 | 2,320 | 8/8 |
+
+B's second commit would have kept the log turn of its last note, about three
+quarters of the threshold; under the new rule the writer compacts instead, at the cost of
+one foreground call.
+
+### A real model through a file bridge (4)
+
+No provider key is available here, so the maintainer suggested Claude Haiku
+run as Claude Code subagents. The runner's new `--bridge <dir>` writes each
+writer request and each of B's note decisions to a file; a Haiku subagent read
+the file, answered as the model, and wrote the answer back, and the run then
+continued through Pi's real validation, commit gate and disk confirmation. The
+main model's ordinary replies stayed scripted. One repetition, a 48k window
+with logs of about 23k tokens, two cycles, a restart and the probe prompt.
+
+| Arm | Paths | Foreground writer calls | Pause per compaction | Work notes | Probes |
+| --- | --- | --- | --- | --- | --- |
+| sync | sync, sync | 1, 1 | 84.6 s, 102.7 s | — | 8/8 |
+| A | prefix, prefix | 0, 0 | 0.03 s, 0.05 s | — | 8/8 |
+| B | notes, sync | 0, 1 | 0.05 s, 96.7 s | 2 saved, 0 refused; none on 4 of 6 turns | 7/8: lost "build 7" |
+
+- Pauses are the subagent's time to read the file and answer, not provider
+  latency, and the token counts are the runner's synthetic estimate; neither
+  is a cost or speed result.
+- Every Haiku note that reached a commit validated against its sources. Both writers and
+  B's notes kept the exact numbers and marked the old port as superseded, so
+  both restatement probes passed in every arm. On this evidence, item 1 keeps
+  `instructions` on the writer path.
+- Haiku wrote no note for either pasted log. B's checkpoint keeps only the
+  start and end of a long user message, and the writer that consolidated it
+  in cycle 2 saw those carried messages only as shortened text and an
+  80-character manifest line. So the fact in the middle of the first log was
+  lost on B's path, while sync and A, whose writer read the whole log, kept it.
+- B's second cycle had no new note after the port change, so the commit would
+  have kept the whole log turn; the 50% rule sent it to the writer.
+
+Two harness faults were found and fixed before the results above: the bridge
+first rendered Pi's content parts as one JSON line, which the subagent's file
+reader truncates, so the run was restarted with real line breaks; and arm A's
+script moved on before Pi had started preparation, so compaction cancelled it.
+Arm A was rerun alone after the fix; the first run's A row (prefix, then sync
+with one cancelled preparation counted as unknown usage) is superseded. The
+prompts for B's last three decisions also named the schema's `supersedes`
+field, which the first three did not; the field was in the schema shown each
+time.
+
 ## Unreleased: end-to-end cases and a synthetic A/B runner, 2026-10-13 UTC
 
 Step 7 of the [handoff brief](claude-handoff.md). Everything here uses official Pi

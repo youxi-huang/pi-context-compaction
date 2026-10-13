@@ -20,7 +20,7 @@ function argument(name, fallback) {
 	const index = args.indexOf(name);
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
-	throw new Error(`Missing ${name}. Usage: node ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> [--window 128000] [--latency-ms 0] [--arms sync,a,b] [--bridge <dir>]`);
+	throw new Error(`Missing ${name}. Usage: node ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> [--window 128000] [--latency-ms 0] [--arms sync,a,b] [--logs user|model] [--bridge <dir>]`);
 }
 const packageDir = resolve(argument("--package-dir"));
 const stockRoot = resolve(argument("--stock-root"));
@@ -52,18 +52,22 @@ const log = (cycle) =>
 	`Local check log ${cycle}:\n${Array.from({ length: LOG_LINES }, (_, i) => (i === Math.floor(LOG_LINES / 2) ? `build ${6 + cycle} green` : `log ${cycle}.${String(i).padStart(5, "0")}: local check ok, port healthy`)).join("\n")}`;
 const RULES = "Use port 4317. Do not deploy this synthetic service. Keep the settings in config/service.json. Set the retry limit to 7 and the request timeout to 2,500 ms.";
 /** One identical script for every arm: a ruling, a long log, a follow-up, then /compact. `notes` drive the scripted B model. */
-const TURNS = [
-	[
-		{ text: RULES, notes: [] },
-		{ text: log(1), notes: [{ section: "state", marker: "build 7 green" }, { section: "files", marker: "config/service.json" }] },
-		{ text: "Port 4319 failed: address in use. Stay on the agreed port.", notes: [{ section: "failedPaths", marker: "Port 4319 failed: address in use." }] },
-	],
-	[
-		{ text: "Use port 4318 now; 4317 no longer applies.", notes: [] },
-		{ text: log(2), notes: [{ section: "state", marker: "build 8 green" }] },
-		{ text: "Continue checking.", notes: [] },
-	],
-];
+// --logs user pastes each log as a user message, which B never shortens and so leaves to the writer; --logs model
+// has the model show it, as a tool's output would be, and the scripted model notes it on the following turn.
+const LOGS = argument("--logs", "user");
+if (!["user", "model"].includes(LOGS)) throw new Error("--logs takes user or model");
+const logNotes = (cycle) => [{ section: "state", marker: `build ${6 + cycle} green` }, ...(cycle === 1 ? [{ section: "files", marker: "config/service.json" }] : [])];
+const TURNS = [1, 2].map((cycle) => {
+	const follow =
+		cycle === 1
+			? { text: "Port 4319 failed: address in use. Stay on the agreed port.", notes: [{ section: "failedPaths", marker: "Port 4319 failed: address in use." }] }
+			: { text: "Continue checking.", notes: [] };
+	return [
+		{ text: cycle === 1 ? RULES : "Use port 4318 now; 4317 no longer applies.", notes: [] },
+		LOGS === "user" ? { text: log(cycle), notes: logNotes(cycle) } : { text: "Run the local check and show its log.", reply: log(cycle), notes: [] },
+		LOGS === "user" ? follow : { ...follow, notes: [...logNotes(cycle), ...follow.notes] },
+	];
+});
 // What the faithful scripted writer records when it can see the marker, and where.
 const FACTS = [
 	{ marker: "Do not deploy this synthetic service.", kind: "instructions" },
@@ -152,7 +156,7 @@ async function worker() {
 		const note = { instructions: [], failedPaths: [], reasons: [], state: [], nextSteps: [], files: [], gaps: [] };
 		for (const fact of FACTS) {
 			if (!serialized.includes(fact.marker)) continue;
-			const source = branchText(fact.marker).find((entry) => entry.message.role === "user");
+			const source = branchText(fact.marker)[0];
 			if (source) note[fact.kind].push({ text: fact.marker, sources: [source.id], ...(fact.kind === "instructions" ? { quote: fact.marker } : {}) });
 		}
 		if (!note.state.length) note.state.push({ text: "The local service check continues.", sources: [manager.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user").id] });
@@ -247,7 +251,7 @@ async function worker() {
 			turn.searched = false;
 			return respond(response, payload.model, payloadTokens, { toolCall: { name: "context_note", args } });
 		}
-		return respond(response, payload.model, payloadTokens, { text: "Checked; continuing." });
+		return respond(response, payload.model, payloadTokens, { text: turn.reply ?? "Checked; continuing." });
 	});
 	server.keepAliveTimeout = 600_000;
 	server.headersTimeout = 610_000;
@@ -308,7 +312,7 @@ async function worker() {
 		await open(stock.SessionManager.create(caseDir, join(caseDir, "sessions")));
 		for (const [cycle, turns] of TURNS.entries()) {
 			for (const scripted of turns) {
-				turn = { notes: [...scripted.notes] };
+				turn = { notes: [...scripted.notes], reply: scripted.reply };
 				const started = performance.now();
 				await session.prompt(scripted.text);
 				result.turnMs += Math.round(performance.now() - started);
@@ -338,6 +342,7 @@ async function worker() {
 				contextTokensAfter: requests.at(-1)?.inputTokens ?? null,
 				userMessagesCarried: checkpoint?.details?.userMessages?.length ?? 0,
 				noteFacts: checkpoint ? Object.values(checkpoint.details.note).reduce((sum, items) => sum + items.length, 0) : 0,
+				...(checkpoint?.details?.preparation?.notesFallback ? { notesFallback: checkpoint.details.preparation.notesFallback } : {}),
 				state: after.state,
 				...(after.code ? { code: after.code } : {}),
 			});
@@ -408,7 +413,7 @@ async function parent() {
 		runnerSha256: createHash("sha256").update(readFileSync(script)).digest("hex"),
 		package: { build: build.build, sourceCommit: build.sourceCommit, sourceHash: build.sourceHash },
 		host: inspectOfficialPi(stockRoot, hostVersion),
-		settings: { cycles: TURNS.length, window: WINDOW, logLines: LOG_LINES, latencyMs, maxRequestsPerArm: MAX_REQUESTS, bridge: Boolean(bridge), syntheticPricePerMillion: { input: 3, output: 15 } },
+		settings: { cycles: TURNS.length, window: WINDOW, logLines: LOG_LINES, logs: LOGS, latencyMs, maxRequestsPerArm: MAX_REQUESTS, bridge: Boolean(bridge), syntheticPricePerMillion: { input: 3, output: 15 } },
 		arms: [],
 	};
 	try {
@@ -417,7 +422,7 @@ async function parent() {
 			const agentDir = join(outputDir, "arms", arm, "agent");
 			rmSync(join(outputDir, "arms", arm), { recursive: true, force: true });
 			mkdirSync(agentDir, { recursive: true });
-			const child = spawn(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", outputDir, "--latency-ms", String(latencyMs), "--window", String(WINDOW), ...(bridge ? ["--bridge", bridge] : []), "--arm", arm], { cwd: outputDir, env: environment(agentDir), stdio: ["ignore", "ignore", "pipe"] });
+			const child = spawn(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", outputDir, "--latency-ms", String(latencyMs), "--window", String(WINDOW), "--logs", LOGS, ...(bridge ? ["--bridge", bridge] : []), "--arm", arm], { cwd: outputDir, env: environment(agentDir), stdio: ["ignore", "ignore", "pipe"] });
 			let stderr = "";
 			child.stderr.on("data", (data) => {
 				stderr = (stderr + data).slice(-2000);
@@ -449,13 +454,14 @@ async function parent() {
 			r.writer?.calls,
 			r.total?.tokens,
 			r.total?.cost,
+			r.arm === "b" ? `${c.filter((x) => x.notesFallback).length}/${c.length}${c.some((x) => x.notesFallback) ? ` (${c.flatMap((x) => (x.notesFallback ? [x.notesFallback] : [])).join(", ")})` : ""}` : "-",
 			r.discardedPreparationCalls,
 			r.total?.unknownWriterUsage,
 			`${probes.filter(([, passed]) => passed).length}/${probes.length}${probes.some(([, passed]) => !passed) ? ` (failed: ${probes.filter(([, passed]) => !passed).map(([name]) => name).join(", ")})` : ""}`,
 			r.errors?.length ? "error" : "ok",
 		].join(" | ");
 	});
-	process.stdout.write(`arm | turn ms | paths | pause ms | fg writer calls | context after | main requests | writer calls | total tokens | synthetic cost | discarded prep | unknown usage | probes | run\n${rows.join("\n")}\n`);
+	process.stdout.write(`arm | turn ms | paths | pause ms | fg writer calls | context after | main requests | writer calls | total tokens | synthetic cost | B fallbacks | discarded prep | unknown usage | probes | run\n${rows.join("\n")}\n`);
 	if (report.arms.some((r) => r.errors?.length)) process.exitCode = 1;
 }
 

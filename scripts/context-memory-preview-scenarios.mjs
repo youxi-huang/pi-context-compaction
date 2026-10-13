@@ -206,7 +206,7 @@ async function worker() {
 			response.writeHead(step.status, { "content-type": "application/json" });
 			return response.end(JSON.stringify({ error: { message: step.message, type: "server_error" } }));
 		}
-		return stream(response, payload.model, "The synthetic port is 4317. Deployment remains unauthorized.", step.promptTokens);
+		return stream(response, payload.model, step.text ?? "The synthetic port is 4317. Deployment remains unauthorized.", step.promptTokens);
 	});
 	// Long local guard work can idle a keep-alive socket; keep it open so only planned failures occur.
 	server.keepAliveTimeout = 600_000;
@@ -702,9 +702,12 @@ async function worker() {
 				writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ previewWorkNotes: { enabled: true } }));
 				defaultSystemPrompt = true;
 				await open(newSession());
-				await seed();
+				// The long log comes from the model, as a tool's output would; a pasted log is left to the writer.
+				plan = (n) => (n === 1 ? { kind: "ok", text: BIG_LOG } : { kind: "ok" });
+				observe("seed", { turns: [await prompt(SOURCE_TEXT), await prompt("Run the local check and show its log.")].map((turn) => turn.sent) });
+				plan = () => ({ kind: "ok" });
 				check("guideline", "With previewWorkNotes on, the system prompt asks the model for work notes", requests.some((r) => r.kind === "main" && r.noteGuideline), requests);
-				const logId = () => manager.getBranch().find((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("local check log"))?.id;
+				const logId = () => manager.getBranch().find((entry) => entry.type === "message" && entry.message.role === "assistant" && JSON.stringify(entry.message.content).includes("local check log"))?.id;
 				const noteEntries = () => manager.getBranch().filter((entry) => entry.type === "custom" && entry.customType === "context-memory-note");
 				const noteResults = () => manager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "context_note");
 				const fact = (text, extra = {}) => ({ text, sources: [sourceId()], ...extra });

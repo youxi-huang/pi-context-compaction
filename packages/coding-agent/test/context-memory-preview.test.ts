@@ -1748,8 +1748,10 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 			message: { role: "user", content: text, timestamp: 1 },
 		});
 	}
-	function reply(id: string): void {
-		session.append({ type: "message", id, parentId: session.getLeafId(), timestamp, message: assistant() });
+	function reply(id: string, text?: string): void {
+		const message = assistant();
+		if (text) message.content = [{ type: "text", text }];
+		session.append({ type: "message", id, parentId: session.getLeafId(), timestamp, message });
 	}
 	/** A turn in which the model records a work note, in the order stock Pi appends it. */
 	function noteTurn(id: string, data: JsonObject, text = `Continue with ${id}.`): void {
@@ -1789,11 +1791,12 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 		});
 		reply(`reply-${id}`);
 	}
+	/** A long tool-style output from the model, then a note, then a newer ruling. */
 	function history(): void {
-		user("trace-1", trace);
-		reply("trace-reply-1");
+		user("trace-1", "Run the local check.");
+		reply("trace-reply-1", trace);
 		noteTurn("work-1", {
-			state: [{ text: "The local trace shows port 4317 healthy.", sources: ["trace-1"] }],
+			state: [{ text: "The local trace shows port 4317 healthy.", sources: ["trace-reply-1"] }],
 			reasons: [
 				{
 					text: "4317 is the agreed port.",
@@ -1827,7 +1830,7 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 		expect(value.details?.note.instructions).toEqual([]);
 		expect(value.firstKeptEntryId).toBe("work-1");
 		expect(value.summary).toContain(JSON.stringify({ entryId: "source-1", text: sourceText }));
-		expect(value.summary).toContain('{"entryId":"trace-1","start":"Trace:\\nlocal check ok');
+		expect(value.summary).toContain(JSON.stringify({ entryId: "trace-1", text: "Run the local check." }));
 		expect(value.summary).not.toContain("4318");
 		commit(value, "checkpoint-1");
 		expect(store.status(session).state).toBe("ready");
@@ -1867,15 +1870,19 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 	});
 	it("carries earlier instructions unchanged and leaves a note that supersedes their source to the writer", async () => {
 		commit(await controller.compact(event(), ctx), "checkpoint-1");
-		user("trace-1", trace);
-		reply("trace-reply-1");
-		noteTurn("work-1", { state: [{ text: "The trace is healthy.", sources: ["trace-1"] }] });
+		user("trace-1", "Run the local check.");
+		reply("trace-reply-1", trace);
+		noteTurn("work-1", { state: [{ text: "The trace is healthy.", sources: ["trace-reply-1"] }] });
 		const carried = await controller.compact(event(), ctx);
 		expect(carried.details?.preparation?.path).toBe("notes");
 		expect(carried.details?.note.instructions).toEqual(note().instructions);
 		noteTurn("work-2", {
 			state: [
-				{ text: "The deployment permission no longer applies.", sources: ["trace-1"], supersedes: ["source-1"] },
+				{
+					text: "The deployment permission no longer applies.",
+					sources: ["trace-reply-1"],
+					supersedes: ["source-1"],
+				},
 			],
 		});
 		const value = await controller.compact(event(), ctx);
@@ -1884,31 +1891,30 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 		expect(JSON.stringify(requests[1])).toContain("The deployment permission no longer applies.");
 	});
 	it("leaves a commit that would keep half the threshold or more in context to the writer", async () => {
-		user("trace-1", trace);
-		reply("trace-reply-1");
-		// The note's own turn stays verbatim: about 60k estimated tokens, above half of the 102,400 threshold.
-		noteTurn(
-			"work-1",
-			{ state: [{ text: "The long check passed.", sources: ["trace-1"] }] },
-			`Check:\n${"local check ok, port 4317 healthy\n".repeat(7000)}`,
-		);
+		user("trace-1", "Run the local check.");
+		reply("trace-reply-1", trace);
+		noteTurn("work-1", { state: [{ text: "The trace is healthy.", sources: ["trace-reply-1"] }] });
+		// Everything after the last note stays verbatim: here about 60k estimated tokens, above half of 102,400.
+		user("later-1", "Show the full log.");
+		reply("later-reply-1", `Log:\n${"local check ok, port 4317 healthy\n".repeat(7000)}`);
 		const value = await controller.compact(event(), ctx);
-		expect(value.details?.preparation?.path).toBe("sync");
+		expect(value.details?.preparation).toMatchObject({ path: "sync", notesFallback: "fit" });
 		expect(requests.length).toBeGreaterThan(0);
 		expect(controller.status(ctx).calls).toMatchObject({ compactionCalls: requests.length, unsettled: 0 });
 	});
-	it("leaves user messages beyond their bound to the writer, which receives the notes and is journaled", async () => {
-		for (let index = 0; index < 12; index++) {
-			user(`long-${index}`, `Requirement ${index}: ${"keep the audit trail intact. ".repeat(100)}`);
-			reply(`long-reply-${index}`);
-		}
-		noteTurn("work-1", { state: [{ text: "Twelve requirements were reviewed.", sources: ["long-0"] }] });
+	it("never shortens a user message: a paste too long to carry in full goes to the writer, which reads all of it", async () => {
+		const lines = Array.from({ length: 600 }, (_, index) => `line ${index}: local check ok, port 4317 healthy`);
+		lines[300] = "build 7 green";
+		user("paste-1", `Here is the log:\n${lines.join("\n")}`);
+		reply("paste-reply-1");
+		noteTurn("work-1", { state: [{ text: "The pasted log was checked.", sources: ["paste-1"] }] });
 		const value = await controller.compact(event(), ctx);
-		expect(value.details?.preparation?.path).toBe("sync");
+		expect(value.details?.preparation).toMatchObject({ path: "sync", notesFallback: "user-messages" });
 		expect(value.details?.userMessages).toBeUndefined();
-		expect(requests).toHaveLength(1);
-		expect(JSON.stringify(requests[0])).toContain("Twelve requirements were reviewed.");
-		expect(controller.status(ctx).calls).toMatchObject({ calls: 1, compactionCalls: 1, unsettled: 0 });
+		// The writer receives the whole paste, its middle included, and the note as a hint; the call is journaled.
+		expect(JSON.stringify(requests)).toContain("build 7 green");
+		expect(JSON.stringify(requests)).toContain("The pasted log was checked.");
+		expect(controller.status(ctx).calls).toMatchObject({ compactionCalls: requests.length, unsettled: 0 });
 	});
 	it("accepts only data with real sources: no instructions, no line breaks, no counterfeit sources or quotes", () => {
 		const branch = session.getBranch();

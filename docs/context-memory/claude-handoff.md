@@ -4,7 +4,7 @@
 
 This section is the brief for the next session. It supersedes the original
 handoff below wherever they differ; the original stays for context. Steps 1–7
-are done, with the maintainer's follow-ups; one decision is open, below.
+are done, with the maintainer's follow-ups. No decision is open.
 
 ### Where things are
 
@@ -68,16 +68,18 @@ The maintainer ruled on the four questions step 7 raised:
    maintainer may use a DeepSeek key). Meanwhile one run used Haiku subagents
    through the runner's `--bridge`; see the [validation record](validation.md).
 
-### Open decision
+### B and long user messages
 
-**B loses facts in the middle of a long user message.** The checkpoint keeps
-the start and end of a long paste, and a writer that later consolidates sees
-only that and an 80-character opening. In the Haiku run the model did not note
-either pasted log, so a mid-log fact was lost on B's path and kept by sync and
-A. Options: B hands the compaction to the writer whenever a covered user
-message would be shortened; the session writer receives the full text of the
-messages a notes checkpoint carried; or accept it and rely on
-`context_history`.
+The Haiku run showed B losing a fact from the middle of a pasted log, because
+the checkpoint kept only the start and end of long user messages. The
+maintainer chose to keep B's promise instead: no user message is ever
+shortened. A notes commit happens only when every covered user message fits in
+full within the section's bound; otherwise the writer compacts and reads them
+all. `details.preparation.notesFallback` records each reason B fell back, and
+the A/B runner reports the rate with `--logs user` (pasted logs) and `--logs
+model` (logs from the model). Giving the session writer the full text of
+carried messages stays deferred; reconsider it if `user-messages` fallbacks
+turn out frequent in real sessions.
 
 ### Rules that keep this lean
 

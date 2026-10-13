@@ -338,19 +338,20 @@ merged note covers the branch through the last work note and is committed
 through the prefix path above, so everything after it stays verbatim.
 
 The extension then appends the user's own messages up to that point, verbatim
-and in order, as JSON lines after the note. A long message keeps its start and
-end; the model reads the rest with `context_history`. The checkpoint records
+and in order, as JSON lines after the note. No message is ever shortened. The
+checkpoint records
 their entry IDs, and every full validation renders them again from the
 originals, so an edited message blocks the session like an edited quote.
 
 The writer compacts synchronously instead, with the notes as hints, when those
-messages exceed 5% of the compaction threshold (at most 6,000 estimated
-tokens), when a note supersedes the source of a carried instruction, when the
+messages do not fit in full within 5% of the compaction threshold (at most 6,000
+estimated tokens), as with a long pasted log, when a note supersedes the source of a carried instruction, when the
 merge exceeds the note schema or budget, when the prefix conditions fail, when
 the commit would leave half the compaction threshold or more in context (the
 turn of the last note stays verbatim), or with custom focus. That writer also reads the user messages an earlier notes
 checkpoint carried. `details.preparation.path` is `notes` for these
-checkpoints, with `noteIds` naming the merged notes.
+checkpoints, with `noteIds` naming the merged notes; when B leaves a compaction
+to the writer, `details.preparation.notesFallback` records why.
 
 ## Verification
 

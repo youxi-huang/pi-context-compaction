@@ -104,7 +104,6 @@ function provenance(identity = writer()) {
 		writerModel: identity.model,
 		writerEffort: identity.effort,
 		callIds: ["synthetic-call-1"],
-		reservationIds: ["synthetic-reservation-1"],
 	};
 }
 
@@ -137,9 +136,6 @@ describe("independent preview preparation: immutable candidates", () => {
 		expect(frozen.noteBudget.hardTokens).toBe(4000);
 		expect(frozen.candidateId).not.toBe(freezePreparationInput(input({ sessionId: "other-session" })).candidateId);
 		expect(frozen.candidateId).not.toBe(freezePreparationInput(input({ epoch: 4 })).candidateId);
-		expect(frozen.candidateId).not.toBe(
-			freezePreparationInput(input({ parentCandidateId: "parent-candidate" })).candidateId,
-		);
 	});
 	it("freezes the finalized output and preserves actual writer/accounting provenance", () => {
 		const original = note();
@@ -207,8 +203,7 @@ describe("independent preview preparation: immutable candidates", () => {
 	it("refuses missing or ambiguous paid-call accounting links", () => {
 		for (const actual of [
 			{ ...provenance(), callIds: [] },
-			{ ...provenance(), reservationIds: [] },
-			{ ...provenance(), callIds: ["same", "same"], reservationIds: ["one", "two"] },
+			{ ...provenance(), callIds: ["same", "same"] },
 		]) {
 			expect(() =>
 				finalizePreparation(freezePreparationInput(input()), { note: note(), provenance: actual }),

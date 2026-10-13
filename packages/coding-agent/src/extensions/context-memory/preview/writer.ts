@@ -34,25 +34,12 @@ export type PreviewComplete = (
 	options?: ModelsSimpleStreamOptions,
 ) => Promise<AssistantMessage>;
 
-// Stop recursive type expansion at opaque schema/custom payloads; runtime freezing still covers their full data.
-type DispatchSnapshot<T, Depth extends readonly number[] = [1, 2, 3, 4, 5]> = T extends AbortSignal
-	? T
-	: T extends (...arguments_: never[]) => unknown
-		? T
-		: T extends object
-			? Depth extends readonly [number, ...infer Rest extends readonly number[]]
-				? { readonly [Key in keyof T]: DispatchSnapshot<T[Key], Rest> }
-				: unknown
-			: T;
-
-/** Exact request values presented for reservation; message/model objects are detached and deeply frozen. */
+/** What is about to be sent, as recorded before dispatch: identities and effort, never request content. */
 export interface WriterDispatchRequest {
 	readonly callIndex: number;
 	readonly phase: WriterCallRecord["phase"];
-	readonly model: DispatchSnapshot<Model<Api>>;
-	readonly context: DispatchSnapshot<Context>;
-	readonly request: DispatchSnapshot<ModelsSimpleStreamOptions> | undefined;
-	readonly config: Readonly<MemoryConfig>;
+	/** `provider/model` actually selected for this call. */
+	readonly model: string;
 	readonly writerEffort: ThinkingLevel | "off";
 }
 
@@ -66,15 +53,15 @@ export interface WriterDispatchResult {
 	readonly outcome: "success" | "failed" | "cancelled";
 	readonly elapsedMs: number;
 	/** Raw provider usage, including optional breakdowns; absent means unknown, never zero. */
-	readonly usage?: DispatchSnapshot<Usage>;
+	readonly usage?: Readonly<Usage>;
 	/** Interrupted providers may expose only a cumulative lower bound. */
 	readonly usageComplete?: boolean;
 }
 
 export interface WriterCallHooks {
-	/** Resolve only after the caller has durably reserved this request. Throw to refuse dispatch. */
+	/** Resolve only after the caller has durably recorded this call. Throw to refuse dispatch. */
 	beforeDispatch: (call: WriterDispatchRequest) => string | Promise<string>;
-	/** Invoked exactly once for each successful reservation, including cancellation before dispatch. */
+	/** Invoked exactly once for each recorded call, including cancellation before dispatch. */
 	afterDispatch: (call: WriterDispatchResult) => void | Promise<void>;
 }
 
@@ -313,12 +300,6 @@ function assertRepairPreserved(before: MemoryNote, after: MemoryNote): void {
 		);
 }
 
-function freezeDispatch(value: unknown): void {
-	if (!value || typeof value !== "object" || value instanceof AbortSignal) return;
-	for (const child of Object.values(value)) freezeDispatch(child);
-	Object.freeze(value);
-}
-
 /** Sequential chunks when fixed; one optional size-only repair across the whole operation. No model fallback. */
 export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMemoryResult> {
 	if (
@@ -359,21 +340,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		const hooks = options.callHooks;
 		let callId: string | undefined;
 		if (hooks) {
-			// AbortSignal is a live cancellation capability, not cloneable request data. Preserve that identity;
-			// detach everything else so a reservation observer cannot change the eventual provider request.
-			const { signal, ...requestData } = request ?? {};
-			const snapshot = structuredClone({ model: selected, context, config: options.config, request: requestData });
-			const reservation: WriterDispatchRequest = {
-				callIndex,
-				phase: callPhase,
-				model: snapshot.model,
-				context: snapshot.context,
-				config: snapshot.config,
-				writerEffort,
-				request: request === undefined ? undefined : { ...snapshot.request, ...(signal ? { signal } : {}) },
-			};
-			freezeDispatch(reservation);
-			callId = await hooks.beforeDispatch(reservation);
+			callId = await hooks.beforeDispatch({ callIndex, phase: callPhase, model: modelName(selected), writerEffort });
 			if (typeof callId !== "string" || !callId)
 				throw new Error("CONTEXT_WRITER_ACCOUNTING: dispatch reservation did not return an identity");
 		}
@@ -420,6 +387,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 					: response?.stopReason === "stop" && !response.content.some((block) => block.type === "toolCall")
 						? "success"
 						: "failed";
+			const reported = response ? reportedUsage(response) : undefined;
 			const settlement: WriterDispatchResult = {
 				callIndex,
 				callId,
@@ -429,9 +397,8 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 				elapsedMs,
 				usageComplete:
 					response !== undefined && response.stopReason !== "error" && response.stopReason !== "aborted",
-				...(response && reportedUsage(response) ? { usage: structuredClone(reportedUsage(response)) } : {}),
+				...(reported ? { usage: structuredClone(reported) } : {}),
 			};
-			freezeDispatch(settlement);
 			try {
 				await hooks.afterDispatch(settlement);
 			} catch (error) {

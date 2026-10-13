@@ -31,6 +31,7 @@ import {
 	validateNote,
 } from "../notes.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
+import type { CallJournal } from "./call-journal.ts";
 import type {
 	InactiveReason,
 	PreviewCompaction,
@@ -39,8 +40,8 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
+import type { PreviewPreparation } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
-import type { PreviewPreparationCoordinator } from "./preparation-coordinator.ts";
 import {
 	modelName,
 	resolveWriterModel,
@@ -146,6 +147,20 @@ export function prefixCut(
 		if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
 	}
 	return undefined;
+}
+
+/** The interval a preparation belongs to: the latest checkpoint on the branch, or none yet. */
+export function checkpointInterval(branch: readonly SessionEntry[]): string {
+	return branch.findLast((entry) => entry.type === "compaction")?.id ?? "none";
+}
+
+/**
+ * Context size at which optional preparation starts: a band below Pi's default threshold compaction point,
+ * 12.5% of it and between 8,192 and 32,768 tokens. Pi's own compaction settings are not visible to extensions.
+ */
+export function preparationStart(contextWindow: number): number {
+	const threshold = contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	return threshold - Math.min(32_768, Math.max(8_192, Math.floor(threshold * 0.125)));
 }
 
 /** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
@@ -287,7 +302,9 @@ export interface PreviewControllerOptions {
 	configError?: string;
 	/** The running Pi version; tests substitute other releases. */
 	hostVersion?: string;
-	preparation?: PreviewPreparationCoordinator;
+	preparation?: PreviewPreparation;
+	/** Records every writer call; without one, calls are observed only in memory. */
+	journal?: CallJournal;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -305,9 +322,10 @@ export class PreviewMemoryController {
 	private lastProgress?: WriterProgress;
 	private verified?: VerifiedBranch;
 	readonly notices = new NoticeGate();
-	private readonly preparation?: PreviewPreparationCoordinator;
+	private readonly preparation?: PreviewPreparation;
+	private readonly journal?: CallJournal;
 	private lastCompaction?: {
-		path: "complete" | "prefix" | "merge" | "sync";
+		path: "complete" | "prefix" | "sync";
 		candidateId?: string;
 		foregroundCalls: number;
 		stageMs: number;
@@ -321,6 +339,7 @@ export class PreviewMemoryController {
 		this.configError = options.configError;
 		this.hostVersion = options.hostVersion ?? VERSION;
 		this.preparation = options.preparation;
+		this.journal = options.journal;
 	}
 
 	bindTools(tools: () => Tool[]): void {
@@ -365,25 +384,26 @@ export class PreviewMemoryController {
 		};
 	}
 
-	/** A public settled-turn event only schedules work; no commit state is entered here. */
+	/**
+	 * A settled turn may start optional preparation, once per checkpoint interval, when the context has entered
+	 * the band just below Pi's compaction threshold. No commit state is entered here.
+	 */
 	prepare(ctx: ExtensionContext): void {
 		if (!this.preparation?.enabled || !this.config || !ctx.model) return;
 		try {
-			const lastCheckpointId =
-				[...ctx.sessionManager.getBranch()].reverse().find((entry) => entry.type === "compaction")?.id ?? null;
-			if (this.preparation.shouldSkipPreparation(ctx.sessionManager.getSessionId(), lastCheckpointId)) return;
+			const sessionId = ctx.sessionManager.getSessionId();
+			const interval = checkpointInterval(ctx.sessionManager.getBranch());
+			if (!this.preparation.mayStart(sessionId, interval)) return;
+			const usage = ctx.getContextUsage();
+			if (!usage?.tokens || usage.tokens < preparationStart(usage.contextWindow)) return;
 			if (this.safeInactive(ctx) || this.configError || ctx.hasPendingMessages()) return;
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
-			if (
-				this.store.inspect(ctx.sessionManager).state !== "ready" ||
-				this.stickyFailures.has(ctx.sessionManager.getSessionId())
-			)
-				return;
+			if (this.store.inspect(ctx.sessionManager).state !== "ready" || this.stickyFailures.has(sessionId)) return;
 			const projection = ctx.sessionManager.buildSessionProjection();
 			assertToolPairs(projection.messages);
 			const last = [...projection.messages].reverse().find((message) => message.role !== "system");
 			if (last?.role !== "assistant" || !(last.stopReason === "stop" || last.stopReason === "length")) return;
-			this.preparation.activate(ctx.sessionManager.getSessionId());
+			this.preparation.activate(sessionId);
 			const submission = this.preparationSubmission(ctx);
 			const branch = structuredClone(ctx.sessionManager.getBranch());
 			const leafId = ctx.sessionManager.getLeafId();
@@ -391,7 +411,6 @@ export class PreviewMemoryController {
 			const previous = latestMemory(branch);
 			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
 			const uncovered = branch.slice(after + 1);
-			const newSourceTokens = compactedSourceTokens(uncovered);
 			const input = freezePreparationInput({
 				...submission,
 				branch,
@@ -416,26 +435,28 @@ export class PreviewMemoryController {
 				: { messages, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
 			const config = { ...this.config, noteRepair: false };
 			const thinking = ctx.thinkingLevel;
-			this.preparation.start({
-				input,
-				newSourceTokens,
-				run: (signal, callHooks) =>
-					writeMemory({
-						config,
-						registry: capturedRegistry,
-						sessionModel,
-						sessionThinkingLevel: thinking,
-						prefix: config.writerModel === SESSION_WRITER ? prefix : undefined,
-						previous: previous?.memory.note,
-						increments,
-						uncovered,
-						branch,
-						noteTokens: submission.noteBudget.hardTokens,
-						baseNoteTokens: submission.noteBudget.baseTokens,
-						signal,
-						callHooks,
-					}),
-			});
+			this.preparation.start(
+				{
+					input,
+					run: (signal, callHooks) =>
+						writeMemory({
+							config,
+							registry: capturedRegistry,
+							sessionModel,
+							sessionThinkingLevel: thinking,
+							prefix: config.writerModel === SESSION_WRITER ? prefix : undefined,
+							previous: previous?.memory.note,
+							increments,
+							uncovered,
+							branch,
+							noteTokens: submission.noteBudget.hardTokens,
+							baseNoteTokens: submission.noteBudget.baseTokens,
+							signal,
+							callHooks,
+						}),
+				},
+				interval,
+			);
 		} catch {
 			// Optional work must never call fail(), begin() or abort the user's task.
 		}
@@ -551,13 +572,19 @@ export class PreviewMemoryController {
 	/** Machine-readable status. Earlier fields keep their names; protection and eligibility are additions. */
 	status(ctx: ExtensionContext) {
 		const diagnosis = this.diagnose(ctx);
-		let prepared: ReturnType<PreviewPreparationCoordinator["status"]> | undefined;
+		let prepared: ReturnType<PreviewPreparation["status"]> | undefined;
 		if (this.preparation) {
 			try {
 				prepared = this.preparation.status(this.preparation.enabled ? this.preparationSubmission(ctx) : undefined);
 			} catch {
 				prepared = { ...this.preparation.status(), state: "paused", reason: "writer-or-source-unavailable" };
 			}
+		}
+		let calls: ReturnType<CallJournal["summary"]> | undefined;
+		try {
+			calls = this.journal?.summary(ctx.sessionManager.getSessionId());
+		} catch {
+			// The journal is advisory for status; its own gap state is reported when it can be read.
 		}
 		return {
 			build: diagnosis.build,
@@ -570,7 +597,8 @@ export class PreviewMemoryController {
 			checkpointId: diagnosis.checkpointId,
 			noteBudgetMode: this.config?.noteTokens === undefined ? "tiered" : "fixed",
 			noteRepair: this.config?.noteRepair,
-			manualOnly: true,
+			// Threshold compaction after a completed turn is handled; overflow recovery still needs /compact.
+			manualOnly: false,
 			lastWriter: this.lastProgress,
 			host: diagnosis.host,
 			supportedHost: diagnosis.supportedHost,
@@ -578,6 +606,7 @@ export class PreviewMemoryController {
 			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
 			manualCompaction: diagnosis.manualCompaction,
 			...(prepared ? { preparation: prepared } : {}),
+			...(calls ? { calls } : {}),
 			...(this.lastCompaction ? { lastCompaction: this.lastCompaction } : {}),
 		};
 	}
@@ -671,28 +700,6 @@ export class PreviewMemoryController {
 	sessionStart(ctx: ExtensionContext): void {
 		this.forgetVerified();
 		this.preparation?.activate(ctx.sessionManager.getSessionId());
-		if (this.preparation?.enabled) {
-			try {
-				assertPreviewSession(ctx.sessionManager, this.hostVersion);
-				const claims = ctx.sessionManager.getBranch().flatMap((entry) => {
-					if (entry.type !== "compaction" || !isRecord(entry.details)) return [];
-					const prep = entry.details.preparation;
-					return isRecord(prep) &&
-						typeof prep.candidateId === "string" &&
-						Array.isArray(prep.callIds) &&
-						prep.callIds.every((id) => typeof id === "string")
-						? [{ candidateId: prep.candidateId, callIds: prep.callIds as string[] }]
-						: [];
-				});
-				this.preparation.reconcile(
-					ctx.sessionManager.getSessionId(),
-					claims,
-					this.store.inspect(ctx.sessionManager).state === "ready",
-				);
-			} catch {
-				// Optional accounting reconciliation cannot change core protection or start a writer.
-			}
-		}
 		const reason = this.safeInactive(ctx);
 		if (reason) {
 			this.standAside(ctx, reason);
@@ -775,6 +782,26 @@ export class PreviewMemoryController {
 		});
 	}
 
+	/**
+	 * Whether Pi's threshold compaction may run now: a completed turn, no queued input and a session that is
+	 * not blocked. Otherwise it is left for a later settled turn and nothing is recorded; a blocked session
+	 * still needs an explicit /compact.
+	 */
+	thresholdReady(ctx: ExtensionContext): boolean {
+		try {
+			const session = ctx.sessionManager;
+			if (this.configError || !this.config || ctx.hasPendingMessages()) return false;
+			if (this.stickyFailures.has(session.getSessionId()) || this.store.inspect(session).state !== "ready")
+				return false;
+			const last = [...session.buildSessionProjection().messages]
+				.reverse()
+				.find((message) => message.role !== "system");
+			return last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+		} catch {
+			return false;
+		}
+	}
+
 	async compact(event: SessionBeforeCompactEvent, ctx: ExtensionContext): Promise<PreviewCompaction> {
 		const started = performance.now();
 		this.forgetVerified();
@@ -785,8 +812,9 @@ export class PreviewMemoryController {
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
-			if (event.reason !== "manual" || event.willRetry) {
-				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: this preview compacts only on an explicit /compact");
+			// Pi's threshold compaction runs after a completed turn, exactly where /compact may run.
+			if (!(event.reason === "manual" || event.reason === "threshold") || event.willRetry) {
+				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: overflow recovery needs an explicit /compact");
 			}
 			event.signal.throwIfAborted();
 			const branch = structuredClone(ctx.sessionManager.getBranch());
@@ -804,8 +832,8 @@ export class PreviewMemoryController {
 				throw new Error("CONTEXT_TOOL_BOUNDARY: manual compaction requires a completed turn with no queued input");
 			}
 			if (!ctx.model || !ctx.sessionManager.getLeafId()) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-			// An explicit manual retry replaces blocked/pending with a new durable pending attempt.
-			const attempt = this.store.begin(ctx.sessionManager, true);
+			// Only an explicit manual retry replaces blocked/pending with a new durable pending attempt.
+			const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual");
 			this.observedFailures.delete(attempt.sessionId);
 			const snapshot = {
 				sessionId: attempt.sessionId,
@@ -858,14 +886,13 @@ export class PreviewMemoryController {
 			const submission = this.preparation?.enabled
 				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }
 				: undefined;
-			const available = submission ? this.preparation?.available(submission) : undefined;
-			let path: "complete" | "prefix" | "merge" | "sync" =
-				available?.classification.status === "current-full" ? "complete" : available ? "merge" : "sync";
-			const prepared = available?.result.candidate;
+			const available = submission ? this.preparation?.take(submission) : undefined;
+			let path: "complete" | "prefix" | "sync" =
+				available?.classification.status === "current-full" ? "complete" : "sync";
 			const systemTokens = textTokens(ctx.getSystemPrompt());
-			if (path === "merge" && available && prepared && interrupted === undefined) {
+			if (path === "sync" && available && interrupted === undefined) {
 				// D16: commit the prepared note for the prefix it covers and keep everything after it verbatim.
-				const end = reusablePrefix(prepared, available.classification, branch);
+				const end = reusablePrefix(available.candidate, available.classification, branch);
 				const start = end === undefined ? undefined : prefixCut(branch, projection, end, cut);
 				if (end !== undefined && start !== undefined) {
 					const retained = retainedFrom(start);
@@ -874,7 +901,7 @@ export class PreviewMemoryController {
 					const beforeTokens =
 						systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
 					const summary = fittedSummary(
-						available.result.written.note,
+						available.written.note,
 						branch,
 						retainedTokens,
 						Math.floor(budget.threshold * 0.8),
@@ -889,14 +916,16 @@ export class PreviewMemoryController {
 					}
 				}
 			}
+			// A candidate that is not committed as it stands is discarded; its calls remain in the journal.
+			const reused = path === "sync" ? undefined : available;
 			let written: WriteMemoryResult;
-			if ((path === "complete" || path === "prefix") && available) {
+			if (reused) {
 				const note = validateNote(
-					structuredClone(available.result.written.note),
+					structuredClone(reused.written.note),
 					branch.slice(0, coveredIndex + 1),
 					policy.hardTokens,
 				);
-				written = { ...available.result.written, note, usage: sumMemoryUsage([]), chunkCount: 0 };
+				written = { ...reused.written, note, usage: sumMemoryUsage([]), chunkCount: 0 };
 				this.lastProgress = {
 					writerModel: written.writerModel,
 					writerEffort: written.writerEffort,
@@ -906,39 +935,21 @@ export class PreviewMemoryController {
 					writerCallDetails: [],
 				};
 			} else {
-				const covered = prepared
-					? branch.findIndex((entry) => entry.id === prepared.input.coverage.coveredThrough)
-					: after;
-				let uncovered = branch.slice(covered + 1);
-				// New focus or tighter budgets may require a rewrite without a readable tail.
-				if (!uncovered.some((entry) => compactedSourceTokens([entry]) > 0)) uncovered = branch.slice(after + 1);
-				const frozen =
-					submission && this.preparation
-						? freezePreparationInput({
-								...submission,
-								coveredThrough: attempt.leafId,
-								processedUserEntryIds: branch
-									.filter((entry) => entry.type === "message" && entry.message.role === "user")
-									.map((entry) => entry.id),
-							})
-						: undefined;
 				written = await writeMemory({
 					config: this.config,
 					registry: ctx.modelRegistry,
 					sessionModel: ctx.model,
 					prefix: sessionWriter ? prefix : undefined,
 					sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
-					previous: available ? structuredClone(available.result.written.note) : previous?.memory.note,
+					previous: previous?.memory.note,
 					increments,
-					uncovered,
+					uncovered: branch.slice(after + 1),
 					branch,
 					noteTokens: policy.hardTokens,
 					baseNoteTokens: policy.baseTokens,
 					signal: event.signal,
 					customInstructions: event.customInstructions,
-					callHooks: frozen
-						? this.preparation?.foregroundHooks(frozen, path === "merge" ? "merge" : "sync")
-						: undefined,
+					callHooks: this.journal?.hooks(attempt.sessionId, "compaction", attempt.lastCheckpointId ?? "none"),
 					onProgress: (progress) => {
 						this.lastProgress = progress;
 					},
@@ -984,8 +995,11 @@ export class PreviewMemoryController {
 									version: 1 as const,
 									strategy: "background" as const,
 									path,
-									...(prepared
-										? { candidateId: prepared.input.candidateId, callIds: [...prepared.provenance.callIds] }
+									...(reused
+										? {
+												candidateId: reused.candidate.input.candidateId,
+												callIds: [...reused.candidate.provenance.callIds],
+											}
 										: {}),
 								},
 							}
@@ -993,11 +1007,11 @@ export class PreviewMemoryController {
 				},
 			};
 			this.store.stage(ctx.sessionManager, attempt, candidate);
-			this.preparation?.checkpointStaged(prepared?.input.candidateId);
+			this.preparation?.staged(reused?.candidate.input.candidateId);
 			this.stagedCompactions.add(attempt.sessionId);
 			this.lastCompaction = {
 				path,
-				...(prepared ? { candidateId: prepared.input.candidateId } : {}),
+				...(reused ? { candidateId: reused.candidate.input.candidateId } : {}),
 				foregroundCalls: this.lastProgress?.writerCalls ?? 0,
 				stageMs: Math.round(performance.now() - started),
 				diskConfirmed: false,
@@ -1031,21 +1045,7 @@ export class PreviewMemoryController {
 				this.lastCompaction.diskConfirmed = true;
 				if (started !== undefined) this.lastCompaction.pauseMs = Math.round(performance.now() - started);
 			}
-			const prep = event.compactionEntry.details;
-			if (
-				isRecord(prep) &&
-				isRecord(prep.preparation) &&
-				typeof prep.preparation.candidateId === "string" &&
-				Array.isArray(prep.preparation.callIds) &&
-				prep.preparation.callIds.every((id) => typeof id === "string")
-			) {
-				this.preparation?.confirmCommitted(
-					ctx.sessionManager.getSessionId(),
-					prep.preparation.candidateId,
-					prep.preparation.callIds as string[],
-				);
-			}
-			this.preparation?.checkpointCommitted();
+			this.preparation?.committed();
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
 		} catch (error) {
@@ -1076,21 +1076,7 @@ export class PreviewMemoryController {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
 			this.store.recover(ctx.sessionManager, leaf);
-			const details = leaf.details;
-			if (
-				isRecord(details) &&
-				isRecord(details.preparation) &&
-				typeof details.preparation.candidateId === "string" &&
-				Array.isArray(details.preparation.callIds) &&
-				details.preparation.callIds.every((id) => typeof id === "string")
-			) {
-				this.preparation?.confirmCommitted(
-					ctx.sessionManager.getSessionId(),
-					details.preparation.candidateId,
-					details.preparation.callIds as string[],
-				);
-			}
-			this.preparation?.checkpointCommitted();
+			this.preparation?.committed();
 			this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());

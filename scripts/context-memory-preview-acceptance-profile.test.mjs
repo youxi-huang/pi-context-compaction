@@ -22,7 +22,7 @@ const CASES = [
 	["provider-retry-exhausted", "retries-exhausted no-marker next-prompt-sent", "retries-exhausted no-marker next-prompt-sent"],
 	["legacy-retry-marker", "blocked-before-retry unstaged-not-recovered explicit-retry-recovers unfinished-request-kept next-prompt-sent"],
 	["context-overflow", "no-native-summary manual-compact-recovers unfinished-request-kept next-prompt-sent", "native-recovers"],
-	["threshold", "no-native-summary blocked-until-compact notice-asks-for-compact one-notice-per-input manual-compact-recovers", "native-compacts"],
+	["threshold", "no-native-summary threshold-checkpoint no-marker next-prompt-sent", "native-compacts"],
 	["image-input", "text-after-image-sent no-marker notice-explains-image", "image-sent"],
 	["protected-image", "fixture-protected image-blocked marker-kept one-notice notice-explains-image stays-blocked"],
 	["native-checkpoint-session", "fixture-native-checkpoint no-marker-on-open one-notice-on-open prompt-sent compact-left-to-pi"],

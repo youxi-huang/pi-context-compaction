@@ -28,7 +28,7 @@ const SCENARIOS = [
 	scenario("provider-retry-exhausted", exhausted, exhausted),
 	scenario("legacy-retry-marker", "blocked-before-retry unstaged-not-recovered explicit-retry-recovers unfinished-request-kept next-prompt-sent"),
 	scenario("context-overflow", "no-native-summary manual-compact-recovers unfinished-request-kept next-prompt-sent", "native-recovers"),
-	scenario("threshold", "no-native-summary blocked-until-compact notice-asks-for-compact one-notice-per-input manual-compact-recovers", "native-compacts"),
+	scenario("threshold", "no-native-summary threshold-checkpoint no-marker next-prompt-sent", "native-compacts"),
 	scenario("image-input", "text-after-image-sent no-marker notice-explains-image", "image-sent"),
 	scenario("protected-image", "fixture-protected image-blocked marker-kept one-notice notice-explains-image stays-blocked"),
 	scenario("native-checkpoint-session", "fixture-native-checkpoint no-marker-on-open one-notice-on-open prompt-sent compact-left-to-pi"),

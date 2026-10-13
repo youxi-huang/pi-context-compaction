@@ -22,7 +22,6 @@ export interface PreparationWriterIdentity {
 export interface PreparationInput {
 	sessionId: string;
 	epoch: number;
-	parentCandidateId?: string;
 	branch: readonly SessionEntry[];
 	coveredThrough: string;
 	/** Cumulative delivered-source horizon, including inherited checkpoint provenance; no semantic attestation. */
@@ -34,7 +33,6 @@ export interface PreparationInput {
 export interface PreparationSnapshot {
 	readonly version: 1;
 	readonly candidateId: string;
-	readonly parentCandidateId: string | null;
 	readonly sessionId: string;
 	readonly epoch: number;
 	/** Ancestry at dispatch. Appends are allowed; selecting a sibling is not. */
@@ -58,9 +56,8 @@ export interface PreparationProvenance {
 	writerRole: PreparationWriterIdentity["role"];
 	writerModel: string;
 	writerEffort: ThinkingLevel | "off";
-	/** Identifiers link paid dispatches to the separate preparation accounting records. */
+	/** Identifiers link paid dispatches to their call journal records. */
 	callIds: readonly string[];
-	reservationIds: readonly string[];
 }
 
 export interface PreparationResult {
@@ -189,14 +186,7 @@ function notePolicy(budget: NoteBudget): NoteBudget {
 export function freezePreparationInput(input: PreparationInput): PreparationSnapshot {
 	const branch = structuredClone(input.branch);
 	const end = branch.findIndex((entry) => entry.id === input.coveredThrough);
-	if (
-		!input.sessionId ||
-		!Number.isSafeInteger(input.epoch) ||
-		input.epoch < 0 ||
-		!linearBranch(branch) ||
-		end < 0 ||
-		(input.parentCandidateId !== undefined && !input.parentCandidateId)
-	)
+	if (!input.sessionId || !Number.isSafeInteger(input.epoch) || input.epoch < 0 || !linearBranch(branch) || end < 0)
 		inputError();
 	const baseCheckpoint = lastCheckpoint(branch);
 	if (baseCheckpoint && branch.findIndex((entry) => entry.id === baseCheckpoint.id) > end) inputError();
@@ -216,7 +206,6 @@ export function freezePreparationInput(input: PreparationInput): PreparationSnap
 	const branchAncestry = branch.map((entry) => ({ id: entry.id, parentId: entry.parentId }));
 	const envelope = {
 		version: 1 as const,
-		parentCandidateId: input.parentCandidateId ?? null,
 		sessionId: input.sessionId,
 		epoch: input.epoch,
 		branchAncestry,
@@ -243,7 +232,6 @@ export function finalizePreparation(input: PreparationSnapshot, result: Preparat
 		writerModel: actual.writerModel,
 		writerEffort: actual.writerEffort,
 		callIds: [...actual.callIds],
-		reservationIds: [...actual.reservationIds],
 	};
 	if (
 		provenance.writerRole !== input.writer.role ||
@@ -251,12 +239,7 @@ export function finalizePreparation(input: PreparationSnapshot, result: Preparat
 		provenance.writerEffort !== input.writer.effort
 	)
 		throw new Error("CONTEXT_PREPARATION_WRITER: result writer differs from the frozen configured writer");
-	if (
-		!provenance.callIds.length ||
-		provenance.callIds.length !== provenance.reservationIds.length ||
-		!uniqueIds(provenance.callIds) ||
-		!uniqueIds(provenance.reservationIds)
-	)
+	if (!provenance.callIds.length || !uniqueIds(provenance.callIds))
 		throw new Error("CONTEXT_PREPARATION_PROVENANCE: missing or ambiguous call accounting links");
 	const note = validateNote(
 		structuredClone(result.note),

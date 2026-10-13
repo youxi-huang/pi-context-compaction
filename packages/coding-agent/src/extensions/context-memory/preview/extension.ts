@@ -3,11 +3,11 @@ import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
 import { freezeHistory, historyQuerySchema, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { noteSchema, validateNote } from "../notes.ts";
+import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
 import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
-import { readPreparationConfig } from "./preparation-config.ts";
-import { PreviewPreparationCoordinator } from "./preparation-coordinator.ts";
+import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
 import { resolveWriterModel } from "./writer.ts";
 
 /** Output of a command the user asked for: the UI, or stdout without one. */
@@ -31,11 +31,14 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		// A factory error would make stock Pi drop the extension and permit native compaction.
 		configError = "CONTEXT_CONFIG";
 	}
+	const journal = new CallJournal(agentDir);
+	const preparation = readPreparationSettings(agentDir);
 	const controller = new PreviewMemoryController({
 		config,
 		configError,
 		failureStore: new PreviewFailureStore(agentDir),
-		preparation: new PreviewPreparationCoordinator({ agentDir, settings: readPreparationConfig(agentDir) }),
+		journal,
+		preparation: new PreviewPreparation({ enabled: preparation.enabled, settingsError: preparation.error, journal }),
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
@@ -134,6 +137,9 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 				return undefined;
 			}
 			if (event.reason === "manual") controller.notices.nextEpisode();
+			// Not at a completed turn, or blocked: leave it to a later turn without recording a failure.
+			if (event.reason === "threshold" && !event.willRetry && !controller.thresholdReady(ctx))
+				return { cancel: true };
 			return { compaction: await controller.compact(event, ctx) };
 		} catch (error) {
 			// Cancellation is an explicit result because stock Pi swallows handler exceptions.

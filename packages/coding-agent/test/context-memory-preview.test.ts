@@ -36,6 +36,7 @@ import {
 	renderNote,
 	validateNote,
 } from "../src/extensions/context-memory/notes.ts";
+import { CallJournal } from "../src/extensions/context-memory/preview/call-journal.ts";
 import type { PreviewCompaction, PreviewSession } from "../src/extensions/context-memory/preview/contracts.ts";
 import {
 	assertPreviewSession,
@@ -47,8 +48,7 @@ import {
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 import { doctorReport } from "../src/extensions/context-memory/preview/notices.ts";
-import { parsePreparationConfig } from "../src/extensions/context-memory/preview/preparation-config.ts";
-import { PreviewPreparationCoordinator } from "../src/extensions/context-memory/preview/preparation-coordinator.ts";
+import { PreviewPreparation } from "../src/extensions/context-memory/preview/preparation.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -64,7 +64,9 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 	let root: string;
 	let session: SyntheticSession;
 	let store: PreviewFailureStore;
-	let preparation: PreviewPreparationCoordinator;
+	let preparation: PreviewPreparation;
+	let journal: CallJournal;
+	let contextTokens: number | null;
 	let controller: PreviewMemoryController;
 	let ctx: ExtensionContext;
 	let output: MemoryNote | string;
@@ -88,10 +90,10 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		root = fs.mkdtempSync(join(tmpdir(), "pi-preview-prepared-commit-"));
 		session = new SyntheticSession(root);
 		store = new PreviewFailureStore(join(root, "agent"));
-		preparation = new PreviewPreparationCoordinator({
-			agentDir: join(root, "agent"),
-			settings: parsePreparationConfig({ enabled: true, minSourceTokens: 1, minIntervalMs: 0 }),
-		});
+		journal = new CallJournal(join(root, "agent"));
+		preparation = new PreviewPreparation({ enabled: true, journal });
+		// Inside the band below Pi's default threshold for a 128,000-token window.
+		contextTokens = 110_000;
 		output = note();
 		requests = [];
 		const registry = {
@@ -116,7 +118,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 			thinkingLevel: "off",
 			getSystemPrompt: () => "Synthetic system prompt.",
 			hasPendingMessages: () => false,
-			getContextUsage: () => undefined,
+			getContextUsage: () => ({ tokens: contextTokens, contextWindow: 128_000, percent: null }),
 			hasUI: false,
 			ui: { notify: vi.fn() },
 			abort: vi.fn(),
@@ -125,6 +127,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-test/preview-test", noteRepair: false },
 			failureStore: store,
 			preparation,
+			journal,
 		});
 		controller.sessionStart(ctx);
 	});
@@ -184,7 +187,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(value.details?.sourceHash).toBe(hashEntries(session.getBranch()));
 		expect(value.usage?.totalTokens).toBe(0);
 		expect(store.status(session).state).toBe("pending");
-		expect(controller.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(0);
+		expect(value.details?.preparation?.callIds).toHaveLength(1);
 		const entry = saved(session, value);
 		session.append(entry);
 		controller.committed(
@@ -192,9 +195,47 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 			ctx,
 		);
 		expect(store.status(session).state).toBe("ready");
-		expect(controller.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(1);
+		expect(controller.status(ctx).calls).toMatchObject({ calls: 1, preparationCalls: 1, compactionCalls: 0 });
 		expect(controller.status(ctx).lastCompaction).toMatchObject({ foregroundCalls: 0, diskConfirmed: true });
 		expect(ctx.abort).not.toHaveBeenCalled();
+	});
+	it("handles Pi's threshold compaction after a completed turn like /compact, without an explicit retry", async () => {
+		expect(controller.thresholdReady(ctx)).toBe(true);
+		const value = await controller.compact({ ...event(), reason: "threshold" } as SessionBeforeCompactEvent, ctx);
+		expect(value.details?.coveredThrough).toBe("reply-1");
+		expect(store.status(session).state).toBe("pending");
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{
+				type: "session_compact",
+				compactionEntry: entry,
+				fromExtension: true,
+				reason: "threshold",
+				willRetry: false,
+			},
+			ctx,
+		);
+		expect(store.status(session).state).toBe("ready");
+		expect(controller.status(ctx).calls).toMatchObject({ compactionCalls: 1 });
+		// A blocked session is left for an explicit /compact; threshold compaction never replaces the failure.
+		appendRuling();
+		store.fail(session, "CONTEXT_WRITER_FAILED");
+		expect(controller.thresholdReady(ctx)).toBe(false);
+		await expect(
+			controller.compact({ ...event(), reason: "threshold" } as SessionBeforeCompactEvent, ctx),
+		).rejects.toThrow("CONTEXT_WRITER_FAILED");
+		expect(store.status(session)).toEqual({ state: "blocked", code: "CONTEXT_WRITER_FAILED" });
+	});
+	it("prepares only once per interval and only inside the band below the threshold", async () => {
+		contextTokens = 50_000;
+		await prepare();
+		expect(requests).toHaveLength(0);
+		contextTokens = 110_000;
+		await prepare();
+		await prepare();
+		expect(requests).toHaveLength(1);
+		expect(controller.status(ctx).calls).toMatchObject({ preparationCalls: 1, unsettled: 0 });
 	});
 	it("keeps note candidates out of the request context and gives them only to the writer", async () => {
 		const marker = "Candidate-only observation about port 4317.";
@@ -259,26 +300,30 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		appendRuling();
 		await prepare();
 		expect(requests).toHaveLength(2);
-		expect(controller.status(ctx).preparation?.accounting?.aggregate.attempts).toBe(2);
+		expect(controller.status(ctx).calls?.preparationCalls).toBe(2);
 		expect(controller.status(ctx).preparation?.state).toBe("ready");
 		expect(store.markerPresent(session)).toBe(false);
 		expect(ctx.abort).not.toHaveBeenCalled();
 	});
-	it("merges a new user ruling through the same writer and only the unread tail", async () => {
-		// Dropping this tiny prefix would not shrink the context, so the prefix path is declined.
+	it("writes synchronously from the originals when committing the prefix would not shrink the context", async () => {
+		// Dropping this tiny prefix would not shrink the context, so the stale candidate is discarded.
 		await prepare();
 		appendRuling();
 		expect(controller.status(ctx).preparation?.state).toBe("stale");
 		const value = await controller.compact(event(), ctx);
-		expect(value.details?.preparation?.path).toBe("merge");
+		expect(value.details?.preparation?.path).toBe("sync");
+		expect(value.details?.preparation?.candidateId).toBeUndefined();
 		expect(value.details?.coveredThrough).toBe("reply-2");
 		expect(requests).toHaveLength(2);
-		const request = JSON.stringify(requests[1]);
-		expect(request).toContain("4318");
-		expect(request).toContain("The service uses port 4317.");
 		const payload: { newSources: Array<{ entryId: string }> } = JSON.parse(requests[1].messages[0].content as string);
-		expect(payload.newSources.map((source) => source.entryId)).toEqual(["source-2", "reply-2"]);
+		expect(payload.newSources.map((source) => source.entryId)).toEqual([
+			"source-1",
+			"reply-1",
+			"source-2",
+			"reply-2",
+		]);
 		expect(value.details?.note.state[0]).toMatchObject({ sources: ["source-2"], supersedes: ["source-1"] });
+		expect(controller.status(ctx).calls).toMatchObject({ preparationCalls: 1, compactionCalls: 1 });
 	});
 	it("commits a prepared prefix without a writer call and keeps later originals verbatim", async () => {
 		session.append({
@@ -350,7 +395,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		const value = await controller.compact(event("Preserve deployment permission first."), ctx);
 		expect(requests).toHaveLength(2);
 		expect(JSON.stringify(requests[1])).toContain("Preserve deployment permission first.");
-		expect(value.details?.preparation?.path).toBe("merge");
+		expect(value.details?.preparation?.path).toBe("sync");
 	});
 	it("malformed optional output is fully charged without blocking the task or creating a failure marker", async () => {
 		output = "malformed paid output";
@@ -358,7 +403,8 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(store.markerPresent(session)).toBe(false);
 		expect(ctx.abort).not.toHaveBeenCalled();
 		expect(controller.context(session.buildSessionProjection().messages, ctx)).toBeDefined();
-		expect(controller.status(ctx).preparation?.accounting?.aggregate).toMatchObject({ calls: 1, discardedCalls: 1 });
+		expect(controller.status(ctx).preparation?.state).toBe("failed");
+		expect(controller.status(ctx).calls).toMatchObject({ calls: 1, preparationCalls: 1, unknownUsage: 0 });
 		output = note();
 		const value = await controller.compact(event(), ctx);
 		expect(value.details?.preparation?.path).toBe("sync");
@@ -398,27 +444,22 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(store.status(session).state).toBe("blocked");
 	});
 
-	it("restart confirms a staged disk commit before accounting marks the preparation reused", async () => {
+	it("keeps the record of paid preparation across a restart and does not prepare that interval again", async () => {
 		await prepare();
 		const value = await controller.compact(event(), ctx);
 		session.append(saved(session, value));
 		preparation.dispose();
-		const restoredPreparation = new PreviewPreparationCoordinator({
-			agentDir: join(root, "agent"),
-			settings: parsePreparationConfig({ enabled: true, minSourceTokens: 1, minIntervalMs: 0 }),
-		});
+		const restoredJournal = new CallJournal(join(root, "agent"));
+		const restoredPreparation = new PreviewPreparation({ enabled: true, journal: restoredJournal });
 		const restored = new PreviewMemoryController({
 			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-test/preview-test", noteRepair: false },
 			failureStore: new PreviewFailureStore(join(root, "agent")),
 			preparation: restoredPreparation,
+			journal: restoredJournal,
 		});
 		restored.sessionStart(ctx);
-		expect(restored.status(ctx).preparation?.accounting?.aggregate).toMatchObject({
-			reusedCalls: 0,
-			discardedCalls: 0,
-		});
+		expect(restored.status(ctx).calls).toMatchObject({ calls: 1, preparationCalls: 1, unsettled: 0 });
 		restored.recover(ctx);
-		expect(restored.status(ctx).preparation?.accounting?.aggregate.reusedCalls).toBe(1);
 		expect(store.inspect(session).state).toBe("ready");
 		restoredPreparation.dispose();
 	});
@@ -1506,7 +1547,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 			writerModel: "session",
 			writer: "preview-test/preview-test",
 			noteBudgetMode: "tiered",
-			manualOnly: true,
+			manualOnly: false,
 			protection: "eligible",
 			manualCompaction: { preview: "ready", pi: "unknown", contextTokens: 1234 },
 		});
@@ -1535,7 +1576,23 @@ describe("independent extension preview: sessions it does not protect", () => {
 		session.persist();
 		expect(store.inspect(session).state).toBe("ready");
 	});
-	it("automatic compaction is cancelled with an actionable code and reported once per input", async () => {
+	it("leaves threshold compaction for a later turn while input is queued, recording nothing", async () => {
+		const handlers = loadPreview();
+		const ctx = { ...context(), hasPendingMessages: () => true } as unknown as ExtensionContext;
+		const event = {
+			type: "session_before_compact",
+			preparation: { tokensBefore: 115_000 },
+			branchEntries: session.getBranch(),
+			reason: "threshold",
+			willRetry: false,
+			signal: new AbortController().signal,
+		};
+		expect(await emit(handlers, "session_before_compact", event, ctx)).toEqual({ cancel: true });
+		await emit(handlers, "session_compact_failed", { type: "session_compact_failed", aborted: true }, ctx);
+		expect(fs.existsSync(markerPath())).toBe(false);
+		expect(warnings).toHaveLength(0);
+	});
+	it("overflow recovery is cancelled with an actionable code and reported once per input", async () => {
 		const handlers = loadPreview();
 		const abort = vi.fn();
 		const ctx = context(abort);
@@ -1543,7 +1600,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 			type: "session_before_compact",
 			preparation: { tokensBefore: 115_000 },
 			branchEntries: session.getBranch(),
-			reason: "threshold",
+			reason: "overflow",
 			willRetry: false,
 			signal: new AbortController().signal,
 		};

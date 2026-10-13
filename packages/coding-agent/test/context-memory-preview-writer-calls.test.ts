@@ -156,7 +156,7 @@ describe("preview writer provider-call reservations and settlements", () => {
 			expect(test.progress.at(-1)?.usageReports).toBe(0);
 		},
 	);
-	it("exposes the selected request in an immutable reservation before dispatch and settles before validation", async () => {
+	it("records the selected model and effort before dispatch and settles before validation", async () => {
 		const test = harness(() => {
 			test.trace.push("dispatch");
 			expect(test.before).toHaveLength(1);
@@ -164,21 +164,13 @@ describe("preview writer provider-call reservations and settlements", () => {
 		});
 		const result = await writeMemory(test.options);
 		expect(test.trace).toEqual(["before:1:generate", "dispatch", "after:1:generate"]);
-		expect(test.before[0]).toMatchObject({
+		// The record carries identities only; no request content reaches the call journal.
+		expect(test.before[0]).toEqual({
 			callIndex: 1,
 			phase: "generate",
-			model,
-			config: test.options.config,
+			model: `${model.provider}/${model.id}`,
 			writerEffort: "low",
-			request: { maxTokens: 4096, reasoning: "low", maxRetries: 0, toolChoice: "none", cacheRetention: "none" },
 		});
-		expect(test.before[0].context).toEqual(test.requests.mock.calls[0][1]);
-		expect(test.before[0].request).toEqual(test.requests.mock.calls[0][2]);
-		expect(test.before[0].request?.signal).toBe(test.options.signal);
-		expect(Object.isFrozen(test.before[0].model.cost)).toBe(true);
-		expect(Object.isFrozen(test.before[0].context.messages[0])).toBe(true);
-		expect(Object.isFrozen(test.before[0].context.messages)).toBe(true);
-		expect(test.before[0].context.messages).not.toBe(test.requests.mock.calls[0][1].messages);
 		expect(test.after).toHaveLength(1);
 		expect(test.after[0]).toMatchObject({
 			callIndex: 1,
@@ -189,7 +181,6 @@ describe("preview writer provider-call reservations and settlements", () => {
 			usage,
 			elapsedMs: expect.any(Number),
 		});
-		expect(Object.isFrozen(test.after[0].usage?.cost)).toBe(true);
 		expect(test.after[0].usage).not.toHaveProperty("costSource");
 		expect(result.usage).toEqual(usage);
 		expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, usageReports: 1, usage });
@@ -501,7 +492,7 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(actualContext.tools?.[0]).toBe(prefix.tools[0]);
 		expect(actualRequest).toMatchObject({ reasoning: "high", maxRetries: 0, toolChoice: "none" });
 		expect(actualRequest).not.toHaveProperty("cacheRetention");
-		expect(test.before[0].model.id).toBe("session-model");
+		expect(test.before[0].model).toBe(`${model.provider}/session-model`);
 		expect(test.before[0].writerEffort).toBe("high");
 		expect(result.writerModel).toBe(`${model.provider}/session-model`);
 		expect(result.writerEffort).toBe("high");

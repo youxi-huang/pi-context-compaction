@@ -554,16 +554,12 @@ async function worker() {
 				await seed();
 				if (withExtension) {
 					check("no-native-summary", "Crossing the threshold does not run native compaction", !requests.some((r) => r.kind === "native-summary") && !nativeCheckpoint(), requests);
-					const blocked = await prompt("Continue.");
-					observe("turn 3", blocked);
-					check("blocked-until-compact", "Requests stay blocked until a manual /compact", !blocked.reached, blocked);
-					check("notice-asks-for-compact", "The notice asks for /compact and does not call the session unsupported", blocked.notices.length > 0 && blocked.notices.every((text) => text.includes("/compact") && !text.includes("UNSUPPORTED")), blocked.notices);
-					check("one-notice-per-input", "A blocked input shows at most one notice", blocked.notices.length <= 1, blocked.notices.length);
-					const compacted = await compact();
-					observe("/compact", compacted);
-					const next = await prompt("Continue after compaction.");
-					observe("turn 4", next);
-					check("manual-compact-recovers", "Manual /compact recovers and the next prompt reaches the provider", compacted.ok && next.reached, { compacted, next });
+					const checkpoint = manager.getBranch().find((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory");
+					check("threshold-checkpoint", "Crossing the threshold after a completed turn writes a checked checkpoint with the writer", checkpoint !== undefined && requests.some((r) => r.kind === "writer"), { requests, entries: entryTypes() });
+					check("no-marker", "Threshold compaction leaves no failure marker", marker() === null, marker());
+					const next = await prompt("Continue.");
+					observe("turn 3", next);
+					check("next-prompt-sent", "The next prompt reaches the provider after the checkpoint", next.reached, next);
 				} else {
 					check("native-compacts", "Without the preview, Pi compacts natively at the threshold", requests.some((r) => r.kind === "native-summary") && nativeCheckpoint(), requests);
 				}

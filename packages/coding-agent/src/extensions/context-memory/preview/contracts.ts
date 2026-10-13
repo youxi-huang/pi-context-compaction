@@ -7,7 +7,7 @@ export interface PreviewCheckpoint extends MemoryCheckpoint {
 	preparation?: {
 		version: 1;
 		strategy: "background";
-		path: "complete" | "merge" | "sync";
+		path: "complete" | "prefix" | "merge" | "sync";
 		candidateId?: string;
 		callIds?: string[];
 	};

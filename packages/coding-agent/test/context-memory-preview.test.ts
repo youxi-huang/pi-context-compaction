@@ -41,6 +41,7 @@ import {
 	assertPreviewSession,
 	chooseCut,
 	PreviewMemoryController,
+	prefixCut,
 	unsupportedReason,
 } from "../src/extensions/context-memory/preview/controller.ts";
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
@@ -264,6 +265,7 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(ctx.abort).not.toHaveBeenCalled();
 	});
 	it("merges a new user ruling through the same writer and only the unread tail", async () => {
+		// Dropping this tiny prefix would not shrink the context, so the prefix path is declined.
 		await prepare();
 		appendRuling();
 		expect(controller.status(ctx).preparation?.state).toBe("stale");
@@ -277,6 +279,71 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		const payload: { newSources: Array<{ entryId: string }> } = JSON.parse(requests[1].messages[0].content as string);
 		expect(payload.newSources.map((source) => source.entryId)).toEqual(["source-2", "reply-2"]);
 		expect(value.details?.note.state[0]).toMatchObject({ sources: ["source-2"], supersedes: ["source-1"] });
+	});
+	it("commits a prepared prefix without a writer call and keeps later originals verbatim", async () => {
+		session.append({
+			type: "message",
+			id: "trace-1",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: {
+				role: "user",
+				content: `Trace:\n${"local check ok, port 4317 healthy\n".repeat(400)}`,
+				timestamp: 1,
+			},
+		});
+		session.append({
+			type: "message",
+			id: "trace-reply-1",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: assistant(),
+		});
+		await prepare();
+		appendRuling();
+		const value = await controller.compact(event(), ctx);
+		expect(requests).toHaveLength(1);
+		expect(value.details?.preparation?.path).toBe("prefix");
+		expect(value.details?.coveredThrough).toBe("trace-reply-1");
+		expect(value.details?.sourceHash).toBe(hashEntries(session.getBranch().slice(0, 4)));
+		expect(value.firstKeptEntryId).toBe("source-2");
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		expect(store.status(session).state).toBe("ready");
+		expect(controller.status(ctx).lastCompaction).toMatchObject({ path: "prefix", foregroundCalls: 0 });
+		// Reopening validates the prefix checkpoint in full; the newer ruling stays in context in its own words.
+		controller.sessionStart(ctx);
+		const messages = session.buildSessionProjection().messages;
+		expect(controller.context(messages, ctx)).toBe(messages);
+		expect(JSON.stringify(messages)).toContain("Use port 4318 now.");
+		expect(JSON.stringify(messages)).not.toContain("local check ok");
+		expect(ctx.abort).not.toHaveBeenCalled();
+		// The next checkpoint's writer reads the originals the prefix checkpoint left uncovered.
+		session.append({
+			type: "message",
+			id: "source-3",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { role: "user", content: "Record the port change.", timestamp: 3 },
+		});
+		session.append({
+			type: "message",
+			id: "reply-3",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: assistant(),
+		});
+		const next = await controller.compact(event(), ctx);
+		expect(requests).toHaveLength(2);
+		const payload: { newSources: Array<{ entryId: string }> } = JSON.parse(requests[1].messages[0].content as string);
+		expect(payload.newSources.map((source) => source.entryId)).toEqual(
+			expect.arrayContaining(["source-2", "reply-2", "source-3", "reply-3"]),
+		);
+		expect(next.details?.coveredThrough).toBe("reply-3");
 	});
 	it("new custom focus invokes a rewrite instead of directly submitting an old candidate", async () => {
 		await prepare();
@@ -511,6 +578,95 @@ function saved(session: SyntheticSession, value: PreviewCompaction): CompactionE
 	};
 }
 
+describe("preview prefix checkpoint cut", () => {
+	function message(
+		id: string,
+		parentId: string | null,
+		role: "user" | "assistant",
+		text = `Synthetic ${id}.`,
+	): SessionEntry {
+		return {
+			type: "message",
+			id,
+			parentId,
+			timestamp,
+			message: role === "user" ? { role, content: text, timestamp: 1 } : assistant(),
+		};
+	}
+	function chain(...entries: SessionEntry[]): SessionEntry[] {
+		return entries.map((entry, index) => ({ ...entry, parentId: index ? entries[index - 1].id : null }));
+	}
+	const note = (id: string): SessionEntry => ({
+		type: "custom",
+		customType: "other",
+		id,
+		parentId: null,
+		timestamp,
+		data: {},
+	});
+	it("starts at the first uncovered turn, or earlier when the ordinary cut is earlier", () => {
+		const branch = chain(
+			message("u0", null, "user"),
+			message("a0", null, "assistant"),
+			message("u1", null, "user"),
+			message("a1", null, "assistant"),
+			message("u2", null, "user"),
+			message("a2", null, "assistant"),
+		);
+		const projection = buildSessionProjection(branch);
+		expect(prefixCut(branch, projection, 3, branch.length)).toBe(4);
+		expect(prefixCut(branch, projection, 3, 2)).toBe(2);
+	});
+	it("walks back to an earlier turn start rather than drop an uncovered entry", () => {
+		const branch = chain(
+			message("u0", null, "user"),
+			message("a0", null, "assistant"),
+			message("u1", null, "user"),
+			message("a1", null, "assistant"),
+			note("n1"),
+			message("u2", null, "user"),
+		);
+		expect(prefixCut(branch, buildSessionProjection(branch), 3, branch.length)).toBe(2);
+	});
+	it("never lets the ordinary cut keep the previous checkpoint in context", () => {
+		const branch = chain(
+			message("u0", null, "user", "x".repeat(4000)),
+			message("a0", null, "assistant"),
+			{
+				type: "compaction",
+				id: "cp",
+				parentId: null,
+				timestamp,
+				summary: "Earlier checkpoint.",
+				firstKeptEntryId: "u0",
+				tokensBefore: 10,
+			},
+			message("u1", null, "user"),
+			message("a1", null, "assistant"),
+		);
+		expect(chooseCut(branch, 500, buildSessionProjection(branch))).toBe(3);
+	});
+	it("returns nothing rather than keep the previous checkpoint in context", () => {
+		const branch = chain(
+			message("u0", null, "user"),
+			message("a0", null, "assistant"),
+			{
+				type: "compaction",
+				id: "cp",
+				parentId: null,
+				timestamp,
+				summary: "Earlier checkpoint.",
+				firstKeptEntryId: "u0",
+				tokensBefore: 10,
+			},
+			note("n1"),
+			message("u1", null, "user"),
+			message("a1", null, "assistant"),
+		);
+		expect(prefixCut(branch, buildSessionProjection(branch), 2, branch.length)).toBeUndefined();
+	});
+});
+
 describe("independent extension preview: durable failure and commit boundary", () => {
 	let root: string;
 	let agentDir: string;
@@ -545,6 +701,47 @@ describe("independent extension preview: durable failure and commit boundary", (
 		expect(() => store.assertReady(session)).toThrow(/CONTEXT_/);
 		expect(new PreviewFailureStore(agentDir).status(session).state).not.toBe("ready");
 	}
+	it("stages a checkpoint covering an earlier prefix only when nothing uncovered leaves context", () => {
+		session.append({
+			type: "message",
+			id: "source-2",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: { role: "user", content: "Use port 4318 now.", timestamp: 2 },
+		});
+		session.append({
+			type: "message",
+			id: "reply-2",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: assistant(),
+		});
+		const full = candidate(session);
+		const prefix: PreviewCompaction = {
+			...full,
+			firstKeptEntryId: "source-2",
+			details: {
+				...full.details!,
+				coveredThrough: "reply-1",
+				sourceHash: hashEntries(session.getBranch().slice(0, 2)),
+			},
+		};
+		expect(() =>
+			store.stage(session, store.begin(session, true), { ...prefix, firstKeptEntryId: "reply-2" }),
+		).toThrow("CONTEXT_SOURCE_CHANGED");
+		expect(() =>
+			store.stage(session, store.begin(session, true), {
+				...prefix,
+				details: { ...prefix.details!, sourceHash: hashEntries(session.getBranch().slice(0, 1)) },
+			}),
+		).toThrow("CONTEXT_SOURCE_CHANGED");
+		store.stage(session, store.begin(session, true), prefix);
+		const entry = saved(session, prefix);
+		session.append(entry);
+		store.commit(session, entry);
+		expect(store.status(session).state).toBe("ready");
+		expect(latestMemory(session.getBranch())?.memory.coveredThrough).toBe("reply-1");
+	});
 	it("persists a pending attempt before generation and blocks a new store instance", () => {
 		expect(store.status(session).state).toBe("ready");
 		store.begin(session);

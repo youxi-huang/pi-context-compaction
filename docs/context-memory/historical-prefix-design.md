@@ -1,5 +1,15 @@
 # Historical prefix with retained originals: proposed contract
 
+Superseded on 2026-10-13 by decision D16 in the [plan](v0.4.0-plan.md). The
+preview now commits a prepared note for the prefix it covers and keeps every
+later original verbatim, without the authority contract this proposal required:
+newer messages keep their own words and position after the note, as in an
+ordinary conversation. The implemented path is narrower than this proposal. It
+uses the prepared candidate's frozen prefix, cuts only at a turn start that drops
+nothing uncovered and follows the previous checkpoint, and commits only when the
+context shrinks and fits within 80% of the threshold. The text below is the
+original proposal.
+
 Status: design for review, not an enabled commit path. This makes the third
 submission option identified in the v0.4.0 review concrete without treating
 permissive `coveredThrough` validation as a complete persistence or authority

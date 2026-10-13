@@ -22,6 +22,7 @@ import {
 	compactedSourceTokens,
 	hashEntries,
 	latestMemory,
+	type MemoryNote,
 	noteBytes,
 	noteIncrements,
 	renderNote,
@@ -38,7 +39,7 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
-import { freezePreparationInput, type PreparationSubmission } from "./preparation-candidate.ts";
+import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
 import type { PreviewPreparationCoordinator } from "./preparation-coordinator.ts";
 import {
 	modelName,
@@ -97,7 +98,11 @@ export function assertToolPairs(messages: readonly AgentMessage[]): void {
 	if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the tool batch to finish");
 }
 
-/** Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. */
+/**
+ * Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. The cut
+ * follows the previous checkpoint: stock Pi keeps every entry from the cut onwards, so an earlier
+ * checkpoint inside that range would reappear as a second summary.
+ */
 export function chooseCut(
 	branch: readonly SessionEntry[],
 	keepRecentTokens: number,
@@ -105,8 +110,11 @@ export function chooseCut(
 ): number {
 	if (keepRecentTokens <= 0) return branch.length;
 	const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
+	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
 	const starts = branch.flatMap((entry, index) =>
-		entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : [],
+		index > previous && entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length
+			? [index]
+			: [],
 	);
 	if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
 	let accumulated = 0;
@@ -116,6 +124,44 @@ export function chooseCut(
 		if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
 	}
 	return starts[starts.length - 1];
+}
+
+/**
+ * The latest turn start at or before `coveredIndex + 1` and `cut`, so that only covered entries leave
+ * context. It must follow the previous checkpoint: stock Pi keeps every entry from the cut onwards,
+ * so an earlier checkpoint inside that range would reappear as a second summary.
+ */
+export function prefixCut(
+	branch: readonly SessionEntry[],
+	projection: SessionProjection,
+	coveredIndex: number,
+	cut: number,
+): number | undefined {
+	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
+	const projected = new Set(
+		projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+	);
+	for (let index = Math.min(cut, coveredIndex + 1); index > previous; index--) {
+		const entry = branch[index];
+		if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
+	}
+	return undefined;
+}
+
+/** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
+function fittedSummary(
+	note: MemoryNote,
+	branch: readonly SessionEntry[],
+	retainedTokens: number,
+	limit: number,
+): string | undefined {
+	let lineage = checkpointLineage(branch);
+	let summary = renderNote(note, lineage);
+	while (lineage.length && textTokens(summary) + retainedTokens > limit) {
+		lineage = shrinkLineage(lineage);
+		summary = renderNote(note, lineage);
+	}
+	return textTokens(summary) + retainedTokens > limit ? undefined : summary;
 }
 
 /** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
@@ -261,7 +307,7 @@ export class PreviewMemoryController {
 	readonly notices = new NoticeGate();
 	private readonly preparation?: PreviewPreparationCoordinator;
 	private lastCompaction?: {
-		path: "complete" | "merge" | "sync";
+		path: "complete" | "prefix" | "merge" | "sync";
 		candidateId?: string;
 		foregroundCalls: number;
 		stageMs: number;
@@ -363,7 +409,7 @@ export class PreviewMemoryController {
 				hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
 				streamSimple: registry.streamSimple.bind(registry),
 			};
-			const increments = noteIncrements(branch, previous?.entry.id);
+			const increments = noteIncrements(branch, previous?.memory.coveredThrough);
 			const messages = structuredClone(convertToLlm(projection.messages));
 			const prefix = getInitialSystemMessage(messages)
 				? { messages }
@@ -771,15 +817,20 @@ export class PreviewMemoryController {
 			const interrupted = !completed ? interruptedTurnStart(branch) : undefined;
 			const cut = Math.min(chooseCut(branch, budget.recentTokens, projection), interrupted ?? branch.length);
 			if (cut < 1) throw new Error("CONTEXT_NO_CUT");
-			const keptIds = new Set(branch.slice(cut).map((entry) => entry.id));
-			const kept = projection.entries
-				.filter((entry) => entry.sourceEntry.type !== "compaction" && keptIds.has(entry.sourceEntry.id))
-				.flatMap((entry) => entry.messages);
+			const retainedFrom = (start: number) => {
+				const ids = new Set(branch.slice(start).map((entry) => entry.id));
+				return projection.entries
+					.filter((entry) => entry.sourceEntry.type !== "compaction" && ids.has(entry.sourceEntry.id))
+					.flatMap((entry) => entry.messages);
+			};
+			let kept = retainedFrom(cut);
 			assertToolPairs(kept);
-			const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+			let coveredIndex = branch.length - 1;
 			const previous = latestMemory(branch);
 			const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
-			const increments = noteIncrements(branch, previous?.entry.id);
+			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
+			const increments = noteIncrements(branch, previous?.memory.coveredThrough);
 			const activeIds = new Set(
 				projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id),
 			);
@@ -808,11 +859,43 @@ export class PreviewMemoryController {
 				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }
 				: undefined;
 			const available = submission ? this.preparation?.available(submission) : undefined;
-			const path = available?.classification.status === "current-full" ? "complete" : available ? "merge" : "sync";
+			let path: "complete" | "prefix" | "merge" | "sync" =
+				available?.classification.status === "current-full" ? "complete" : available ? "merge" : "sync";
 			const prepared = available?.result.candidate;
+			const systemTokens = textTokens(ctx.getSystemPrompt());
+			if (path === "merge" && available && prepared && interrupted === undefined) {
+				// D16: commit the prepared note for the prefix it covers and keep everything after it verbatim.
+				const end = reusablePrefix(prepared, available.classification, branch);
+				const start = end === undefined ? undefined : prefixCut(branch, projection, end, cut);
+				if (end !== undefined && start !== undefined) {
+					const retained = retainedFrom(start);
+					const retainedTokens =
+						systemTokens + retained.reduce((sum, message) => sum + estimateTokens(message), 0);
+					const beforeTokens =
+						systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
+					const summary = fittedSummary(
+						available.result.written.note,
+						branch,
+						retainedTokens,
+						Math.floor(budget.threshold * 0.8),
+					);
+					// Commit only if the context shrinks and leaves room before the next compaction.
+					if (summary && textTokens(summary) + retainedTokens < beforeTokens) {
+						assertToolPairs(retained);
+						path = "prefix";
+						kept = retained;
+						firstKeptEntryId = branch[start].id;
+						coveredIndex = end;
+					}
+				}
+			}
 			let written: WriteMemoryResult;
-			if (path === "complete" && available) {
-				const note = validateNote(structuredClone(available.result.written.note), branch, policy.hardTokens);
+			if ((path === "complete" || path === "prefix") && available) {
+				const note = validateNote(
+					structuredClone(available.result.written.note),
+					branch.slice(0, coveredIndex + 1),
+					policy.hardTokens,
+				);
 				written = { ...available.result.written, note, usage: sumMemoryUsage([]), chunkCount: 0 };
 				this.lastProgress = {
 					writerModel: written.writerModel,
@@ -869,15 +952,13 @@ export class PreviewMemoryController {
 			) {
 				throw new Error("CONTEXT_SOURCE_CHANGED: discard the generated candidate");
 			}
-			const fixedAfter =
-				textTokens(ctx.getSystemPrompt()) + kept.reduce((sum, message) => sum + estimateTokens(message), 0);
-			let lineage = checkpointLineage(branch);
-			let summary = renderNote(written.note, lineage);
-			while (lineage.length && textTokens(summary) + fixedAfter > budget.threshold) {
-				lineage = shrinkLineage(lineage);
-				summary = renderNote(written.note, lineage);
-			}
-			if (textTokens(summary) + fixedAfter > budget.threshold) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
+			const summary = fittedSummary(
+				written.note,
+				branch,
+				systemTokens + kept.reduce((sum, message) => sum + estimateTokens(message), 0),
+				budget.threshold,
+			);
+			if (!summary) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
 			const candidate: PreviewCompaction = {
 				summary,
 				firstKeptEntryId,
@@ -887,8 +968,11 @@ export class PreviewMemoryController {
 					kind: CONTEXT_MEMORY_KIND,
 					version: CONTEXT_MEMORY_VERSION,
 					note: written.note,
-					coveredThrough: attempt.leafId,
-					sourceHash: attempt.sourceHash,
+					coveredThrough: branch[coveredIndex].id,
+					sourceHash:
+						coveredIndex === branch.length - 1
+							? attempt.sourceHash
+							: hashEntries(branch.slice(0, coveredIndex + 1)),
 					snapshot,
 					writerModel: written.writerModel,
 					chunkCount: written.chunkCount,

@@ -493,8 +493,8 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			!isRecord(details) ||
 			details.kind !== CONTEXT_MEMORY_KIND ||
 			details.version !== CONTEXT_MEMORY_VERSION ||
-			details.coveredThrough !== attempt.leafId ||
-			details.sourceHash !== attempt.sourceHash ||
+			typeof details.coveredThrough !== "string" ||
+			!hash(details.sourceHash) ||
 			!isRecord(details.snapshot) ||
 			details.snapshot.sessionId !== attempt.sessionId ||
 			details.snapshot.leafId !== attempt.leafId ||
@@ -504,6 +504,26 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			!Number.isFinite(candidate.tokensBefore) ||
 			candidate.tokensBefore < 0
 		)
+			throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+	}
+
+	/**
+	 * The note covers an intact prefix of the attempt's branch, ending at the leaf or earlier, and the cut
+	 * releases only covered entries; everything after the covered prefix stays in context verbatim.
+	 */
+	private assertCoverage(
+		candidate: PreviewCompaction | CompactionEntry,
+		branch: readonly SessionEntry[],
+		branchHash: string,
+	): void {
+		const details = candidate.details;
+		const end = isRecord(details) ? branch.findIndex((entry) => entry.id === details.coveredThrough) : -1;
+		const cut =
+			candidate.firstKeptEntryId === CONTEXT_KEEP_NONE
+				? branch.length
+				: branch.findIndex((entry) => entry.id === candidate.firstKeptEntryId);
+		const prefixHash = end === branch.length - 1 ? branchHash : hashEntries(branch.slice(0, end + 1));
+		if (end < 0 || cut < 0 || cut > end + 1 || !isRecord(details) || prefixHash !== details.sourceHash)
 			throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 	}
 
@@ -520,12 +540,8 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			this.assertCandidate(attempt, candidate);
 			const branch = branchAt(readSession(identity).entries, attempt.leafId);
-			if (
-				hashEntries(branch) !== attempt.sourceHash ||
-				(candidate.firstKeptEntryId !== CONTEXT_KEEP_NONE &&
-					!branch.some((entry) => entry.id === candidate.firstKeptEntryId))
-			)
-				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			if (hashEntries(branch) !== attempt.sourceHash) throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			this.assertCoverage(candidate, branch, attempt.sourceHash);
 			writeMarker(this.path(identity), { ...marker, candidateHash: candidateHash(candidate) } satisfies Marker);
 		} catch (error) {
 			this.reject(session, error, "CONTEXT_PREVIEW_MARKER_IO");
@@ -583,6 +599,7 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				hashEntries(session.getBranch()) !== hashEntries(branchAt(disk, entry.id))
 			)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			this.assertCoverage(entry, sources, marker.attempt.sourceHash);
 			removeMarker(this.path(identity));
 			this.latched.delete(identity.sessionId);
 			this.recoveryMarkers.delete(identity.sessionId);

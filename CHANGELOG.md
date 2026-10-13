@@ -6,12 +6,17 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- Commit a prepared candidate in the independent preview for the prefix it covers when turns were added after it, without a writer call. Every later original stays in context verbatim after the checkpoint, so a newer user message keeps its own words and position. The store accepts such a checkpoint only if its source hash matches the covered prefix and the cut drops no uncovered entry; the path is used only when the context shrinks and fits within 80% of the threshold, and otherwise the same writer reconciles the candidate as before.
+
 ### Changed
 
 - Validate sources and read the session back in full at trust boundaries instead of on every request in the independent preview. Session start, branch changes, new checkpoints, compaction, recovery and failures still run the complete checks. Requests in between check only entries added since and compare the session file's identity and length with Pi's appends, so a failed or foreign append, truncation or replacement is still found at once. Same-length rewrites and in-place edits of loaded entries are found at the next boundary. The whole-branch plain-data proof, canonical-line reuse and the request-component diagnostic that profiled them are removed. In the synthetic long-session scenario, extra median overhead per request falls from 46/84 ms to 1–4 ms at 10/20 checkpoints, and the 50 ms check becomes a required regression; the first request after each checkpoint still pays one full check.
 
 ### Fixed
 
+- Keep the preview's cut after the previous checkpoint. With `keepRecentTokens` above zero, a manual compaction soon after another could keep the earlier checkpoint in the retained range, where stock Pi shows it as a second summary and later requests were blocked. The default `keepRecentTokens` of zero was not affected.
 - Stop re-inserting `context_note` candidates at the head of every request in the independent preview. They arrived as a user-role message headed "Instructions", although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The notes already appear in context as the model's own tool calls; they still reach the writer as candidates at compaction. The resident runtime has the same injection and keeps it until a fingerprint change is approved.
 
 ### Maintenance

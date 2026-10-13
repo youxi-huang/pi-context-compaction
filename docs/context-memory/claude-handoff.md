@@ -3,7 +3,7 @@
 ## Status, 2026-10-13
 
 The maintainer accepted four decisions that replace parts of this handoff; they
-are recorded as D15–D18 in the [plan](v0.4.0-plan.md). The first three steps
+are recorded as D15–D18 in the [plan](v0.4.0-plan.md). The first four steps
 are done on `claude/affectionate-cray-21pzua`:
 
 1. The authority prototypes, their tests and drivers are removed; the design is
@@ -11,9 +11,10 @@ are done on `claude/affectionate-cray-21pzua`:
 2. `context_note` candidates no longer enter the request context.
 3. Full source validation and session readback run at trust boundaries; a
    request checks only what was added since (D15).
+4. A prepared note can be committed for the prefix it covers, with every later
+   original kept verbatim (D16). A uses it today; B will use the same path.
 
-Next, in order: commits covering an earlier prefix with a verbatim retained tail
-(D16), shared by A and B; A reduced to one candidate slot prepared near the
+Next, in order: A reduced to one candidate slot prepared near the
 threshold, with threshold compaction after a completed turn (D17) and one call
 journal for every writer call; then B as data-only notes plus a verbatim
 user-message section, committed directly or through the writer (D18). The

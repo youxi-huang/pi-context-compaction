@@ -287,16 +287,23 @@ normal task requests and the formal compaction failure contract remain intact.
 
 `/compaction-status` reports `preparation`, its accounting, and the last selected
 commit path. A complete, current candidate can be submitted without a new writer
-call. New evidence or custom focus requires the same writer to reconcile it;
-otherwise the synchronous path remains available. Session-writer merges retain
+call. When turns were added after it, the candidate can still be committed
+without a writer call for the prefix it covers: the checkpoint records that
+prefix, and every later original stays in context verbatim after it. This prefix
+path is taken only when the cut drops nothing the note did not see, follows the
+previous checkpoint, makes the context smaller and leaves it within 80% of the
+compaction threshold. Otherwise, or with custom focus, the same writer
+reconciles the candidate with the new evidence, and the synchronous path remains
+available. Session-writer merges retain
 the current session prefix, so a smaller tail does not imply less provider input.
 Candidates live in memory and are lost on restart. Content-free accounting and
 budgets survive; pending disk claims wait for explicit commit recovery.
 `lastCompaction.stageMs` ends at staging and `pauseMs` is populated after disk
 confirmation. The S2 runner also measures the whole manual-compaction boundary.
 
-This experiment keeps full-branch checkpoint coverage. It does not enable the
-historical-prefix/retained-tail proposal, automatic scheduling or arm B.
+Checkpoints from the complete, merge and synchronous paths cover the whole
+branch; prefix checkpoints cover what their candidate saw. Automatic scheduling
+and arm B are not enabled.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
 

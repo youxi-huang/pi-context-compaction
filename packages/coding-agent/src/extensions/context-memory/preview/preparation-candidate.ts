@@ -320,3 +320,26 @@ export function classifyPreparation(
 		return { status: "stale-reusable", reason: "user-horizon-incomplete" };
 	return { status: "current-full", reason: "complete" };
 }
+
+/**
+ * Index of the last entry a prepared note covers, when it can be committed for that prefix as it stands:
+ * the prefix is intact and fully seen, and only later entries were appended. Those later originals stay
+ * in context verbatim, after the note, as any newer message does in an ordinary conversation.
+ */
+export function reusablePrefix(
+	candidate: PreparedCandidate,
+	classification: CandidateClassification,
+	branch: readonly SessionEntry[],
+): number | undefined {
+	if (
+		classification.status !== "stale-reusable" ||
+		(classification.reason !== "new-user-input" && classification.reason !== "new-sources")
+	)
+		return undefined;
+	const end = candidate.input.coverage.entryIds.length - 1;
+	const seen = new Set(candidate.input.userHorizon.entryIds);
+	const unseen = branch
+		.slice(0, end + 1)
+		.some((entry) => entry.type === "message" && entry.message.role === "user" && !seen.has(entry.id));
+	return unseen ? undefined : end;
+}

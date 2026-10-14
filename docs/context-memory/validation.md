@@ -1,5 +1,30 @@
 # Validation record
 
+## Unreleased: resident request guards and note candidates, 2026-10-14 UTC
+
+The maintainer approved a resident fingerprint change for the two resident
+items that v0.4.0 left in place. The payload guard now uses Pi's estimate of
+four characters per token and stops only a payload beyond the window; the
+`context` guard measures the system prompt the same way and keeps its input
+allowance. The `context` handler no longer re-inserts `context_note`
+candidates at the head of each request; they still reach the writer at
+compaction. Both follow the independent preview since v0.4.0.
+
+The updated payload regression sends a 440,000-character payload, which the
+old guard stopped and the new one passes, and a 520,000-character payload,
+beyond the window, which it still stops. A new regression checks that a
+candidate is absent from the shaped request and present in the writer's
+request. Both fail against the previous controller.
+
+The resident fingerprint is `1.1.0-context-memory.0.3.0+src.7b6b865a3072b3e0`
+and `eval/runtime.ts` pins `b11e3883f07d3697f1d270540d710299ea86a96f`; fixture
+and scorer locks are unchanged. The preview's sources are unchanged, and its
+build stays `stock-preview+src.576bfb140e4f6ea8`.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs ci` at `8992b4f`, clean | Exit 0. 104 script and 322 runtime checks; security 461; acceptance 27/27 on `stock-preview+src.576bfb140e4f6ea8`; scenarios 145 pass, 0 known gaps, strict profile accepted; release checks and prepare pass; full offline evaluation 89 |
+
 ## v0.4.1: review fixes, 2026-10-14 UTC
 
 An independent review of v0.4.0 ran the published A and B functions in

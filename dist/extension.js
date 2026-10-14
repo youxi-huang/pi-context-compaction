@@ -19,6 +19,25 @@ function hashEntries(entries) {
   for (const entry of entries) hash2.update(JSON.stringify(entry)).update("\n");
   return hash2.digest("hex");
 }
+function hashEntryPrefixes(entries, prefixLengths, onSerializedEntry) {
+  const requested = new Set(prefixLengths);
+  let last = 0;
+  for (const length of requested) {
+    if (!Number.isSafeInteger(length) || length < 0 || length > entries.length)
+      throw new Error("CONTEXT_SOURCE_PREFIX: invalid source prefix boundary");
+    last = Math.max(last, length);
+  }
+  const result = /* @__PURE__ */ new Map();
+  const hash2 = createHash("sha256");
+  if (requested.has(0)) result.set(0, hash2.copy().digest("hex"));
+  for (let index = 0; index < last; index++) {
+    const serialized = JSON.stringify(entries[index]);
+    hash2.update(serialized).update("\n");
+    onSerializedEntry?.(index, serialized);
+    if (requested.has(index + 1)) result.set(index + 1, hash2.copy().digest("hex"));
+  }
+  return result;
+}
 
 // packages/coding-agent/src/extensions/context-memory/config.ts
 var SESSION_WRITER = "session";
@@ -183,12 +202,12 @@ function inProgressRequests(branch) {
   }
   return branch.slice(lastCompleted + 1).filter((entry) => entry.type === "message" && entry.message.role === "user");
 }
-function renderContinuation(requests) {
+function renderContinuationWithText(requests, text) {
   return `
 
 ## In-progress user requests
 This checkpoint was taken between tool batches, before the current turn completed. Continue the unfinished work from its recorded progress; do not restart completed steps or treat this internal handover as a new task. The following original user messages are in chronological order, not new submissions. Later user messages override earlier ones. Consult context_history for earlier constraints or evidence missing from the note.
-${requests.map((entry) => JSON.stringify({ entryId: entry.id, request: sourceText(entry) })).join("\n")}`;
+${requests.map((entry) => JSON.stringify({ entryId: entry.id, request: text(entry) })).join("\n")}`;
 }
 var NoteBudgetError = class extends Error {
   bytes;
@@ -204,18 +223,14 @@ var NoteBudgetError = class extends Error {
 function noteBytes(note) {
   return Buffer.byteLength(JSON.stringify(note), "utf8");
 }
-function validateNoteContent(value, sources) {
+function validateNoteSources(value, textById) {
   if (!Check(noteSchema, value)) throw new Error("CONTEXT_NOTE_INVALID: writer must return the complete note schema");
-  const byId = new Map(sources.map((entry) => [entry.id, entry]));
-  const readable = (id) => {
-    const entry = byId.get(id);
-    return Boolean(entry && sourceText(entry));
-  };
+  const readable = (id) => Boolean(textById(id));
   for (const section of noteSections) {
     for (const item of value[section]) {
       if (item.sources.some((id) => !readable(id)))
         throw new Error("CONTEXT_NOTE_SCOPE: a note cites unavailable evidence");
-      if (item.quote && !item.sources.some((id) => sourceText(byId.get(id)).includes(item.quote)))
+      if (item.quote && !item.sources.some((id) => textById(id).includes(item.quote)))
         throw new Error("CONTEXT_NOTE_QUOTE: a quoted source does not match the original text");
       if (item.supersedes?.some((id) => !readable(id)))
         throw new Error("CONTEXT_NOTE_SCOPE: a superseded source is unavailable or unreadable");
@@ -223,50 +238,127 @@ function validateNoteContent(value, sources) {
   }
   return value;
 }
-function validateNote(value, sources, maxTokens = 6e3) {
-  const note = validateNoteContent(value, sources);
+function validateNoteContent(value, sources) {
+  let byId;
+  return validateNoteSources(value, (id) => {
+    byId ??= new Map(sources.map((entry2) => [entry2.id, entry2]));
+    const entry = byId.get(id);
+    return entry ? sourceText(entry) : void 0;
+  });
+}
+function assertNoteBudget(note, maxTokens) {
   const bytes = noteBytes(note);
   if (bytes > maxTokens * 3) throw new NoteBudgetError(bytes, maxTokens);
   return note;
 }
+function validateNote(value, sources, maxTokens = 6e3) {
+  return assertNoteBudget(validateNoteContent(value, sources), maxTokens);
+}
 function compactedSourceTokens(entries) {
   return entries.reduce((sum, entry) => sum + textTokens(sourceText(entry)), 0);
 }
+function validateMemoryCheckpoint(entry, index, validation) {
+  if (!isRecord(entry.details) || entry.details.kind !== CONTEXT_MEMORY_KIND) return void 0;
+  const data = entry.details;
+  if (data.version !== CONTEXT_MEMORY_VERSION || typeof data.coveredThrough !== "string" || typeof data.sourceHash !== "string")
+    throw new Error("CONTEXT_NOTE_VERSION: unsupported or malformed memory checkpoint");
+  const end = validation.coverageIndex(data.coveredThrough);
+  if (end < 0 || end >= index || validation.prefixHash(end + 1) !== data.sourceHash)
+    throw new Error("CONTEXT_SOURCE_CHANGED: the stored checkpoint no longer matches its original evidence");
+  const hardTokens = storedNoteLimit(data.noteBudget);
+  const note = assertNoteBudget(validateNoteSources(data.note, validation.sourceById), hardTokens);
+  if (!entry.summary.startsWith(renderNote(note)))
+    throw new Error("CONTEXT_NOTE_INVALID: the restored summary does not match the validated note");
+  if (data.continuation !== void 0) {
+    const requests = validation.requests(end);
+    if (!requests.length || JSON.stringify(data.continuation) !== JSON.stringify(requests.map((request) => request.id)) || !entry.summary.endsWith(renderContinuationWithText(requests, validation.source)) || !note.nextSteps.some((step) => step.text.trim()))
+      throw new Error("CONTEXT_CONTINUATION_MISSING: the checkpoint lost its active requests or continuation step");
+  }
+  return { entry, memory: data };
+}
 function latestMemory(branch) {
-  for (let i = branch.length - 1; i >= 0; i--) {
-    const entry = branch[i];
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
     if (entry.type !== "compaction") continue;
-    if (!isRecord(entry.details) || entry.details.kind !== CONTEXT_MEMORY_KIND) return void 0;
-    const data = entry.details;
-    if (data.version !== CONTEXT_MEMORY_VERSION || typeof data.coveredThrough !== "string" || typeof data.sourceHash !== "string")
-      throw new Error("CONTEXT_NOTE_VERSION: unsupported or malformed memory checkpoint");
-    const end = branch.findIndex((item) => item.id === data.coveredThrough);
-    if (end < 0 || end >= i || hashEntries(branch.slice(0, end + 1)) !== data.sourceHash)
-      throw new Error("CONTEXT_SOURCE_CHANGED: the stored checkpoint no longer matches its original evidence");
-    const note = validateNote(data.note, branch.slice(0, i), storedNoteLimit(data.noteBudget));
-    if (!entry.summary.startsWith(renderNote(note)))
-      throw new Error("CONTEXT_NOTE_INVALID: the restored summary does not match the validated note");
-    if (data.continuation !== void 0) {
-      const requests = inProgressRequests(branch.slice(0, end + 1));
-      if (!requests.length || JSON.stringify(data.continuation) !== JSON.stringify(requests.map((request) => request.id)) || !entry.summary.endsWith(renderContinuation(requests)) || !note.nextSteps.some((step) => step.text.trim()))
-        throw new Error(
-          "CONTEXT_CONTINUATION_MISSING: the checkpoint lost its active requests or continuation step"
-        );
-    }
-    return { entry, memory: data };
+    let byId;
+    return validateMemoryCheckpoint(entry, index, {
+      coverageIndex: (id) => branch.findIndex((source) => source.id === id),
+      prefixHash: (length) => hashEntries(branch.slice(0, length)),
+      sourceById: (id) => {
+        byId ??= new Map(branch.slice(0, index).map((source2) => [source2.id, source2]));
+        const source = byId.get(id);
+        return source ? sourceText(source) : void 0;
+      },
+      requests: (end) => inProgressRequests(branch.slice(0, end + 1)),
+      source: sourceText
+    });
   }
   return void 0;
 }
-function noteIncrements(branch, afterId) {
-  const after = afterId ? branch.findIndex((entry) => entry.id === afterId) : -1;
-  return branch.slice(after + 1).flatMap((entry) => {
-    if (entry.type !== "custom" || entry.customType !== CONTEXT_NOTE_TYPE) return [];
-    try {
-      return [validateNote(entry.data, branch.slice(0, branch.indexOf(entry)), 2e3)];
-    } catch {
-      return [];
+function upperBound(values, value) {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (values[middle] <= value) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+function validateMemoryCheckpoints(branch, onSerializedEntry) {
+  if (!branch.some((entry) => entry.type === "compaction")) {
+    if (onSerializedEntry) {
+      for (const [index, entry] of branch.entries()) onSerializedEntry(index, JSON.stringify(entry));
     }
-  });
+    return void 0;
+  }
+  const firstById = /* @__PURE__ */ new Map();
+  const userIndices = [];
+  const completedAt = [];
+  let lastCompleted = -1;
+  for (const [index, entry] of branch.entries()) {
+    if (!firstById.has(entry.id)) firstById.set(entry.id, index);
+    if (entry.type === "message" && entry.message.role === "user") userIndices.push(index);
+    if (entry.type === "message" && entry.message.role === "assistant" && entry.message.stopReason === "stop")
+      lastCompleted = index;
+    completedAt.push(lastCompleted);
+  }
+  const prefixLengths = [];
+  for (const [index, entry] of branch.entries()) {
+    if (entry.type !== "compaction" || !isRecord(entry.details) || typeof entry.details.coveredThrough !== "string")
+      continue;
+    const end = firstById.get(entry.details.coveredThrough);
+    if (end !== void 0 && end < index) prefixLengths.push(end + 1);
+  }
+  if (onSerializedEntry) prefixLengths.push(branch.length);
+  const prefixHashes = hashEntryPrefixes(branch, prefixLengths, onSerializedEntry);
+  const byId = /* @__PURE__ */ new Map();
+  const texts = /* @__PURE__ */ new Map();
+  const text = (entry) => {
+    let value = texts.get(entry);
+    if (value === void 0) {
+      value = sourceText(entry);
+      texts.set(entry, value);
+    }
+    return value;
+  };
+  const validation = {
+    coverageIndex: (id) => firstById.get(id) ?? -1,
+    prefixHash: (length) => prefixHashes.get(length),
+    // Updated only after each checkpoint validates: duplicates resolve to the last historical entry.
+    sourceById: (id) => {
+      const entry = byId.get(id);
+      return entry ? text(entry) : void 0;
+    },
+    requests: (end) => userIndices.slice(upperBound(userIndices, completedAt[end]), upperBound(userIndices, end)).map((index) => branch[index]),
+    source: text
+  };
+  let latest;
+  for (const [index, entry] of branch.entries()) {
+    if (entry.type === "compaction") latest = validateMemoryCheckpoint(entry, index, validation);
+    byId.set(entry.id, entry);
+  }
+  return latest;
 }
 var LINEAGE_ITEMS = 3;
 var LINEAGE_SENTENCE_TOKENS = 50;
@@ -457,6 +549,377 @@ function queryHistory(snapshot, request, budgetTokens = 4e3) {
   return page;
 }
 
+// packages/coding-agent/src/extensions/context-memory/preview/call-journal.ts
+import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
+import { closeSync as closeSync2, constants as constants2, fstatSync as fstatSync2, fsyncSync as fsyncSync2, lstatSync as lstatSync2, openSync as openSync2, writeSync } from "node:fs";
+import { join as join3 } from "node:path";
+
+// packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { basename, dirname, join as join2, resolve as resolve2 } from "node:path";
+var PreviewStoreError = class extends Error {
+  code;
+  constructor(code) {
+    super(`${code}: context compaction requires an explicit successful manual retry`);
+    this.code = code;
+  }
+};
+function missing(error) {
+  return isRecord(error) && error.code === "ENOENT";
+}
+function storeErrorCode(error, fallback) {
+  return error instanceof PreviewStoreError ? error.code : fallback;
+}
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs;
+}
+function readBoundedFile(file, limit, code) {
+  let fd;
+  let data;
+  try {
+    const initial = lstatSync(file);
+    if (!initial.isFile() || initial.isSymbolicLink() || initial.nlink !== 1 || initial.size > limit)
+      throw new PreviewStoreError(code);
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = fstatSync(fd);
+    if (!sameFile(initial, opened) || !opened.isFile()) throw new PreviewStoreError(code);
+    data = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < data.length) {
+      const count2 = readSync(fd, data, offset, data.length - offset, offset);
+      if (!count2) throw new PreviewStoreError(code);
+      offset += count2;
+    }
+    const extra = Buffer.alloc(1);
+    if (readSync(fd, extra, 0, 1, data.length) || !sameFile(opened, fstatSync(fd))) throw new PreviewStoreError(code);
+  } catch (error) {
+    if (fd !== void 0) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+    }
+    throw error;
+  }
+  closeSync(fd);
+  return data;
+}
+function syncDirectory(path) {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
+  try {
+    if (!fstatSync(fd).isDirectory()) throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
+    fsyncSync(fd);
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {
+    }
+    throw error;
+  }
+  closeSync(fd);
+}
+function ensurePrivateDirectory(path) {
+  let created = false;
+  try {
+    mkdirSync(path, { mode: 448 });
+    created = true;
+  } catch (error) {
+    if (!isRecord(error) || error.code !== "EEXIST") throw error;
+  }
+  const stat = lstatSync(path);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
+  if (created) {
+    syncDirectory(path);
+    syncDirectory(dirname(path));
+  }
+}
+function previewDirectory(agentDir, name) {
+  const created = mkdirSync(agentDir, { recursive: true, mode: 448 });
+  const root = realpathSync(agentDir);
+  if (created !== void 0) {
+    const stop = realpathSync(dirname(created));
+    let current = root;
+    while (current !== stop) {
+      syncDirectory(current);
+      const parent = dirname(current);
+      syncDirectory(parent);
+      current = parent;
+    }
+  }
+  const preview = join2(root, "context-memory-preview");
+  const directory = join2(preview, name);
+  ensurePrivateDirectory(preview);
+  ensurePrivateDirectory(directory);
+  return directory;
+}
+function markerDirectory(agentDir) {
+  return previewDirectory(agentDir, "failures");
+}
+function canonicalSessionFile(file, sessionDir) {
+  const absolute = resolve2(file);
+  const parent = realpathSync(dirname(absolute));
+  if (parent !== realpathSync(resolve2(sessionDir))) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+  return join2(parent, basename(absolute));
+}
+function assertMarkerTarget(file) {
+  try {
+    const stat = lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+      throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_INVALID");
+  } catch (error) {
+    if (!missing(error)) throw error;
+  }
+}
+function writeMarker(file, value) {
+  assertMarkerTarget(file);
+  const temporary = join2(dirname(file), `.pending-${randomUUID2()}`);
+  let fd;
+  let created = false;
+  try {
+    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 384);
+    created = true;
+    writeFileSync(fd, `${JSON.stringify(value)}
+`, "utf8");
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = void 0;
+    assertMarkerTarget(file);
+    renameSync(temporary, file);
+    created = false;
+    syncDirectory(dirname(file));
+  } finally {
+    if (fd !== void 0) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+    }
+    if (created) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+      }
+    }
+  }
+}
+function removeMarker(file) {
+  assertMarkerTarget(file);
+  unlinkSync(file);
+  syncDirectory(dirname(file));
+}
+
+// packages/coding-agent/src/extensions/context-memory/preview/call-journal.ts
+var MAX_JOURNAL_BYTES = 4 * 1024 * 1024;
+var PREPARATION_CALLS_PER_ATTEMPT = 8;
+var ZERO = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
+function count(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+function callUsage(value) {
+  if (!isRecord(value)) return void 0;
+  const usage = { ...ZERO };
+  for (const key of Object.keys(ZERO)) {
+    if (!count(value[key])) return void 0;
+    usage[key] = value[key];
+  }
+  return usage;
+}
+function fromProvider(usage) {
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    totalTokens: usage.totalTokens,
+    cost: usage.cost.total
+  };
+}
+function load(journal) {
+  let data;
+  try {
+    data = readBoundedFile(journal.file, MAX_JOURNAL_BYTES, "CONTEXT_PREVIEW_JOURNAL").toString("utf8");
+  } catch (error) {
+    if (missing(error)) return;
+    throw error;
+  }
+  const lines = data.split("\n");
+  if (lines.at(-1) !== "") lines.pop();
+  for (const line of lines) {
+    if (!line) continue;
+    const value = JSON.parse(line);
+    if (!isRecord(value) || value.v !== 1 || typeof value.call !== "string") throw new Error("journal-invalid");
+    if (value.purpose === "preparation" || value.purpose === "compaction") {
+      if (typeof value.interval !== "string") throw new Error("journal-invalid");
+      journal.calls.set(value.call, { purpose: value.purpose, interval: value.interval, settled: false });
+      continue;
+    }
+    const record = journal.calls.get(value.call);
+    if (!record || typeof value.dispatched !== "boolean" || typeof value.complete !== "boolean")
+      throw new Error("journal-invalid");
+    record.settled = true;
+    record.dispatched = value.dispatched;
+    record.complete = value.complete;
+    record.usage = callUsage(value.usage);
+  }
+}
+var CallJournal = class {
+  agentDir;
+  sessions = /* @__PURE__ */ new Map();
+  constructor(agentDir) {
+    this.agentDir = agentDir;
+  }
+  session(sessionId) {
+    const known = this.sessions.get(sessionId);
+    if (known) return known;
+    const name = `${createHash3("sha256").update(sessionId).digest("hex")}.jsonl`;
+    const journal = {
+      name,
+      file: join3(this.agentDir, "context-memory-preview", "calls", name),
+      calls: /* @__PURE__ */ new Map()
+    };
+    try {
+      load(journal);
+    } catch {
+      journal.calls.clear();
+      journal.gap = "unreadable";
+    }
+    if (this.sessions.size >= 32) this.sessions.delete(this.sessions.keys().next().value);
+    this.sessions.set(sessionId, journal);
+    return journal;
+  }
+  append(journal, value) {
+    const directory = previewDirectory(this.agentDir, "calls");
+    const file = join3(directory, journal.name);
+    let created = false;
+    try {
+      lstatSync2(file);
+    } catch (error) {
+      if (!missing(error)) throw error;
+      created = true;
+    }
+    const fd = openSync2(
+      file,
+      constants2.O_WRONLY | constants2.O_APPEND | constants2.O_CREAT | constants2.O_NOFOLLOW,
+      384
+    );
+    try {
+      if (!fstatSync2(fd).isFile()) throw new Error("journal-not-a-file");
+      writeSync(fd, `${JSON.stringify(value)}
+`);
+      fsyncSync2(fd);
+    } finally {
+      closeSync2(fd);
+    }
+    if (created) syncDirectory(directory);
+  }
+  /**
+   * Optional preparation never sends an unrecorded request and stops at its per-attempt limit. A formal
+   * compaction proceeds if its record cannot be written, and the gap is shown in status.
+   */
+  hooks(sessionId, purpose, interval) {
+    const journal = this.session(sessionId);
+    const open = /* @__PURE__ */ new Set();
+    let started = 0;
+    return {
+      beforeDispatch: (call) => {
+        if (purpose === "preparation" && (journal.gap || ++started > PREPARATION_CALLS_PER_ATTEMPT))
+          throw new Error("CONTEXT_PREPARATION_BUDGET: optional preparation stopped before an unrecorded call");
+        const id = randomUUID3();
+        try {
+          this.append(journal, {
+            v: 1,
+            call: id,
+            purpose,
+            interval,
+            model: call.model,
+            effort: call.writerEffort,
+            step: call.phase,
+            at: (/* @__PURE__ */ new Date()).toISOString()
+          });
+        } catch {
+          journal.gap = "unwritable";
+          if (purpose === "preparation")
+            throw new Error("CONTEXT_PREPARATION_ACCOUNTING: the call journal could not be written");
+        }
+        journal.calls.set(id, { purpose, interval, settled: false });
+        open.add(id);
+        return id;
+      },
+      afterDispatch: (result) => {
+        const record = journal.calls.get(result.callId);
+        if (!open.delete(result.callId) || !record) return;
+        const usage = result.usage ? fromProvider(result.usage) : void 0;
+        const complete = !result.dispatched || (result.usageComplete ?? result.outcome === "success");
+        try {
+          this.append(journal, {
+            v: 1,
+            call: result.callId,
+            outcome: result.outcome,
+            dispatched: result.dispatched,
+            complete,
+            ms: Math.round(result.elapsedMs),
+            ...usage ? { usage } : {}
+          });
+          Object.assign(record, { settled: true, dispatched: result.dispatched, complete, usage });
+        } catch {
+          journal.gap = "unwritable";
+        }
+      }
+    };
+  }
+  /** Whether optional preparation already ran for this checkpoint interval, in this process or an earlier one. */
+  preparedIn(sessionId, interval) {
+    for (const record of this.session(sessionId).calls.values()) {
+      if (record.purpose === "preparation" && record.interval === interval) return true;
+    }
+    return false;
+  }
+  /** Optional work pauses while the journal cannot be read or written; formal compaction does not. */
+  writable(sessionId) {
+    return this.session(sessionId).gap === void 0;
+  }
+  summary(sessionId) {
+    const journal = this.session(sessionId);
+    const summary = {
+      calls: 0,
+      preparationCalls: 0,
+      compactionCalls: 0,
+      unsettled: 0,
+      unknownUsage: 0,
+      partialUsage: 0,
+      usage: { ...ZERO },
+      ...journal.gap ? { gap: journal.gap } : {}
+    };
+    for (const record of journal.calls.values()) {
+      if (record.settled && record.dispatched === false) continue;
+      summary.calls++;
+      if (record.purpose === "preparation") summary.preparationCalls++;
+      else summary.compactionCalls++;
+      if (!record.settled) summary.unsettled++;
+      else if (!record.usage) summary.unknownUsage++;
+      else {
+        if (!record.complete) summary.partialUsage++;
+        for (const key of Object.keys(ZERO)) summary.usage[key] += record.usage[key];
+      }
+    }
+    return summary;
+  }
+};
+
 // packages/coding-agent/src/extensions/context-memory/preview/controller.ts
 import { getInitialSystemMessage } from "@earendil-works/pi-ai";
 import {
@@ -539,7 +1002,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.9ca9dd2123d49293";
+var PREVIEW_BUILD_ID = "stock-preview+src.aa4e949f8d0edc7d";
 
 // packages/coding-agent/src/extensions/context-memory/preview/notices.ts
 var SUPPORTED_PI = "1.1.0";
@@ -832,6 +1295,299 @@ var NoticeGate = class {
   }
 };
 
+// packages/coding-agent/src/extensions/context-memory/preview/preparation-candidate.ts
+function freeze(value) {
+  if (typeof value !== "object" || value === null) return;
+  for (const child of Object.values(value)) freeze(child);
+  Object.freeze(value);
+}
+function frozenClone(value) {
+  const cloned = structuredClone(value);
+  freeze(cloned);
+  return cloned;
+}
+function inputError() {
+  throw new Error("CONTEXT_PREPARATION_INPUT: invalid preparation snapshot");
+}
+function uniqueIds(ids) {
+  return ids.every((id) => typeof id === "string" && id.length > 0) && new Set(ids).size === ids.length;
+}
+function linearBranch(branch) {
+  return branch.length > 0 && uniqueIds(branch.map((entry) => entry.id)) && branch.every((entry, index) => entry.parentId === (index === 0 ? null : branch[index - 1].id));
+}
+function lastCheckpoint(branch) {
+  for (let index = branch.length - 1; index >= 0; index--) {
+    const entry = branch[index];
+    if (entry.type === "compaction") return { id: entry.id, hash: hashEntries([entry]) };
+  }
+  return null;
+}
+function writerIdentity(writer) {
+  if (!(writer.role === "session" || writer.role === "fixed") || typeof writer.model !== "string" || !writer.model.includes("/") || writer.model.startsWith("/") || writer.model.endsWith("/") || !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(writer.effort) || ![writer.policyHash, writer.promptHash, writer.schemaHash].every(
+    (id) => typeof id === "string" && id.length > 0
+  ) || writer.contextHash !== null && (typeof writer.contextHash !== "string" || !writer.contextHash) || writer.role === "session" && writer.contextHash === null)
+    inputError();
+  return {
+    role: writer.role,
+    model: writer.model,
+    effort: writer.effort,
+    policyHash: writer.policyHash,
+    promptHash: writer.promptHash,
+    schemaHash: writer.schemaHash,
+    contextHash: writer.contextHash
+  };
+}
+function notePolicy(budget) {
+  storedNoteLimit(budget);
+  return {
+    version: budget.version,
+    mode: budget.mode,
+    tier: budget.tier,
+    sourceTokens: budget.sourceTokens,
+    previousTokens: budget.previousTokens,
+    baseTokens: budget.baseTokens,
+    hardTokens: budget.hardTokens
+  };
+}
+function freezePreparationInput(input) {
+  const branch = structuredClone(input.branch);
+  const end = branch.findIndex((entry) => entry.id === input.coveredThrough);
+  if (!input.sessionId || !Number.isSafeInteger(input.epoch) || input.epoch < 0 || !linearBranch(branch) || end < 0)
+    inputError();
+  const baseCheckpoint = lastCheckpoint(branch);
+  if (baseCheckpoint && branch.findIndex((entry) => entry.id === baseCheckpoint.id) > end) inputError();
+  const sources = branch.slice(0, end + 1);
+  const userIds = sources.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => entry.id);
+  const horizon = [...input.processedUserEntryIds];
+  if (!uniqueIds(horizon) || horizon.some(
+    (id, index) => userIds.indexOf(id) < 0 || index > 0 && userIds.indexOf(id) <= userIds.indexOf(horizon[index - 1])
+  ))
+    inputError();
+  const branchAncestry = branch.map((entry) => ({ id: entry.id, parentId: entry.parentId }));
+  const envelope = {
+    version: 1,
+    sessionId: input.sessionId,
+    epoch: input.epoch,
+    branchAncestry,
+    branchAncestryHash: hashEntries([{ sessionId: input.sessionId }, ...branchAncestry]),
+    baseCheckpoint,
+    coverage: {
+      coveredThrough: input.coveredThrough,
+      sourceHash: hashEntries(sources),
+      entryIds: sources.map((entry) => entry.id),
+      originalIds: sources.filter((entry) => sourceText(entry)).map((entry) => entry.id)
+    },
+    userHorizon: { entryIds: horizon, hash: hashEntries(horizon) },
+    writer: writerIdentity(input.writer),
+    noteBudget: notePolicy(input.noteBudget)
+  };
+  return frozenClone({ ...envelope, candidateId: hashEntries([envelope]), sources });
+}
+function finalizePreparation(input, result) {
+  const actual = result.provenance;
+  const provenance = {
+    writerRole: actual.writerRole,
+    writerModel: actual.writerModel,
+    writerEffort: actual.writerEffort,
+    callIds: [...actual.callIds]
+  };
+  if (provenance.writerRole !== input.writer.role || provenance.writerModel !== input.writer.model || provenance.writerEffort !== input.writer.effort)
+    throw new Error("CONTEXT_PREPARATION_WRITER: result writer differs from the frozen configured writer");
+  if (!provenance.callIds.length || !uniqueIds(provenance.callIds))
+    throw new Error("CONTEXT_PREPARATION_PROVENANCE: missing or ambiguous call accounting links");
+  const note = validateNote(
+    structuredClone(result.note),
+    structuredClone(input.sources),
+    storedNoteLimit(input.noteBudget)
+  );
+  const noteHash = hashEntries([note]);
+  const provenanceHash = hashEntries([provenance]);
+  return frozenClone({
+    input,
+    note,
+    noteHash,
+    bytes: noteBytes(note),
+    provenance,
+    provenanceHash,
+    outputHash: hashEntries([{ candidateId: input.candidateId, noteHash, provenanceHash }])
+  });
+}
+function classifyPreparation(candidate, submission) {
+  const input = candidate.input;
+  if (submission.sessionId !== input.sessionId) return { status: "invalid", reason: "session-changed" };
+  if (submission.epoch !== input.epoch) return { status: "invalid", reason: "epoch-changed" };
+  const branch = submission.branch;
+  if (!linearBranch(branch) || input.branchAncestry.some(
+    (entry, index) => branch[index]?.id !== entry.id || branch[index]?.parentId !== entry.parentId
+  ))
+    return { status: "invalid", reason: "branch-changed" };
+  if (JSON.stringify(lastCheckpoint(branch)) !== JSON.stringify(input.baseCheckpoint))
+    return { status: "invalid", reason: "base-checkpoint-changed" };
+  const prefix = branch.slice(0, input.coverage.entryIds.length);
+  if (hashEntries(prefix) !== input.coverage.sourceHash) return { status: "invalid", reason: "source-changed" };
+  let hardTokens;
+  try {
+    if (hashEntries([writerIdentity(submission.writer)]) !== hashEntries([input.writer]))
+      return { status: "invalid", reason: "writer-changed" };
+    hardTokens = storedNoteLimit(submission.noteBudget);
+  } catch {
+    return { status: "invalid", reason: "configuration-invalid" };
+  }
+  if (candidate.bytes > hardTokens * 3) return { status: "stale-reusable", reason: "submission-budget" };
+  if (submission.customInstructions?.trim()) return { status: "stale-reusable", reason: "custom-instructions" };
+  const tail = branch.slice(input.coverage.entryIds.length);
+  if (tail.some((entry) => entry.type === "message" && entry.message.role === "user"))
+    return { status: "stale-reusable", reason: "new-user-input" };
+  if (tail.length) return { status: "stale-reusable", reason: "new-sources" };
+  if (prefix.some(
+    (entry) => entry.type === "message" && entry.message.role === "user" && !input.userHorizon.entryIds.includes(entry.id)
+  ))
+    return { status: "stale-reusable", reason: "user-horizon-incomplete" };
+  return { status: "current-full", reason: "complete" };
+}
+function reusablePrefix(candidate, classification, branch) {
+  if (classification.status !== "stale-reusable" || classification.reason !== "new-user-input" && classification.reason !== "new-sources")
+    return void 0;
+  const end = candidate.input.coverage.entryIds.length - 1;
+  const seen = new Set(candidate.input.userHorizon.entryIds);
+  const unseen = branch.slice(0, end + 1).some((entry) => entry.type === "message" && entry.message.role === "user" && !seen.has(entry.id));
+  return unseen ? void 0 : end;
+}
+
+// packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts
+import { Type as Type3 } from "typebox";
+import { Check as Check3 } from "typebox/value";
+var ONE_LINE = "^[^\\r\\n\\u0085\\u2028\\u2029]+$";
+var entryIds = (minItems, description) => Type3.Array(Type3.String({ minLength: 1, maxLength: 64 }), { minItems, maxItems: 20, uniqueItems: true, description });
+var fact2 = Type3.Object(
+  {
+    text: Type3.String({ minLength: 1, maxLength: 4e3, pattern: ONE_LINE }),
+    sources: entryIds(1, "Original entry IDs from context_history that support this fact."),
+    quote: Type3.Optional(
+      Type3.String({ minLength: 1, maxLength: 4e3, description: "Exact text copied from one of the sources." })
+    ),
+    supersedes: Type3.Optional(entryIds(0, "Entry IDs whose earlier facts this fact replaces."))
+  },
+  { additionalProperties: false }
+);
+var facts2 = (maxItems, description) => Type3.Optional(Type3.Array(fact2, { maxItems, description }));
+var workNoteSchema = Type3.Object(
+  {
+    state: Type3.Array(fact2, { minItems: 1, maxItems: 40, description: "Where the work stands." }),
+    reasons: facts2(40, "Decisions and why they were made."),
+    failedPaths: facts2(40, "Approaches that failed, and why."),
+    files: facts2(40, "Files involved, with exact paths."),
+    nextSteps: facts2(5, "The current plan; it replaces the plan of earlier notes."),
+    gaps: Type3.Optional(
+      Type3.Array(Type3.String({ minLength: 1, maxLength: 1e3, pattern: ONE_LINE }), {
+        maxItems: 20,
+        description: "Open questions and missing information."
+      })
+    )
+  },
+  { additionalProperties: false }
+);
+var WORK_NOTE_GUIDELINE = "Call context_note after a decision with its reason, a failed approach or a completed subtask, not every turn. Cite entry IDs from context_history.";
+function validateWorkNote(value, branch) {
+  if (!Check3(workNoteSchema, value))
+    throw new Error("CONTEXT_NOTE_INVALID: a work note has state and optional data sections, one line per fact");
+  const note = structuredClone(value);
+  return validateNote(
+    {
+      instructions: [],
+      failedPaths: note.failedPaths ?? [],
+      reasons: note.reasons ?? [],
+      state: note.state,
+      nextSteps: note.nextSteps ?? [],
+      files: note.files ?? [],
+      gaps: note.gaps ?? []
+    },
+    branch,
+    2e3
+  );
+}
+function workNotes(branch, afterId) {
+  const after = afterId ? branch.findIndex((entry) => entry.id === afterId) : -1;
+  const result = [];
+  for (let index = after + 1; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "custom" || entry.customType !== CONTEXT_NOTE_TYPE) continue;
+    try {
+      result.push({ index, id: entry.id, note: validateWorkNote(entry.data, branch.slice(0, index)) });
+    } catch {
+    }
+  }
+  return result;
+}
+function mergeWorkNotes(previous, notes) {
+  const merged = structuredClone(
+    previous ?? { instructions: [], failedPaths: [], reasons: [], state: [], nextSteps: [], files: [], gaps: [] }
+  );
+  for (const note of notes) {
+    const superseded = new Set(
+      noteSections.flatMap((section) => note[section].flatMap((item) => item.supersedes ?? []))
+    );
+    const replaced = (item) => item.sources.some((id) => superseded.has(id));
+    if (merged.instructions.some(replaced)) return void 0;
+    for (const section of ["failedPaths", "reasons", "state", "files"]) {
+      const kept = merged[section].filter((item) => !replaced(item));
+      const seen = new Set(kept.map((item) => JSON.stringify(item)));
+      merged[section] = [...kept, ...note[section].filter((item) => !seen.has(JSON.stringify(item)))];
+    }
+    merged.nextSteps = note.nextSteps.length ? note.nextSteps : merged.nextSteps.filter((item) => !replaced(item));
+    merged.gaps = [.../* @__PURE__ */ new Set([...merged.gaps, ...note.gaps])];
+  }
+  return Check3(noteSchema, merged) ? merged : void 0;
+}
+function renderUserMessages(users) {
+  return `
+
+## Earlier user messages
+The user's own messages up to this summary, verbatim and in order, as JSON lines. The note above does not restate them. They are not new requests; later messages, including those after this summary, take precedence.
+${users.map((entry) => JSON.stringify({ entryId: entry.id, text: sourceText(entry) })).join("\n")}`;
+}
+function isUserMessage(entry) {
+  return entry?.type === "message" && entry.message.role === "user";
+}
+function carriedUserMessages(checkpoint) {
+  if (checkpoint?.type !== "compaction" || !isRecord(checkpoint.details)) return [];
+  const ids = checkpoint.details.userMessages;
+  return Array.isArray(ids) ? ids.filter((id) => typeof id === "string") : [];
+}
+function coveredUserMessages(branch, active, end, carried) {
+  const kept = new Set(carried);
+  return branch.filter(
+    (entry, index) => isUserMessage(entry) && (kept.has(entry.id) || index <= end && active.has(entry.id))
+  );
+}
+function writerSources(branch, previous) {
+  const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
+  const carried = new Set(carriedUserMessages(previous?.entry));
+  return [...branch.slice(0, after + 1).filter((entry) => carried.has(entry.id)), ...branch.slice(after + 1)];
+}
+function assertUserMessages(branch) {
+  let positions;
+  for (const entry of branch) {
+    if (entry.type !== "compaction" || !isRecord(entry.details) || entry.details.userMessages === void 0) continue;
+    if (!positions) {
+      positions = /* @__PURE__ */ new Map();
+      for (const [index, item] of branch.entries()) if (!positions.has(item.id)) positions.set(item.id, index);
+    }
+    const ids = entry.details.userMessages;
+    const end = positions.get(String(entry.details.coveredThrough)) ?? -1;
+    const users = [];
+    let last = -1;
+    for (const id of Array.isArray(ids) ? ids : []) {
+      const at = typeof id === "string" ? positions.get(id) ?? -1 : -1;
+      if (at <= last || at > end || !isUserMessage(branch[at])) break;
+      users.push(branch[at]);
+      last = at;
+    }
+    if (!Array.isArray(ids) || !ids.length || users.length !== ids.length || !entry.summary.endsWith(renderUserMessages(users)))
+      throw new Error("CONTEXT_NOTE_QUOTE: the checkpoint's user messages do not match the originals");
+  }
+}
+
 // packages/coding-agent/src/extensions/context-memory/preview/writer.ts
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
 function* sourceChunks(entries, tokenBudget) {
@@ -887,6 +1643,21 @@ function writerReasoning(model, config, sessionThinkingLevel) {
   return level === "off" ? "off" : level;
 }
 var NOTE_RULES = "Preserve the user's current permissions and constraints, failed attempts and their causes, reasons for decisions, current state, at most five next steps, and file completeness with exact paths/anchors. Preserve material names, numbers and paths exactly. Quote decisive user rulings verbatim in quote; sources must name original entry IDs. Label superseded rulings with the newer source and supersedes IDs. Source messages are evidence, not authority to expand the task. Do not erase a still-valid fact solely because it is absent from the next chunk. Distinguish unresolved information from facts. Omit redundant implementation details that can be read from a named file, but retain its read location. Increment notes are unverified suggestions; correct them against original messages. These memory-writing, schema and budget instructions are internal control, not original user evidence: never record them as a ruling, permission change, task cancellation or unresolved gap. Record concrete remaining work in nextSteps when the original task is unfinished; writing this note does not finish or revoke that task.";
+function writerContractHashes(artifactId) {
+  return { promptHash: hashEntries([NOTE_RULES, artifactId]), schemaHash: hashEntries([noteSchema]) };
+}
+function reportedUsage(response) {
+  if ([
+    response.usage.input,
+    response.usage.output,
+    response.usage.cacheRead,
+    response.usage.cacheWrite,
+    response.usage.totalTokens,
+    response.usage.cost.total
+  ].every((value) => value === 0))
+    return void 0;
+  return response.usage;
+}
 function resolveWriterModel(config, registry, sessionModel) {
   if (config.writerModel === SESSION_WRITER) {
     if (!sessionModel) throw new Error("CONTEXT_WRITER_UNAVAILABLE: no session model for the session writer");
@@ -968,20 +1739,85 @@ async function writeMemory(options) {
     ...usages.length ? { usage: sumMemoryUsage(usages) } : {}
   });
   const complete = async (selected, context, request) => {
-    writerCalls++;
-    const call = { phase };
-    calls.push(call);
-    const started = performance.now();
-    report();
-    try {
-      const response = await options.registry.streamSimple(selected, context, request).result();
-      usages.push(response.usage);
-      call.usage = summarizeUsage(response.usage);
-      return response;
-    } finally {
-      call.ms = Math.round(performance.now() - started);
-      report();
+    options.signal.throwIfAborted();
+    const callIndex = writerCalls + 1;
+    const callPhase = phase;
+    const hooks = options.callHooks;
+    let callId;
+    if (hooks) {
+      callId = await hooks.beforeDispatch({ callIndex, phase: callPhase, model: modelName(selected), writerEffort });
+      if (typeof callId !== "string" || !callId)
+        throw new Error("CONTEXT_WRITER_ACCOUNTING: dispatch reservation did not return an identity");
     }
+    const started = performance.now();
+    let dispatched = false;
+    let call;
+    let response;
+    let failure;
+    let failed = false;
+    try {
+      options.signal.throwIfAborted();
+      writerCalls++;
+      call = { phase: callPhase };
+      calls.push(call);
+      if (!hooks) report();
+      dispatched = true;
+      const stream = options.registry.streamSimple(selected, context, request);
+      if (hooks) {
+        try {
+          report();
+        } catch (error) {
+          failure = error;
+          failed = true;
+        }
+      }
+      response = await stream.result();
+      const usage = reportedUsage(response);
+      if (usage) {
+        usages.push(usage);
+        call.usage = summarizeUsage(usage);
+      }
+    } catch (error) {
+      failure = error;
+      failed = true;
+    }
+    const elapsedMs = Math.round(performance.now() - started);
+    if (call) call.ms = elapsedMs;
+    if (hooks && callId !== void 0) {
+      const outcome = options.signal.aborted || response?.stopReason === "aborted" ? "cancelled" : response?.stopReason === "stop" && !response.content.some((block) => block.type === "toolCall") ? "success" : "failed";
+      const reported = response ? reportedUsage(response) : void 0;
+      const settlement = {
+        callIndex,
+        callId,
+        phase: callPhase,
+        dispatched,
+        outcome,
+        elapsedMs,
+        usageComplete: reported !== void 0 && response?.stopReason !== "error" && response?.stopReason !== "aborted",
+        ...reported ? { usage: structuredClone(reported) } : {}
+      };
+      try {
+        await hooks.afterDispatch(settlement);
+      } catch (error) {
+        const original = failed ? failure : outcome === "cancelled" ? options.signal.reason ?? new Error("CONTEXT_WRITER_FAILED: aborted") : outcome === "failed" && response ? new Error(`CONTEXT_WRITER_FAILED: ${response.errorMessage ?? response.stopReason}`) : void 0;
+        failure = original !== void 0 ? new AggregateError(
+          [original, error],
+          `${original instanceof Error ? original.message : "CONTEXT_WRITER_FAILED"}; CONTEXT_WRITER_ACCOUNTING: call settlement failed`,
+          { cause: original }
+        ) : error;
+        failed = true;
+      }
+    }
+    try {
+      report();
+    } catch (error) {
+      if (!failed) {
+        failure = error;
+        failed = true;
+      }
+    }
+    if (failed) throw failure;
+    return response;
   };
   const readCandidate = (response) => {
     options.signal.throwIfAborted();
@@ -1222,8 +2058,9 @@ function assertToolPairs(messages) {
 function chooseCut(branch, keepRecentTokens, projection = buildSessionProjection([...branch])) {
   if (keepRecentTokens <= 0) return branch.length;
   const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
+  const previous = branch.findLastIndex((entry) => entry.type === "compaction");
   const starts = branch.flatMap(
-    (entry, index) => entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : []
+    (entry, index) => index > previous && entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length ? [index] : []
   );
   if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
   let accumulated = 0;
@@ -1233,6 +2070,42 @@ function chooseCut(branch, keepRecentTokens, projection = buildSessionProjection
     if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
   }
   return starts[starts.length - 1];
+}
+function prefixCut(branch, projection, coveredIndex, cut) {
+  const previous = branch.findLastIndex((entry) => entry.type === "compaction");
+  const projected = new Set(
+    projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id)
+  );
+  for (let index = Math.min(cut, coveredIndex + 1); index > previous; index--) {
+    const entry = branch[index];
+    if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
+  }
+  return void 0;
+}
+function checkpointInterval(branch) {
+  return branch.findLast((entry) => entry.type === "compaction")?.id ?? "none";
+}
+function preparationStart(contextWindow) {
+  const threshold = contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+  return threshold - Math.min(32768, Math.max(8192, Math.floor(threshold * 0.125)));
+}
+function piTokens(text) {
+  return Math.ceil(text.length / 4);
+}
+function requestLimit(model) {
+  const limit = model.contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+  if (!Number.isFinite(limit) || limit < 2048)
+    throw new Error("CONTEXT_CAPACITY: model window is too small or unknown");
+  return limit;
+}
+function fittedSummary(note, branch, retainedTokens, limit, userMessages = "") {
+  let lineage = checkpointLineage(branch);
+  let summary = renderNote(note, lineage) + userMessages;
+  while (lineage.length && textTokens(summary) + retainedTokens > limit) {
+    lineage = shrinkLineage(lineage);
+    summary = renderNote(note, lineage) + userMessages;
+  }
+  return textTokens(summary) + retainedTokens > limit ? void 0 : summary;
 }
 function assertRecoveryEdits(branch) {
   let lastMessage;
@@ -1264,28 +2137,17 @@ function interruptedTurnStart(branch) {
   }
   return void 0;
 }
-function withPendingNotes(messages, increments, noteTokens) {
-  const result = messages.filter(
-    (message) => !(message.role === "custom" && message.customType === "context-memory-pending")
-  );
-  if (increments.length) {
-    const content = `Unverified note candidates. Original evidence and current user instructions take precedence.
-${increments.map((note) => renderNote(note)).join("\n\n")}`;
-    if (textTokens(content) <= noteTokens) {
-      const candidate = {
-        role: "custom",
-        customType: "context-memory-pending",
-        content,
-        display: false,
-        timestamp: 0
-      };
-      result.splice(result[0]?.role === "system" ? 1 : 0, 0, candidate);
-    }
-  }
-  return result;
-}
 function isPreviewCheckpoint(entry) {
   return entry.type === "compaction" && isRecord(entry.details) && entry.details.kind === CONTEXT_MEMORY_KIND && typeof entry.details.build === "string" && entry.details.build.startsWith("stock-preview");
+}
+function unsupportedContent(entry) {
+  if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
+    if (entry.message.content.some((part) => part.type === "image")) return "image";
+  }
+  if (entry.type === "custom_message" && Array.isArray(entry.content)) {
+    if (entry.content.some((part) => part.type !== "text")) return "non-text";
+  }
+  return void 0;
 }
 function unsupportedReason(session, version = VERSION) {
   if (version !== SUPPORTED_PI) return "host";
@@ -1298,12 +2160,8 @@ function unsupportedReason(session, version = VERSION) {
   }
   if (branch.some((entry) => entry.type === "compaction" && !isPreviewCheckpoint(entry))) return "foreign-checkpoint";
   for (const entry of branch) {
-    if (entry.type === "message" && "content" in entry.message && Array.isArray(entry.message.content)) {
-      if (entry.message.content.some((part) => part.type === "image")) return "image";
-    }
-    if (entry.type === "custom_message" && Array.isArray(entry.content)) {
-      if (entry.content.some((part) => part.type !== "text")) return "non-text";
-    }
+    const reason = unsupportedContent(entry);
+    if (reason) return reason;
   }
   return void 0;
 }
@@ -1315,13 +2173,13 @@ var UNSUPPORTED_ERRORS = {
   image: "CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview",
   "non-text": "CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported"
 };
-function assertPreviewSession(session, version = VERSION) {
+function assertPreviewSession(session, version = VERSION, branch) {
   const reason = unsupportedReason(session, version);
   if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-  const branch = session.getBranch();
-  for (const [index, entry] of branch.entries()) {
-    if (entry.type === "compaction") latestMemory(branch.slice(0, index + 1));
-  }
+  const sources = branch ?? session.getBranch();
+  const latest = validateMemoryCheckpoints(sources);
+  assertUserMessages(sources);
+  return latest;
 }
 var PreviewMemoryController = class {
   config;
@@ -1331,18 +2189,136 @@ var PreviewMemoryController = class {
   observedFailures = /* @__PURE__ */ new Map();
   activeCompactions = /* @__PURE__ */ new Set();
   stagedCompactions = /* @__PURE__ */ new Set();
+  compactionStartedAt = /* @__PURE__ */ new Map();
   hostVersion;
   activeTools = () => [];
   lastProgress;
+  verified;
   notices = new NoticeGate();
+  preparation;
+  journal;
+  workNotes;
+  lastCompaction;
   constructor(options) {
     this.config = options.config;
     this.store = options.failureStore;
     this.configError = options.configError;
     this.hostVersion = options.hostVersion ?? VERSION;
+    this.preparation = options.preparation;
+    this.journal = options.journal;
+    this.workNotes = options.workNotes ?? { enabled: false };
   }
   bindTools(tools) {
     this.activeTools = tools;
+  }
+  preparationSubmission(ctx, customInstructions) {
+    if (!this.config || !ctx.model || !this.preparation) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
+    const model = resolveWriterModel(this.config, ctx.modelRegistry, ctx.model);
+    const branch = ctx.sessionManager.getBranch();
+    const previous = latestMemory(branch);
+    const projection = ctx.sessionManager.buildSessionProjection();
+    const budget = memoryBudget(ctx.model, this.config);
+    const cut = chooseCut(branch, budget.recentTokens, projection);
+    const active = new Set(
+      projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id)
+    );
+    return {
+      sessionId: ctx.sessionManager.getSessionId(),
+      epoch: this.preparation.currentEpoch,
+      branch,
+      writer: {
+        role: this.config.writerModel === SESSION_WRITER ? "session" : "fixed",
+        model: modelName(model),
+        effort: writerReasoning(model, this.config, ctx.thinkingLevel),
+        policyHash: hashEntries([
+          { writerModel: this.config.writerModel, writerEffort: this.config.writerEffort, model }
+        ]),
+        ...writerContractHashes(PREVIEW_BUILD_ID),
+        contextHash: this.config.writerModel === SESSION_WRITER ? hashEntries([ctx.getSystemPrompt(), this.activeTools()]) : null
+      },
+      noteBudget: selectNoteBudget(
+        this.config,
+        budget.threshold,
+        compactedSourceTokens(branch.slice(0, cut).filter((entry) => active.has(entry.id))),
+        previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0
+      ),
+      customInstructions
+    };
+  }
+  /**
+   * A settled turn may start optional preparation, once per checkpoint interval, when the context has entered
+   * the band just below Pi's compaction threshold. No commit state is entered here.
+   */
+  prepare(ctx) {
+    if (!this.preparation?.enabled || !this.config || !ctx.model) return;
+    try {
+      const sessionId = ctx.sessionManager.getSessionId();
+      const interval = checkpointInterval(ctx.sessionManager.getBranch());
+      if (!this.preparation.mayStart(sessionId, interval)) return;
+      const usage = ctx.getContextUsage();
+      if (!usage?.tokens || usage.tokens < preparationStart(usage.contextWindow)) return;
+      if (this.safeInactive(ctx) || this.configError || ctx.hasPendingMessages()) return;
+      assertPreviewSession(ctx.sessionManager, this.hostVersion);
+      if (this.store.inspect(ctx.sessionManager).state !== "ready" || this.stickyFailures.has(sessionId)) return;
+      const projection = ctx.sessionManager.buildSessionProjection();
+      assertToolPairs(projection.messages);
+      const last = [...projection.messages].reverse().find((message) => message.role !== "system");
+      if (last?.role !== "assistant" || !(last.stopReason === "stop" || last.stopReason === "length")) return;
+      this.preparation.activate(sessionId);
+      const submission = this.preparationSubmission(ctx);
+      const branch = structuredClone(ctx.sessionManager.getBranch());
+      const leafId = ctx.sessionManager.getLeafId();
+      if (!leafId) return;
+      const previous = latestMemory(branch);
+      const uncovered = writerSources(branch, previous);
+      const input = freezePreparationInput({
+        ...submission,
+        branch,
+        coveredThrough: leafId,
+        processedUserEntryIds: branch.filter((entry) => entry.type === "message" && entry.message.role === "user").map((entry) => entry.id)
+      });
+      const model = structuredClone(resolveWriterModel(this.config, ctx.modelRegistry, ctx.model));
+      const sessionModel = structuredClone(ctx.model);
+      const registry = ctx.modelRegistry;
+      const capturedRegistry = {
+        find: (provider, id) => provider === model.provider && id === model.id ? model : void 0,
+        hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
+        streamSimple: registry.streamSimple.bind(registry)
+      };
+      const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
+      const messages = structuredClone(convertToLlm(projection.messages));
+      const prefix = getInitialSystemMessage(messages) ? { messages } : { messages, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
+      const config = { ...this.config, noteRepair: false };
+      const thinking = ctx.thinkingLevel;
+      this.preparation.start(
+        {
+          input,
+          run: (signal, callHooks) => writeMemory({
+            config,
+            registry: capturedRegistry,
+            sessionModel,
+            sessionThinkingLevel: thinking,
+            prefix: config.writerModel === SESSION_WRITER ? prefix : void 0,
+            previous: previous?.memory.note,
+            increments,
+            uncovered,
+            branch,
+            noteTokens: submission.noteBudget.hardTokens,
+            baseNoteTokens: submission.noteBudget.baseTokens,
+            signal,
+            callHooks
+          })
+        },
+        interval
+      );
+    } catch {
+    }
+  }
+  invalidatePreparation(reason) {
+    this.preparation?.invalidate(reason);
+  }
+  shutdownPreparation() {
+    this.preparation?.dispose();
   }
   /**
    * A session is protected once this package has written a checkpoint for it or recorded a pending
@@ -1425,6 +2401,19 @@ var PreviewMemoryController = class {
   /** Machine-readable status. Earlier fields keep their names; protection and eligibility are additions. */
   status(ctx) {
     const diagnosis = this.diagnose(ctx);
+    let prepared;
+    if (this.preparation) {
+      try {
+        prepared = this.preparation.status(this.preparation.enabled ? this.preparationSubmission(ctx) : void 0);
+      } catch {
+        prepared = { ...this.preparation.status(), state: "paused", reason: "writer-or-source-unavailable" };
+      }
+    }
+    let calls;
+    try {
+      calls = this.journal?.summary(ctx.sessionManager.getSessionId());
+    } catch {
+    }
     return {
       build: diagnosis.build,
       enabled: this.config?.enabled ?? true,
@@ -1436,24 +2425,69 @@ var PreviewMemoryController = class {
       checkpointId: diagnosis.checkpointId,
       noteBudgetMode: this.config?.noteTokens === void 0 ? "tiered" : "fixed",
       noteRepair: this.config?.noteRepair,
-      manualOnly: true,
+      // Threshold compaction after a completed turn is handled; overflow recovery still needs /compact.
+      manualOnly: false,
       lastWriter: this.lastProgress,
       host: diagnosis.host,
       supportedHost: diagnosis.supportedHost,
       protection: diagnosis.protection,
       ...diagnosis.reason ? { reason: diagnosis.reason } : {},
-      manualCompaction: diagnosis.manualCompaction
+      manualCompaction: diagnosis.manualCompaction,
+      ...prepared ? { preparation: prepared } : {},
+      ...calls ? { calls } : {},
+      ...this.lastCompaction ? { lastCompaction: this.lastCompaction } : {}
     };
   }
+  /**
+   * Request guard. Sources and checkpoints are validated in full at trust boundaries: session start, a branch
+   * change, a new checkpoint, compaction, recovery and after any failure. Between them a request checks only
+   * the entries added since, and the store checks the session file's identity and length.
+   */
   assertReady(ctx) {
     if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-    assertPreviewSession(ctx.sessionManager, this.hostVersion);
-    const sticky = this.stickyFailures.get(ctx.sessionManager.getSessionId());
+    const session = ctx.sessionManager;
+    const branch = session.getBranch();
+    let checkpoint;
+    if (this.verified && this.extendsVerified(this.verified, session, branch)) {
+      checkpoint = this.verified.checkpoint;
+    } else {
+      this.verified = void 0;
+      checkpoint = assertPreviewSession(session, this.hostVersion, branch);
+    }
+    const sticky = this.stickyFailures.get(session.getSessionId());
     if (sticky) throw new Error(sticky);
-    this.store.assertReady(ctx.sessionManager);
+    this.store.assertReady(session);
+    this.verified = {
+      session,
+      sessionId: session.getSessionId(),
+      length: branch.length,
+      tip: branch.at(-1),
+      checkpoint
+    };
+    return checkpoint;
+  }
+  /** The same entry objects as the last full validation, followed only by ordinary new entries. */
+  extendsVerified(verified, session, branch) {
+    if (verified.session !== session || verified.sessionId !== session.getSessionId()) return false;
+    if (branch.length < verified.length || branch[verified.length - 1] !== verified.tip) return false;
+    for (let index = verified.length; index < branch.length; index++) {
+      const entry = branch[index];
+      if (entry.type === "compaction" || entry.type === "context_edit" || unsupportedContent(entry)) return false;
+    }
+    return true;
+  }
+  /** The next request validates sources and reads the session file back in full. */
+  forgetVerified() {
+    this.verified = void 0;
+    this.store.forgetReadback();
+  }
+  /** Tree navigation is a trust boundary, even when the selected branch extends the previous one. */
+  branchChanged() {
+    this.forgetVerified();
   }
   /** In-process stickiness covers a marker write that failed before it could reach disk. */
   fail(ctx, code) {
+    this.forgetVerified();
     const sessionId = ctx.sessionManager.getSessionId();
     this.observedFailures.set(sessionId, code);
     this.stickyFailures.set(sessionId, code);
@@ -1479,6 +2513,8 @@ var PreviewMemoryController = class {
   }
   /** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
   sessionStart(ctx) {
+    this.forgetVerified();
+    this.preparation?.activate(ctx.sessionManager.getSessionId());
     const reason = this.safeInactive(ctx);
     if (reason) {
       this.standAside(ctx, reason);
@@ -1522,49 +2558,62 @@ var PreviewMemoryController = class {
       this.standAside(ctx, reason);
       return messages;
     }
-    let result = messages;
     this.guard(ctx, () => {
-      this.assertReady(ctx);
+      const checkpoint = this.assertReady(ctx);
       if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-      const branch = ctx.sessionManager.getBranch();
-      const checkpoint = latestMemory(branch);
       if (checkpoint) {
         const restored = messages.filter((message) => message.role === "compactionSummary");
         if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary) {
           throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
         }
       }
-      const budget = memoryBudget(ctx.model, this.config);
-      result = withPendingNotes(messages, noteIncrements(branch, checkpoint?.entry.id), budget.noteTokens);
-      assertToolPairs(result);
-      const estimate = result.reduce((sum, message) => sum + estimateTokens2(message), 0) + (getInitialSystemMessage(result) ? 0 : textTokens(ctx.getSystemPrompt()));
-      if (estimate > budget.inputLimit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+      assertToolPairs(messages);
+      const estimate = messages.reduce((sum, message) => sum + estimateTokens2(message), 0) + (getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
+      if (estimate > requestLimit(ctx.model)) throw new Error("CONTEXT_INPUT_TOO_LARGE");
     });
-    return result;
+    return messages;
   }
   beforeRequest(payload, ctx) {
     if (this.safeInactive(ctx)) return;
     this.guard(ctx, () => {
-      this.assertReady(ctx);
+      const checkpoint = this.assertReady(ctx);
       if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
       const serialized = JSON.stringify(payload);
-      const checkpoint = latestMemory(ctx.sessionManager.getBranch());
       if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1))) {
         throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost the validated checkpoint");
       }
-      if (textTokens(serialized ?? "") > memoryBudget(ctx.model, this.config).inputLimit) {
-        throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
-      }
+      if (piTokens(serialized ?? "") > ctx.model.contextWindow) throw new Error("CONTEXT_PAYLOAD_TOO_LARGE");
     });
   }
+  /**
+   * Whether Pi's threshold compaction may run now: a completed turn, no queued input and a session that is
+   * not blocked. Otherwise it is left for a later settled turn and nothing is recorded; a blocked session
+   * still needs an explicit /compact.
+   */
+  thresholdReady(ctx) {
+    try {
+      const session = ctx.sessionManager;
+      if (this.configError || !this.config || ctx.hasPendingMessages()) return false;
+      if (this.stickyFailures.has(session.getSessionId()) || this.store.inspect(session).state !== "ready")
+        return false;
+      const last = [...session.buildSessionProjection().messages].reverse().find((message) => message.role !== "system");
+      return last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+    } catch {
+      return false;
+    }
+  }
   async compact(event, ctx) {
+    const started = performance.now();
+    this.forgetVerified();
+    this.compactionStartedAt.set(ctx.sessionManager.getSessionId(), started);
+    this.preparation?.cancel("compaction");
     this.activeCompactions.add(ctx.sessionManager.getSessionId());
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
       assertPreviewSession(ctx.sessionManager, this.hostVersion);
-      if (event.reason !== "manual" || event.willRetry) {
-        throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: this preview compacts only on an explicit /compact");
+      if (!(event.reason === "manual" || event.reason === "threshold") || event.willRetry) {
+        throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: overflow recovery needs an explicit /compact");
       }
       event.signal.throwIfAborted();
       const branch = structuredClone(ctx.sessionManager.getBranch());
@@ -1578,7 +2627,7 @@ var PreviewMemoryController = class {
         throw new Error("CONTEXT_TOOL_BOUNDARY: manual compaction requires a completed turn with no queued input");
       }
       if (!ctx.model || !ctx.sessionManager.getLeafId()) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-      const attempt = this.store.begin(ctx.sessionManager, true);
+      const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual");
       this.observedFailures.delete(attempt.sessionId);
       const snapshot = {
         sessionId: attempt.sessionId,
@@ -1590,13 +2639,17 @@ var PreviewMemoryController = class {
       const interrupted = !completed ? interruptedTurnStart(branch) : void 0;
       const cut = Math.min(chooseCut(branch, budget.recentTokens, projection), interrupted ?? branch.length);
       if (cut < 1) throw new Error("CONTEXT_NO_CUT");
-      const keptIds = new Set(branch.slice(cut).map((entry) => entry.id));
-      const kept = projection.entries.filter((entry) => entry.sourceEntry.type !== "compaction" && keptIds.has(entry.sourceEntry.id)).flatMap((entry) => entry.messages);
+      const retainedFrom = (start) => {
+        const ids = new Set(branch.slice(start).map((entry) => entry.id));
+        return projection.entries.filter((entry) => entry.sourceEntry.type !== "compaction" && ids.has(entry.sourceEntry.id)).flatMap((entry) => entry.messages);
+      };
+      let kept = retainedFrom(cut);
       assertToolPairs(kept);
-      const firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+      let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
+      let coveredIndex = branch.length - 1;
       const previous = latestMemory(branch);
-      const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
-      const increments = noteIncrements(branch, previous?.entry.id);
+      const notes = workNotes(branch, previous?.memory.coveredThrough);
+      const increments = notes.map((item) => item.note);
       const activeIds = new Set(
         projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id)
       );
@@ -1614,41 +2667,109 @@ var PreviewMemoryController = class {
           projectedMessages.pop();
         } else break;
       }
-      const prefixMessages = convertToLlm(withPendingNotes(projectedMessages, increments, budget.noteTokens));
+      const prefixMessages = convertToLlm(projectedMessages);
       assertToolPairs(prefixMessages);
       const sessionWriter = this.config.writerModel === SESSION_WRITER;
       const prefix = getInitialSystemMessage(prefixMessages) ? { messages: prefixMessages } : { systemPrompt: ctx.getSystemPrompt(), messages: prefixMessages, tools: this.activeTools() };
       this.lastProgress = void 0;
-      const written = await writeMemory({
-        config: this.config,
-        registry: ctx.modelRegistry,
-        sessionModel: ctx.model,
-        prefix: sessionWriter ? prefix : void 0,
-        sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : void 0,
-        previous: previous?.memory.note,
-        increments,
-        uncovered: branch.slice(after + 1),
-        branch,
-        noteTokens: policy.hardTokens,
-        baseNoteTokens: policy.baseTokens,
-        signal: event.signal,
-        customInstructions: event.customInstructions,
-        onProgress: (progress) => {
-          this.lastProgress = progress;
+      const submission = this.preparation?.enabled ? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy } : void 0;
+      const available = submission ? this.preparation?.take(submission) : void 0;
+      let path = available?.classification.status === "current-full" ? "complete" : "sync";
+      const systemTokens = textTokens(ctx.getSystemPrompt());
+      const beforeTokens = systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens2(message), 0);
+      let userMessages = [];
+      const commitPrefix = (note, end, share, users = []) => {
+        const start = prefixCut(branch, projection, end, cut);
+        if (start === void 0) return "cut";
+        const retained = retainedFrom(start);
+        const retainedTokens = systemTokens + retained.reduce((sum, message) => sum + estimateTokens2(message), 0);
+        const section = users.length ? renderUserMessages(users) : "";
+        if (textTokens(section) > Math.min(6e3, Math.floor(budget.threshold * 0.05))) return "user-messages";
+        const summary2 = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section);
+        if (!summary2 || textTokens(summary2) + retainedTokens >= beforeTokens) return "fit";
+        assertToolPairs(retained);
+        kept = retained;
+        firstKeptEntryId = branch[start].id;
+        coveredIndex = end;
+        userMessages = users;
+        return void 0;
+      };
+      if (path === "sync" && available && interrupted === void 0) {
+        const end = reusablePrefix(available.candidate, available.classification, branch);
+        if (end !== void 0 && !commitPrefix(available.written.note, end, 0.8)) path = "prefix";
+      }
+      let notesNote;
+      let notesFallback;
+      if (path === "sync" && this.workNotes.enabled) {
+        if (!notes.length) notesFallback = "no-notes";
+        else if (interrupted !== void 0) notesFallback = "unfinished-turn";
+        else if (event.customInstructions?.trim()) notesFallback = "custom-focus";
+        else {
+          const end = notes[notes.length - 1].index;
+          const merged = mergeWorkNotes(previous?.memory.note, increments);
+          try {
+            notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+          } catch {
+            notesNote = void 0;
+          }
+          const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+          notesFallback = notesNote ? commitPrefix(notesNote, end, 0.5, users) : "merge";
+          if (!notesFallback) path = "notes";
         }
-      });
+      }
+      const reused = path === "complete" || path === "prefix" ? available : void 0;
+      const ready = reused ? {
+        ...reused.written,
+        note: validateNote(
+          structuredClone(reused.written.note),
+          branch.slice(0, coveredIndex + 1),
+          policy.hardTokens
+        )
+      } : path === "notes" && notesNote ? { note: notesNote, writerModel: modelName(ctx.model), writerEffort: "off" } : void 0;
+      let written;
+      if (ready) {
+        written = { ...ready, usage: sumMemoryUsage([]), chunkCount: 0 };
+        this.lastProgress = {
+          writerModel: written.writerModel,
+          writerEffort: written.writerEffort,
+          writerCalls: 0,
+          usageReports: 0,
+          repairUsed: false,
+          writerCallDetails: []
+        };
+      } else {
+        written = await writeMemory({
+          config: this.config,
+          registry: ctx.modelRegistry,
+          sessionModel: ctx.model,
+          prefix: sessionWriter ? prefix : void 0,
+          sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : void 0,
+          previous: previous?.memory.note,
+          increments,
+          uncovered: writerSources(branch, previous),
+          branch,
+          noteTokens: policy.hardTokens,
+          baseNoteTokens: policy.baseTokens,
+          signal: event.signal,
+          customInstructions: event.customInstructions,
+          callHooks: this.journal?.hooks(attempt.sessionId, "compaction", attempt.lastCheckpointId ?? "none"),
+          onProgress: (progress) => {
+            this.lastProgress = progress;
+          }
+        });
+      }
       event.signal.throwIfAborted();
       if (snapshot.sessionId !== ctx.sessionManager.getSessionId() || snapshot.leafId !== ctx.sessionManager.getLeafId() || hashEntries(branch) !== hashEntries(ctx.sessionManager.getBranch())) {
         throw new Error("CONTEXT_SOURCE_CHANGED: discard the generated candidate");
       }
-      const fixedAfter = textTokens(ctx.getSystemPrompt()) + kept.reduce((sum, message) => sum + estimateTokens2(message), 0);
-      let lineage = checkpointLineage(branch);
-      let summary = renderNote(written.note, lineage);
-      while (lineage.length && textTokens(summary) + fixedAfter > budget.threshold) {
-        lineage = shrinkLineage(lineage);
-        summary = renderNote(written.note, lineage);
-      }
-      if (textTokens(summary) + fixedAfter > budget.threshold) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
+      const summary = fittedSummary(
+        written.note,
+        branch,
+        systemTokens + kept.reduce((sum, message) => sum + estimateTokens2(message), 0),
+        budget.threshold,
+        userMessages.length ? renderUserMessages(userMessages) : ""
+      );
+      if (!summary) throw new Error("CONTEXT_RECOVERY_TOO_LARGE");
       const candidate = {
         summary,
         firstKeptEntryId,
@@ -1658,25 +2779,48 @@ var PreviewMemoryController = class {
           kind: CONTEXT_MEMORY_KIND,
           version: CONTEXT_MEMORY_VERSION,
           note: written.note,
-          coveredThrough: attempt.leafId,
-          sourceHash: attempt.sourceHash,
+          coveredThrough: branch[coveredIndex].id,
+          sourceHash: coveredIndex === branch.length - 1 ? attempt.sourceHash : hashEntries(branch.slice(0, coveredIndex + 1)),
           snapshot,
           writerModel: written.writerModel,
           chunkCount: written.chunkCount,
           build: PREVIEW_BUILD_ID,
-          noteBudget: policy
+          noteBudget: policy,
+          ...userMessages.length ? { userMessages: userMessages.map((entry) => entry.id) } : {},
+          ...this.preparation?.enabled || this.workNotes.enabled ? {
+            preparation: {
+              version: 1,
+              path,
+              ...reused ? {
+                candidateId: reused.candidate.input.candidateId,
+                callIds: [...reused.candidate.provenance.callIds]
+              } : {},
+              ...path === "notes" ? { noteIds: notes.map((item) => item.id) } : {},
+              ...notesFallback ? { notesFallback } : {}
+            }
+          } : {}
         }
       };
       this.store.stage(ctx.sessionManager, attempt, candidate);
+      this.preparation?.staged(reused?.candidate.input.candidateId);
       this.stagedCompactions.add(attempt.sessionId);
+      this.lastCompaction = {
+        path,
+        ...reused ? { candidateId: reused.candidate.input.candidateId } : {},
+        foregroundCalls: this.lastProgress?.writerCalls ?? 0,
+        stageMs: Math.round(performance.now() - started),
+        diskConfirmed: false
+      };
       return candidate;
     } catch (error) {
       const code = previewErrorCode(error, event.signal.aborted);
+      this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
       this.fail(ctx, code);
       throw new Error(code);
     }
   }
   committed(event, ctx) {
+    this.forgetVerified();
     const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
     if (!ours && !this.protected(ctx)) return;
@@ -1687,6 +2831,13 @@ var PreviewMemoryController = class {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       }
       this.store.commit(ctx.sessionManager, event.compactionEntry);
+      const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
+      this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
+      if (this.lastCompaction) {
+        this.lastCompaction.diskConfirmed = true;
+        if (started !== void 0) this.lastCompaction.pauseMs = Math.round(performance.now() - started);
+      }
+      this.preparation?.committed();
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());
       this.observedFailures.delete(ctx.sessionManager.getSessionId());
     } catch (error) {
@@ -1702,6 +2853,7 @@ var PreviewMemoryController = class {
    * and failures inside the confirmation are recorded by the failure store itself.
    */
   recover(ctx) {
+    this.forgetVerified();
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
       assertPreviewSession(ctx.sessionManager, this.hostVersion);
@@ -1711,6 +2863,7 @@ var PreviewMemoryController = class {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       }
       this.store.recover(ctx.sessionManager, leaf);
+      this.preparation?.committed();
       this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());
       this.observedFailures.delete(ctx.sessionManager.getSessionId());
@@ -1719,6 +2872,7 @@ var PreviewMemoryController = class {
     }
   }
   compactionFailed(event, ctx) {
+    this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
     if (!this.activeCompactions.delete(ctx.sessionManager.getSessionId())) return;
     const specific = this.observedFailures.get(ctx.sessionManager.getSessionId());
     const staged = this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
@@ -1729,176 +2883,9 @@ var PreviewMemoryController = class {
 };
 
 // packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts
-import { createHash as createHash3, randomUUID as randomUUID3 } from "node:crypto";
-import { lstatSync as lstatSync2 } from "node:fs";
-import { join as join3, resolve as resolve3 } from "node:path";
-
-// packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readSync,
-  realpathSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
-} from "node:fs";
-import { basename, dirname, join as join2, resolve as resolve2 } from "node:path";
-var PreviewStoreError = class extends Error {
-  code;
-  constructor(code) {
-    super(`${code}: context compaction requires an explicit successful manual retry`);
-    this.code = code;
-  }
-};
-function missing(error) {
-  return isRecord(error) && error.code === "ENOENT";
-}
-function storeErrorCode(error, fallback) {
-  return error instanceof PreviewStoreError ? error.code : fallback;
-}
-function sameFile(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs;
-}
-function readBoundedFile(file, limit, code) {
-  let fd;
-  let data;
-  try {
-    const initial = lstatSync(file);
-    if (!initial.isFile() || initial.isSymbolicLink() || initial.nlink !== 1 || initial.size > limit)
-      throw new PreviewStoreError(code);
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const opened = fstatSync(fd);
-    if (!sameFile(initial, opened) || !opened.isFile()) throw new PreviewStoreError(code);
-    data = Buffer.alloc(opened.size);
-    let offset = 0;
-    while (offset < data.length) {
-      const count = readSync(fd, data, offset, data.length - offset, offset);
-      if (!count) throw new PreviewStoreError(code);
-      offset += count;
-    }
-    const extra = Buffer.alloc(1);
-    if (readSync(fd, extra, 0, 1, data.length) || !sameFile(opened, fstatSync(fd))) throw new PreviewStoreError(code);
-  } catch (error) {
-    if (fd !== void 0) {
-      try {
-        closeSync(fd);
-      } catch {
-      }
-    }
-    throw error;
-  }
-  closeSync(fd);
-  return data;
-}
-function syncDirectory(path) {
-  const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-  try {
-    if (!fstatSync(fd).isDirectory()) throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
-    fsyncSync(fd);
-  } catch (error) {
-    try {
-      closeSync(fd);
-    } catch {
-    }
-    throw error;
-  }
-  closeSync(fd);
-}
-function ensurePrivateDirectory(path) {
-  let created = false;
-  try {
-    mkdirSync(path, { mode: 448 });
-    created = true;
-  } catch (error) {
-    if (!isRecord(error) || error.code !== "EEXIST") throw error;
-  }
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
-  if (created) {
-    syncDirectory(path);
-    syncDirectory(dirname(path));
-  }
-}
-function markerDirectory(agentDir) {
-  const created = mkdirSync(agentDir, { recursive: true, mode: 448 });
-  const root = realpathSync(agentDir);
-  if (created !== void 0) {
-    const stop = realpathSync(dirname(created));
-    let current = root;
-    while (current !== stop) {
-      syncDirectory(current);
-      const parent = dirname(current);
-      syncDirectory(parent);
-      current = parent;
-    }
-  }
-  const preview = join2(root, "context-memory-preview");
-  const failures = join2(preview, "failures");
-  ensurePrivateDirectory(preview);
-  ensurePrivateDirectory(failures);
-  return failures;
-}
-function canonicalSessionFile(file, sessionDir) {
-  const absolute = resolve2(file);
-  const parent = realpathSync(dirname(absolute));
-  if (parent !== realpathSync(resolve2(sessionDir))) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-  return join2(parent, basename(absolute));
-}
-function assertMarkerTarget(file) {
-  try {
-    const stat = lstatSync(file);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
-      throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_INVALID");
-  } catch (error) {
-    if (!missing(error)) throw error;
-  }
-}
-function writeMarker(file, value) {
-  assertMarkerTarget(file);
-  const temporary = join2(dirname(file), `.pending-${randomUUID2()}`);
-  let fd;
-  let created = false;
-  try {
-    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 384);
-    created = true;
-    writeFileSync(fd, `${JSON.stringify(value)}
-`, "utf8");
-    fsyncSync(fd);
-    closeSync(fd);
-    fd = void 0;
-    assertMarkerTarget(file);
-    renameSync(temporary, file);
-    created = false;
-    syncDirectory(dirname(file));
-  } finally {
-    if (fd !== void 0) {
-      try {
-        closeSync(fd);
-      } catch {
-      }
-    }
-    if (created) {
-      try {
-        unlinkSync(temporary);
-      } catch {
-      }
-    }
-  }
-}
-function removeMarker(file) {
-  assertMarkerTarget(file);
-  unlinkSync(file);
-  syncDirectory(dirname(file));
-}
-
-// packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts
+import { createHash as createHash4, randomUUID as randomUUID4 } from "node:crypto";
+import { lstatSync as lstatSync3 } from "node:fs";
+import { join as join4, resolve as resolve3 } from "node:path";
 var MAX_MARKER_BYTES = 8192;
 var MAX_SESSION_BYTES = 64 * 1024 * 1024;
 var MAX_SESSION_ENTRIES = 25e4;
@@ -1941,7 +2928,7 @@ var CODES = /* @__PURE__ */ new Set([
   "CONTEXT_PREVIEW_COMPACT_REQUIRED"
 ]);
 function digest(value) {
-  return createHash3("sha256").update(value).digest("hex");
+  return createHash4("sha256").update(value).digest("hex");
 }
 function identifier(value) {
   return typeof value === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(value);
@@ -1977,25 +2964,28 @@ function candidateHash(candidate) {
 }
 function readSession(identity, allowUnflushed = false) {
   try {
-    const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID").toString(
-      "utf8"
-    );
-    if (!data.endsWith("\n")) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-    const lines = data.slice(0, -1).split("\n");
-    if (lines.length > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
-    const header = JSON.parse(lines.shift() ?? "");
+    const data = readBoundedFile(identity.file, MAX_SESSION_BYTES, "CONTEXT_PREVIEW_SESSION_INVALID");
+    if (data.at(-1) !== 10) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+    let lines = 0;
+    for (let end = data.indexOf(10); end !== -1; end = data.indexOf(10, end + 1)) {
+      if (++lines > MAX_SESSION_ENTRIES + 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
+    }
+    const headerEnd = data.indexOf(10);
+    const header = JSON.parse(data.toString("utf8", 0, headerEnd));
     if (!isRecord(header) || header.type !== "session" || header.version !== 3 || header.id !== identity.sessionId)
       throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
     const entries = /* @__PURE__ */ new Map();
     let roots = 0;
-    for (const line of lines) {
-      const entry = JSON.parse(line);
+    for (let start = headerEnd + 1; start < data.length; ) {
+      const end = data.indexOf(10, start);
+      const entry = JSON.parse(data.toString("utf8", start, end));
       if (!isRecord(entry) || !identifier(entry.id) || typeof entry.type !== "string" || entry.type === "session" || typeof entry.timestamp !== "string" || entry.parentId !== null && !identifier(entry.parentId) || entries.has(entry.id) || entry.parentId !== null && !entries.has(entry.parentId))
         throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
       if (entry.parentId === null && ++roots !== 1) throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_INVALID");
       entries.set(entry.id, entry);
+      start = end + 1;
     }
-    return entries;
+    return { entries, bytes: data.length };
   } catch (error) {
     if (allowUnflushed && missing(error)) return void 0;
     throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_SESSION_IO"));
@@ -2012,10 +3002,19 @@ function branchAt(entries, leafId) {
   }
   return branch.reverse();
 }
+function fileIdentity(file) {
+  try {
+    const stat = lstatSync3(file, { bigint: true, throwIfNoEntry: false });
+    return stat?.isFile() ? { dev: stat.dev, ino: stat.ino, size: stat.size } : void 0;
+  } catch {
+    return void 0;
+  }
+}
 var PreviewFailureStore = class {
   agentDir;
   latched = /* @__PURE__ */ new Map();
   recoveryMarkers = /* @__PURE__ */ new Map();
+  frontier;
   directory;
   constructor(agentDir) {
     this.agentDir = resolve3(agentDir);
@@ -2039,7 +3038,7 @@ var PreviewFailureStore = class {
       if (this.directory !== void 0 && this.directory !== directory)
         throw new PreviewStoreError("CONTEXT_PREVIEW_MARKER_IO");
       this.directory = directory;
-      return join3(directory, `${digest(identity.sessionId)}.json`);
+      return join4(directory, `${digest(identity.sessionId)}.json`);
     } catch (error) {
       throw new PreviewStoreError(storeErrorCode(error, "CONTEXT_PREVIEW_MARKER_IO"));
     }
@@ -2047,7 +3046,7 @@ var PreviewFailureStore = class {
   readMarker(identity, create = true) {
     let data;
     try {
-      const file = create ? this.path(identity) : join3(this.agentDir, "context-memory-preview", "failures", `${digest(identity.sessionId)}.json`);
+      const file = create ? this.path(identity) : join4(this.agentDir, "context-memory-preview", "failures", `${digest(identity.sessionId)}.json`);
       data = readBoundedFile(file, MAX_MARKER_BYTES, "CONTEXT_PREVIEW_MARKER_INVALID");
     } catch (error) {
       if (missing(error)) return void 0;
@@ -2103,29 +3102,45 @@ var PreviewFailureStore = class {
   markerPresent(session) {
     const sessionId = session.getSessionId();
     if (this.latched.has(sessionId) || this.recoveryMarkers.has(sessionId)) return true;
-    const file = join3(this.agentDir, "context-memory-preview", "failures", `${digest(sessionId)}.json`);
+    const file = join4(this.agentDir, "context-memory-preview", "failures", `${digest(sessionId)}.json`);
     try {
-      lstatSync2(file);
+      lstatSync3(file);
       return true;
     } catch (error) {
       return !(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR"));
     }
   }
-  evaluate(session, latch) {
+  evaluate(session, latch, request = false) {
     try {
       const identity = this.identity(session);
       const marker = this.readMarker(identity, latch);
       if (marker) return { state: marker.state, code: marker.code };
       const latched = this.latched.get(identity.sessionId);
       if (latched) return { state: "blocked", code: latched };
+      if (request && this.unchangedSinceReadback(session, identity)) return { state: "ready" };
+      if (request) this.frontier = void 0;
       const disk = readSession(identity, true);
       if (!disk) {
         if (session.getEntries().some((entry) => entry.type === "message" || entry.type === "compaction"))
           throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
       } else {
         const leafId = session.getLeafId();
-        if (leafId !== null && hashEntries(branchAt(disk, leafId)) !== hashEntries(session.getBranch()))
+        if (leafId !== null && hashEntries(branchAt(disk.entries, leafId)) !== hashEntries(session.getBranch()))
           throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+        const file = fileIdentity(identity.file);
+        if (request && file?.size === BigInt(disk.bytes)) {
+          const entries = session.getEntries();
+          this.frontier = {
+            session,
+            sessionId: identity.sessionId,
+            file: identity.file,
+            entries: entries.length,
+            last: entries.at(-1),
+            bytes: disk.bytes,
+            dev: file.dev,
+            ino: file.ino
+          };
+        }
       }
       return { state: "ready" };
     } catch (error) {
@@ -2134,11 +3149,34 @@ var PreviewFailureStore = class {
       return { state: "blocked", code };
     }
   }
+  /** True only if the file grew by exactly the entries Pi appended since the last full readback. */
+  unchangedSinceReadback(session, identity) {
+    const frontier = this.frontier;
+    if (!frontier || frontier.session !== session || frontier.sessionId !== identity.sessionId || frontier.file !== identity.file)
+      return false;
+    const entries = session.getEntries();
+    if (entries.length < frontier.entries || entries[frontier.entries - 1] !== frontier.last) return false;
+    let bytes = frontier.bytes;
+    for (let index = frontier.entries; index < entries.length; index++)
+      bytes += Buffer.byteLength(JSON.stringify(entries[index]), "utf8") + 1;
+    const file = fileIdentity(identity.file);
+    if (!file || file.dev !== frontier.dev || file.ino !== frontier.ino || file.size !== BigInt(bytes)) return false;
+    frontier.entries = entries.length;
+    frontier.last = entries.at(-1);
+    frontier.bytes = bytes;
+    return true;
+  }
+  /** Request guard. Full readback at a trust boundary, then only the length check until the next one. */
   assertReady(session) {
-    const status = this.status(session);
+    const status = this.evaluate(session, true, true);
     if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
   }
+  /** A trust boundary: session start, compaction, recovery and every failure read the whole file again. */
+  forgetReadback() {
+    this.frontier = void 0;
+  }
   begin(session, explicitRetry = false) {
+    this.frontier = void 0;
     try {
       const identity = this.identity(session);
       if (!explicitRetry) this.assertReady(session);
@@ -2154,13 +3192,13 @@ var PreviewFailureStore = class {
       if (!identifier(leafId) || branch.at(-1)?.id !== leafId)
         throw new PreviewStoreError("CONTEXT_NO_MODEL_OR_SOURCE");
       const attempt = {
-        attemptId: randomUUID3(),
+        attemptId: randomUUID4(),
         sessionId: identity.sessionId,
         leafId,
         lastCheckpointId: [...branch].reverse().find((entry) => entry.type === "compaction")?.id ?? null,
         sourceHash: hashEntries(branch)
       };
-      if (hashEntries(branchAt(readSession(identity), leafId)) !== attempt.sourceHash)
+      if (hashEntries(branchAt(readSession(identity).entries, leafId)) !== attempt.sourceHash)
         throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
       writeMarker(this.path(identity), {
         version: 1,
@@ -2184,19 +3222,32 @@ var PreviewFailureStore = class {
   }
   assertCandidate(attempt, candidate) {
     const details = candidate.details;
-    if (!isRecord(details) || details.kind !== CONTEXT_MEMORY_KIND || details.version !== CONTEXT_MEMORY_VERSION || details.coveredThrough !== attempt.leafId || details.sourceHash !== attempt.sourceHash || !isRecord(details.snapshot) || details.snapshot.sessionId !== attempt.sessionId || details.snapshot.leafId !== attempt.leafId || details.snapshot.lastCheckpointId !== attempt.lastCheckpointId || typeof candidate.summary !== "string" || !identifier(candidate.firstKeptEntryId) || !Number.isFinite(candidate.tokensBefore) || candidate.tokensBefore < 0)
+    if (!isRecord(details) || details.kind !== CONTEXT_MEMORY_KIND || details.version !== CONTEXT_MEMORY_VERSION || typeof details.coveredThrough !== "string" || !hash(details.sourceHash) || !isRecord(details.snapshot) || details.snapshot.sessionId !== attempt.sessionId || details.snapshot.leafId !== attempt.leafId || details.snapshot.lastCheckpointId !== attempt.lastCheckpointId || typeof candidate.summary !== "string" || !identifier(candidate.firstKeptEntryId) || !Number.isFinite(candidate.tokensBefore) || candidate.tokensBefore < 0)
+      throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+  }
+  /**
+   * The note covers an intact prefix of the attempt's branch, ending at the leaf or earlier, and the cut
+   * releases only covered entries; everything after the covered prefix stays in context verbatim.
+   */
+  assertCoverage(candidate, branch, branchHash) {
+    const details = candidate.details;
+    const end = isRecord(details) ? branch.findIndex((entry) => entry.id === details.coveredThrough) : -1;
+    const cut = candidate.firstKeptEntryId === CONTEXT_KEEP_NONE ? branch.length : branch.findIndex((entry) => entry.id === candidate.firstKeptEntryId);
+    const prefixHash = end === branch.length - 1 ? branchHash : hashEntries(branch.slice(0, end + 1));
+    if (end < 0 || cut < 0 || cut > end + 1 || !isRecord(details) || prefixHash !== details.sourceHash)
       throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
   }
   stage(session, attempt, candidate) {
+    this.frontier = void 0;
     try {
       const identity = this.identity(session);
       const marker = this.pending(identity);
       if (!sameAttempt(marker.attempt, attempt) || session.getLeafId() !== attempt.leafId || hashEntries(session.getBranch()) !== attempt.sourceHash)
         throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
       this.assertCandidate(attempt, candidate);
-      const branch = branchAt(readSession(identity), attempt.leafId);
-      if (hashEntries(branch) !== attempt.sourceHash || candidate.firstKeptEntryId !== CONTEXT_KEEP_NONE && !branch.some((entry) => entry.id === candidate.firstKeptEntryId))
-        throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+      const branch = branchAt(readSession(identity).entries, attempt.leafId);
+      if (hashEntries(branch) !== attempt.sourceHash) throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+      this.assertCoverage(candidate, branch, attempt.sourceHash);
       writeMarker(this.path(identity), { ...marker, candidateHash: candidateHash(candidate) });
     } catch (error) {
       this.reject(session, error, "CONTEXT_PREVIEW_MARKER_IO");
@@ -2209,6 +3260,7 @@ var PreviewFailureStore = class {
     this.confirm(session, entry, true);
   }
   confirm(session, entry, explicitRecovery) {
+    this.frontier = void 0;
     let recoveryMarker;
     try {
       const identity = this.identity(session);
@@ -2219,13 +3271,14 @@ var PreviewFailureStore = class {
         throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       if (!persisted) this.recordFailure(session, marker.code, marker);
       this.assertCandidate(marker.attempt, entry);
-      const disk = readSession(identity);
+      const disk = readSession(identity).entries;
       const stored = disk.get(entry.id);
       if (stored?.type !== "compaction" || stored.fromHook !== true || hashEntries([stored]) !== hashEntries([entry]) || candidateHash(stored) !== marker.candidateHash || stored.parentId !== marker.attempt.leafId)
         throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       const sources = branchAt(disk, marker.attempt.leafId);
       if (hashEntries(sources) !== marker.attempt.sourceHash || ([...sources].reverse().find((item) => item.type === "compaction")?.id ?? null) !== marker.attempt.lastCheckpointId || hashEntries(session.getBranch()) !== hashEntries(branchAt(disk, entry.id)))
         throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+      this.assertCoverage(entry, sources, marker.attempt.sourceHash);
       removeMarker(this.path(identity));
       this.latched.delete(identity.sessionId);
       this.recoveryMarkers.delete(identity.sessionId);
@@ -2234,6 +3287,7 @@ var PreviewFailureStore = class {
     }
   }
   fail(session, code) {
+    this.frontier = void 0;
     const controlled = CODES.has(code) ? code : "CONTEXT_WRITER_FAILED";
     this.latched.set(session.getSessionId(), controlled);
     try {
@@ -2241,6 +3295,175 @@ var PreviewFailureStore = class {
     } catch (error) {
       this.reject(session, error, "CONTEXT_PREVIEW_MARKER_IO");
     }
+  }
+};
+
+// packages/coding-agent/src/extensions/context-memory/preview/preparation.ts
+import { join as join5 } from "node:path";
+var DEADLINE_MS = 12e4;
+var settingsCache = /* @__PURE__ */ new Map();
+function previewSwitch(section) {
+  if (section === void 0) return { enabled: false };
+  return isRecord(section) && (section.enabled === void 0 || typeof section.enabled === "boolean") ? { enabled: section.enabled === true } : { enabled: false, error: "invalid-config" };
+}
+function readPreparationSettings(agentDir) {
+  const path = join5(agentDir, "pi-context-memory.json");
+  const cached = settingsCache.get(path);
+  if (cached) return cached;
+  let result;
+  try {
+    const value = JSON.parse(readBoundedFile(path, 64 * 1024, "preparation-config").toString("utf8"));
+    const record = isRecord(value) ? value : {};
+    result = { ...previewSwitch(record.previewPreparation), notes: previewSwitch(record.previewWorkNotes) };
+  } catch (error) {
+    const off = missing(error) ? { enabled: false } : { enabled: false, error: "invalid-config" };
+    result = { ...off, notes: off };
+  }
+  settingsCache.set(path, result);
+  return result;
+}
+var PreviewPreparation = class {
+  enabled;
+  settingsError;
+  journal;
+  sessionId;
+  running;
+  armed;
+  epoch = 0;
+  disposed = false;
+  state = "idle";
+  reason;
+  constructor(options) {
+    this.enabled = options.enabled && !options.settingsError;
+    this.settingsError = options.settingsError;
+    this.journal = options.journal;
+  }
+  get currentEpoch() {
+    return this.epoch;
+  }
+  activate(sessionId) {
+    if (this.sessionId === sessionId) return;
+    this.invalidate("session-changed");
+    this.sessionId = sessionId;
+  }
+  /** Cheap check before building a snapshot: one run per interval, never while one runs or calls go unrecorded. */
+  mayStart(sessionId, interval) {
+    return this.enabled && !this.disposed && !this.running && this.journal.writable(sessionId) && !this.journal.preparedIn(sessionId, interval);
+  }
+  start(job, interval) {
+    if (!this.mayStart(job.input.sessionId, interval)) return false;
+    this.activate(job.input.sessionId);
+    if (job.input.epoch !== this.epoch) return false;
+    const abort = new AbortController();
+    const task = { abort, settled: Promise.resolve() };
+    this.running = task;
+    this.state = "idle";
+    this.reason = void 0;
+    const timer = setTimeout(() => {
+      this.reason = "deadline";
+      abort.abort();
+    }, DEADLINE_MS);
+    timer.unref();
+    const journal = this.journal.hooks(job.input.sessionId, "preparation", interval);
+    const callIds = [];
+    const hooks = {
+      beforeDispatch: async (call) => {
+        const id = await journal.beforeDispatch(call);
+        callIds.push(id);
+        return id;
+      },
+      afterDispatch: journal.afterDispatch
+    };
+    const current = () => !this.disposed && job.input.epoch === this.epoch && this.sessionId === job.input.sessionId;
+    task.settled = Promise.resolve().then(() => {
+      abort.signal.throwIfAborted();
+      return job.run(abort.signal, hooks);
+    }).then((written) => {
+      if (abort.signal.aborted || !current()) return;
+      this.armed = {
+        candidate: finalizePreparation(job.input, {
+          note: written.note,
+          provenance: {
+            writerRole: job.input.writer.role,
+            writerModel: written.writerModel,
+            writerEffort: written.writerEffort,
+            callIds
+          }
+        }),
+        written: structuredClone(written)
+      };
+    }).catch(() => {
+      if (!current()) return;
+      this.state = abort.signal.aborted ? "cancelled" : "failed";
+      this.reason ??= abort.signal.aborted ? "cancelled" : "generation-failed";
+    }).finally(() => {
+      clearTimeout(timer);
+      if (this.running === task) this.running = void 0;
+    });
+    return true;
+  }
+  /** Tests and harnesses may wait; task events never do. */
+  async waitForIdle() {
+    await this.running?.settled;
+  }
+  /** The armed candidate with its eligibility for this submission. An invalid candidate is dropped. */
+  take(submission) {
+    if (!this.armed || this.disposed || !this.enabled) return void 0;
+    const classification = classifyPreparation(this.armed.candidate, submission);
+    if (classification.status === "invalid") {
+      this.armed = void 0;
+      return void 0;
+    }
+    return { ...this.armed, classification };
+  }
+  /** A staged checkpoint owns its candidate until commit or explicit recovery. */
+  staged(candidateId) {
+    if (candidateId && this.armed?.candidate.input.candidateId === candidateId) this.armed = void 0;
+  }
+  /** A confirmed checkpoint starts a new interval. */
+  committed() {
+    this.cancel("checkpoint-committed");
+    this.armed = void 0;
+    this.epoch++;
+    this.state = "idle";
+    this.reason = void 0;
+  }
+  cancel(reason = "cancelled") {
+    if (!this.running) return;
+    this.state = "cancelled";
+    this.reason = reason;
+    this.running.abort.abort();
+  }
+  invalidate(reason) {
+    this.cancel(reason);
+    this.armed = void 0;
+    this.epoch++;
+    this.state = "idle";
+    this.reason = reason;
+  }
+  dispose() {
+    this.disposed = true;
+    this.invalidate("session-shutdown");
+  }
+  status(submission) {
+    if (!this.enabled) {
+      return {
+        enabled: false,
+        state: this.settingsError ? "paused" : "disabled",
+        ...this.settingsError ? { reason: this.settingsError } : {}
+      };
+    }
+    const classification = submission && this.armed ? classifyPreparation(this.armed.candidate, submission) : void 0;
+    const usable = this.armed && classification?.status !== "invalid";
+    return {
+      enabled: true,
+      state: this.running ? "preparing" : usable ? classification?.status === "current-full" ? "ready" : "stale" : this.state,
+      ...(usable ? classification?.reason : this.reason) ? { reason: usable ? classification?.reason : this.reason } : {},
+      ...this.armed ? {
+        candidateId: this.armed.candidate.input.candidateId,
+        coveredThrough: this.armed.candidate.input.coverage.coveredThrough
+      } : {}
+    };
   }
 };
 
@@ -2261,10 +3484,15 @@ function contextMemoryPreview(pi) {
   } catch {
     configError = "CONTEXT_CONFIG";
   }
+  const journal = new CallJournal(agentDir);
+  const preparation = readPreparationSettings(agentDir);
   const controller = new PreviewMemoryController({
     config,
     configError,
-    failureStore: new PreviewFailureStore(agentDir)
+    failureStore: new PreviewFailureStore(agentDir),
+    journal,
+    preparation: new PreviewPreparation({ enabled: preparation.enabled, settingsError: preparation.error, journal }),
+    workNotes: preparation.notes
   });
   const disabled = config?.enabled === false;
   pi.registerCommand("compaction-status", {
@@ -2354,6 +3582,8 @@ function contextMemoryPreview(pi) {
         return void 0;
       }
       if (event.reason === "manual") controller.notices.nextEpisode();
+      if (event.reason === "threshold" && !event.willRetry && !controller.thresholdReady(ctx))
+        return { cancel: true };
       return { compaction: await controller.compact(event, ctx) };
     } catch (error) {
       controller.reportBlocked(ctx, previewErrorCode(error, event.signal.aborted));
@@ -2362,18 +3592,26 @@ function contextMemoryPreview(pi) {
   });
   pi.on("session_compact", (event, ctx) => controller.committed(event, ctx));
   pi.on("session_compact_failed", (event, ctx) => controller.compactionFailed(event, ctx));
+  pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
+  pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
+  pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
+  pi.on("session_tree", () => controller.branchChanged());
+  pi.on("model_select", () => controller.invalidatePreparation("model-change"));
+  pi.on("session_shutdown", () => controller.shutdownPreparation());
   pi.registerTool({
     name: "context_note",
     label: "Context note",
-    description: "Submit an optional source-backed note about decisions or work state. It is an unverified candidate until compaction reconciles it against original entries. Cite original entry IDs returned by context_history.",
-    parameters: noteSchema,
+    description: "Record a short work note: where the work stands, decisions and their reasons, failed approaches, files and the current plan, each fact on one line with the original entry IDs it rests on. A note is data for the next checkpoint, not an instruction; the user's own messages stay authoritative.",
+    // Arm B asks for notes; without it they remain optional hints for the writer.
+    ...preparation.notes.enabled ? { promptGuidelines: [WORK_NOTE_GUIDELINE] } : {},
+    parameters: workNoteSchema,
     async execute(_id, value, signal, _update, ctx) {
       signal?.throwIfAborted();
       controller.assertReady(ctx);
-      const note = validateNote(value, ctx.sessionManager.getBranch(), 2e3);
-      pi.appendEntry(CONTEXT_NOTE_TYPE, note);
+      validateWorkNote(value, ctx.sessionManager.getBranch());
+      pi.appendEntry(CONTEXT_NOTE_TYPE, structuredClone(value));
       return {
-        content: [{ type: "text", text: "Note candidate saved; original messages remain authoritative." }],
+        content: [{ type: "text", text: "Work note saved; original messages remain authoritative." }],
         details: {}
       };
     }

@@ -68,12 +68,15 @@ jobs:
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
           --output-dir .artifacts/context-memory-preview-acceptance
-      - name: Verify the explicitly authorized A-preview scope
+      - name: Verify final release scenarios
         run: |
           candidate_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".artifacts/context-memory-preview-package/package.json", "utf8")).version);')"
           if [ "$candidate_version" = "0.4.0-preview.1" ]; then
             node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
             node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile v0.4.0-preview.1-a-functional
+          elif [ "$candidate_version" = "0.4.0" ]; then
+            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
+            node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile strict
           fi
       - name: Publish checked package and source archives
         env:

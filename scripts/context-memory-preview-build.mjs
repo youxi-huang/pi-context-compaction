@@ -7,7 +7,7 @@ import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const name = "pi-context-compaction-preview";
-const version = "0.4.0-preview.1";
+const version = "0.4.0";
 const extensionRoot = "packages/coding-agent/src/extensions/context-memory/";
 const previewRoot = `${extensionRoot}preview/`;
 const shared = new Set(["config.ts", "events.ts", "history.ts", "identity.ts", "notes.ts"]);

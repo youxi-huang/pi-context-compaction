@@ -8,7 +8,7 @@ import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, rel
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 test("reviewed versions retain exact stable and positive numbered-preview spellings", () => {
-	for (const version of ["0.3.3", "0.4.0-preview.1", "12.34.56-preview.123", "0.0.0"]) {
+	for (const version of ["0.3.3", "0.4.0", "0.4.0-preview.1", "12.34.56-preview.123", "0.0.0"]) {
 		const parsed = parseReviewedVersion(version);
 		assert.equal(parsed.version, version);
 		assert.equal(parsed.tag, `v${version}`);
@@ -29,7 +29,7 @@ test("unreviewed suffixes, noncanonical counters and lossy version spellings are
 });
 
 test("source selection accepts only exact reviewed existing source-tag forms", () => {
-	for (const tag of ["v0.3.3", "v0.4.0-preview.1"]) {
+	for (const tag of ["v0.3.3", "v0.4.0", "v0.4.0-preview.1"]) {
 		assert.equal(selectReviewedSourceTag({ triggerRef: tag }), tag);
 		assert.equal(selectReviewedSourceTag({ requestedTag: "", triggerRef: `release/publish-${tag}` }), tag);
 		assert.equal(selectReviewedSourceTag({ requestedTag: tag, triggerRef: "main" }), tag);
@@ -66,17 +66,22 @@ test("publication workflow uses the same source selector and preserved eight-com
 	assert.doesNotMatch(install.run, /npm install/);
 	const publish = steps.find((step) => step.name === "Publish checked package and source archives");
 	assert.match(publish.run, /context-preview-publisher\/scripts\/context-memory-preview-release\.mjs" --publish/);
-	const scope = steps.find((step) => step.name === "Verify the explicitly authorized A-preview scope");
+	const scope = steps.find((step) => step.name === "Verify final release scenarios");
 	assert.match(scope.run, /if \[ "\$candidate_version" = "0\.4\.0-preview\.1" \]/);
 	assert.match(scope.run, /--acceptance-profile v0\.4\.0-preview\.1-a-functional/);
 	assert.match(scope.run, /--version 1\.0\.4/);
+	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ]; then')[1];
+	assert.match(strict, /--version 1\.0\.4/);
+	assert.match(strict, /context-memory-preview-scenarios\.mjs.*--acceptance-profile strict/);
+	assert.doesNotMatch(strict, /v0\.4\.0-preview\.1-a-functional/);
 });
 
-test("main CI selects the exact functional-preview profile without removing other gates", () => {
+test("main CI requires strict scenarios without removing other gates", () => {
 	const document = parseDocument(readFileSync(new URL("../.github/workflows/context-memory.yml", import.meta.url), "utf8"));
 	assert.deepEqual(document.errors, []);
 	const runs = document.toJS().jobs.verify.steps.flatMap((step) => step.run ? [step.run] : []);
-	assert(runs.some((run) => run.includes("context-memory-preview-scenarios.mjs") && run.includes(`--acceptance-profile ${PROFILE}`)));
+	assert(runs.some((run) => run.includes("context-memory-preview-scenarios.mjs") && run.includes("--acceptance-profile strict")));
+	assert(!runs.some((run) => run.includes(`--acceptance-profile ${PROFILE}`)));
 	for (const required of ["context-memory-check.mjs", "security-regression-check.mjs", "context-memory-preview-acceptance.mjs", "context-memory-preview-release.mjs --prepare", "eval/check.mjs"]) {
 		assert(runs.some((run) => run.includes(required)), `Missing CI gate: ${required}`);
 	}
@@ -163,6 +168,31 @@ test("functional-preview notes require the authorized profile and every raw-exce
 	const generated = releaseNotes({ ...options, scenarioAcceptance });
 	for (const removed of ["Raw scenario gate: failed.", "full v0.4.0 gates are unchanged", "correctness, security, persistence, identity, package and source checks must pass", "`long-session-overhead/bounded-growth` (fail)"]) {
 		assert.throws(() => assertReleaseNotes(generated.replace(removed, ""), { ...options, scenarioAcceptance }));
+	}
+});
+
+test("v0.4.0 notes describe both opt-in arms, threshold compaction and strict exact-package evidence", () => {
+	const acceptance = { profile: "strict", version: "0.4.0", accepted: true, rawPassed: true, exceptions: [] };
+	const options = { ...noteOptions, tag: "v0.4.0", packageTag: "extension-v0.4.0", sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic.", scenarioAcceptance: acceptance };
+	const generated = releaseNotes(options);
+	assert.doesNotThrow(() => assertReleaseNotes(generated, options));
+	assert.match(generated, /two arms, both \*\*disabled by default\*\*/);
+	assert.match(generated, /B carries covered user messages in full/);
+	assert.match(generated, /Every writer call is journaled/);
+	assert.match(generated, /Pi's threshold compaction after completed text turns/);
+	assert.match(generated, /overflow recovery still requires explicit \/compact/);
+	assert.match(generated, /strict acceptance and no performance exceptions or known gaps/);
+	assert.doesNotMatch(generated, /A-stage|B.*incomplete and deferred|automatic compaction is cancelled/);
+	for (const removed of ["strict acceptance and no performance exceptions or known gaps", "Pi's threshold compaction after completed text turns", "B carries covered user messages in full", "real-provider pause, total cost, cache behavior and recovery benefits remain unproven"]) {
+		assert.throws(() => assertReleaseNotes(generated.replace(removed, ""), options));
+	}
+});
+
+test("v0.4.0 cannot reuse preview waivers, another package's acceptance or failed raw gates", () => {
+	const accepted = { profile: "strict", version: "0.4.0", accepted: true, rawPassed: true, exceptions: [] };
+	const options = { ...noteOptions, tag: "v0.4.0", packageTag: "extension-v0.4.0", sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic." };
+	for (const invalid of [undefined, scenarioAcceptance, { ...accepted, version: "0.3.3" }, { ...accepted, profile: PROFILE }, { ...accepted, accepted: false }, { ...accepted, rawPassed: false }, { ...accepted, exceptions: scenarioAcceptance.exceptions }]) {
+		assert.throws(() => releaseNotes({ ...options, scenarioAcceptance: invalid }));
 	}
 });
 

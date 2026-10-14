@@ -1,28 +1,26 @@
-# Independent extension preview — v0.4.0-preview.1 candidate
+# Independent extension preview — v0.4.0
 
 This preview runs on unmodified official Pi **1.1.0** as an ordinary Pi package.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.4.0-preview.1 is an experimental A-stage pre-release candidate.** Its PR
-does not publish the immutable package tag; stable v0.3.3 remains available.
-Optional background
-preparation uses the same configured writer and is disabled by default. B
-remains future work. Since sources are validated at trust boundaries instead of
-on every request, the synthetic long-session scenario meets both the 50 ms
-request target and the growth bound under the strict profile; the first request
-after each checkpoint still pays one full check (see the
-[validation record](validation.md)). Pause, cost and recovery benefits have not
-been accepted; full v0.4.0 retains its A/B gates.
-See the [release scope and evidence](v0.4.0-preview.1-release.md).
+**v0.4.0 supports manual and completed-turn threshold compaction.** Optional
+background preparation with the configured writer (A) and data-only work notes
+from the session model (B) are both disabled by default. B carries covered user
+messages in full or asks the configured writer to compact them. Sources are
+validated at trust boundaries, with incremental checks between them. The
+synthetic long-session scenario requires both the 50 ms request target and the
+growth bound under the strict profile; the first request after each checkpoint
+still pays one full check. Real-provider pause, cost, cache behavior and recovery
+benefits remain unproven. See the [release scope](v0.4.0-release.md) and
+[validation record](validation.md).
 
 ## Install, update and remove
 
-After the candidate is published, official Pi 1.1.0 users can install its pinned
-experimental package (the tag is not created by this PR):
+Official Pi 1.1.0 users can install the pinned extension package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0-preview.1
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -55,8 +53,9 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.4.0-preview.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0-preview.1)
-also provides the extension `.tgz`, source archive, provenance and SHA256 checksums.
+The [v0.4.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0)
+also provides the extension `.tgz`, source archive, provenance, exact-package
+scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
 published to npm; `private: true` prevents accidental registry publication and
 does not prevent Pi's Git installation. Updating or removing the extension
@@ -237,7 +236,7 @@ the same notice two to four times). The notice names the controlled error code,
 says what happened and whether requests are paused, and gives the next step;
 `/compact` is suggested only where it can help. Pi's overflow recovery request
 is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
-`CONTEXT_PREVIEW_UNSUPPORTED`; before the unreleased threshold support, threshold
+`CONTEXT_PREVIEW_UNSUPPORTED`; before v0.4.0, threshold
 compaction was reported the same way). After a rollback to v0.3.2, that record reads
 as invalid and stays blocked until an explicit `/compact`, which recovers it;
 a v0.3.2 record opened by v0.3.3 recovers the same way.
@@ -268,10 +267,9 @@ over all host operations. Removing, disabling or filtering out the package
 ends its protection. Leave a blocked session with the package enabled and
 use the explicit retry operation.
 
-## Unreleased preparation experiment
+## Optional preparation experiments
 
-The development source adds optional preparation for v0.4.0; the pinned v0.3.3
-tag does not contain it. Build the development package above to evaluate it.
+v0.4.0 adds optional preparation; the pinned v0.3.3 tag does not contain it.
 The default remains synchronous manual compaction. To opt in, add this field
 alongside the ordinary settings in `pi-context-memory.json` and restart Pi:
 
@@ -427,7 +425,10 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release after all assets are uploaded. Existing public
+push, and publishes a pre-release after all assets are uploaded. v0.4.0 also
+reruns the complete strict scenario suite and binds its content-free evidence
+to the final artifact; the earlier A-preview exception applies only to
+v0.4.0-preview.1. Existing public
 assets and tags are never overwritten. The resident runtime retains its
 v0.3.0 fingerprint because the preview changes only the ordinary extension.
 

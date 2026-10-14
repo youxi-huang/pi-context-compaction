@@ -1,10 +1,10 @@
-# Independent extension preview — v0.4.0
+# Independent extension preview — v0.4.1
 
 This preview runs on unmodified official Pi **1.1.0** as an ordinary Pi package.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.4.0 supports manual and completed-turn threshold compaction.** Optional
+**v0.4.1 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -12,7 +12,8 @@ validated at trust boundaries, with incremental checks between them. The
 synthetic long-session scenario requires both the 50 ms request target and the
 growth bound under the strict profile; the first request after each checkpoint
 still pays one full check. Real-provider pause, cost, cache behavior and recovery
-benefits remain unproven. See the [release scope](v0.4.0-release.md) and
+benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
+[release scope](v0.4.0-release.md), the [changelog](../../CHANGELOG.md) and the
 [validation record](validation.md).
 
 ## Install, update and remove
@@ -20,7 +21,7 @@ benefits remain unproven. See the [release scope](v0.4.0-release.md) and
 Official Pi 1.1.0 users can install the pinned extension package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -53,7 +54,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.4.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0)
+The [v0.4.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.1)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -166,6 +167,12 @@ The default writer is the session model with its current thinking level. A
 fixed writer can be explicitly configured in `pi-context-memory.json` inside
 Pi's agent directory. Authentication stays with Pi's public model registry;
 the package does not copy credentials or choose a substitute on failure.
+
+Each fact and open question in a checkpoint is one line. The writer's schema
+allows line breaks, so the extension folds them into spaces before a note is
+committed, and a writer cannot open a heading of its own, such as a second
+`## instructions`. Exact quotes are rendered as JSON strings and stay exact.
+Checkpoints written by v0.4.0 keep their summaries and reopen unchanged.
 
 Configuration is latched for the process; restart Pi after changing it. The
 preview uses the writer, note-budget, repair and retained-text settings from
@@ -330,7 +337,9 @@ With it, a one-line tool guideline asks the session model for a work note after
 a decision, a failed approach or a completed subtask. At compaction the
 extension merges the previous checkpoint's note with the valid notes since, in
 order, without a model call. A fact that supersedes a source drops the earlier
-facts citing it, and the newest plan replaces the older one. Instructions from
+facts citing it, and the newest plan replaces the older one. A note that lists
+`gaps` replaces the open questions recorded before it, and an empty list closes
+them; a note without `gaps` keeps them. Instructions from
 the previous checkpoint are carried unchanged; no note can add or drop one. The
 merged note covers the branch through the last work note and is committed
 through the prefix path above, so everything after it stays verbatim.
@@ -343,13 +352,21 @@ originals, so an edited message blocks the session like an edited quote.
 
 The writer compacts synchronously instead, with the notes as hints, when those
 messages do not fit in full within 5% of the compaction threshold (at most 6,000
-estimated tokens), as with a long pasted log, when a note supersedes the source of a carried instruction, when the
-merge exceeds the note schema or budget, when the prefix conditions fail, when
+estimated tokens), as with a long pasted log, when a note supersedes the source of a carried instruction, when a
+superseded source supports more earlier facts than the note gives in their
+place, when the merge exceeds the note schema or budget, when the prefix conditions fail, when
 the commit would leave half the compaction threshold or more in context (the
 turn of the last note stays verbatim), or with custom focus. That writer also reads the user messages an earlier notes
 checkpoint carried. `details.preparation.path` is `notes` for these
 checkpoints, with `noteIds` naming the merged notes; when B leaves a compaction
 to the writer, `details.preparation.notesFallback` records why.
+
+Two limits remain. `supersedes` is optional and names entries, not facts: a
+correction recorded without it leaves the earlier fact in the note beside the
+newer one, and the merge does not guess which is current. Facts also accumulate
+until a note supersedes them or the writer rewrites the note, so a long task
+reaches the schema's bounds (40 facts per section, 20 gaps) and falls back to
+the writer more often. Both wait for a note schema with stable fact identities.
 
 ## Verification
 
@@ -425,12 +442,13 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release after all assets are uploaded. v0.4.0 also
-reruns the complete strict scenario suite and binds its content-free evidence
+push, and publishes a pre-release after all assets are uploaded. v0.4.0 and
+v0.4.1 also rerun the complete strict scenario suite and binds its content-free evidence
 to the final artifact; the earlier A-preview exception applies only to
 v0.4.0-preview.1. Existing public
-assets and tags are never overwritten. The resident runtime retains its
-v0.3.0 fingerprint because the preview changes only the ordinary extension.
+assets and tags are never overwritten. The resident runtime keeps release
+version v0.3.0; v0.4.1 changes its build fingerprint for the one-line note fold,
+with the frozen evaluator pinned to that source.
 
 If publication tooling needs a fix after a source tag was created, merge the
 fix through the normal PR checks. Retry **Publish extension preview** from that

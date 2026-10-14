@@ -397,6 +397,15 @@ function renderLineage(items) {
 Earlier checkpoints on this branch, oldest first, reduced to their opening state lines. Their originals are still on disk: search context_history for these topics. The IDs are search anchors, not citable sources; cite only IDs from the handover manifest.
 ${items.map((item) => `- through ${item.anchor}: ${item.state.join(" ")}`).join("\n")}`;
 }
+var LINE_BREAKS = "\\r\\n\\u0085\\u2028\\u2029";
+var LINE_BREAK_RUN = new RegExp(`[${LINE_BREAKS}]+`, "gu");
+function oneLineNote(note) {
+  const fold = (text) => text.replace(LINE_BREAK_RUN, " ");
+  const folded = structuredClone(note);
+  for (const section of noteSections) for (const item of folded[section]) item.text = fold(item.text);
+  folded.gaps = folded.gaps.map(fold);
+  return folded;
+}
 function renderNote(note, lineage = []) {
   const sections = noteSections.map(
     (section) => `## ${section}
@@ -1002,7 +1011,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.aa4e949f8d0edc7d";
+var PREVIEW_BUILD_ID = "stock-preview+src.576bfb140e4f6ea8";
 
 // packages/coding-agent/src/extensions/context-memory/preview/notices.ts
 var SUPPORTED_PI = "1.1.0";
@@ -1457,7 +1466,7 @@ function reusablePrefix(candidate, classification, branch) {
 // packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts
 import { Type as Type3 } from "typebox";
 import { Check as Check3 } from "typebox/value";
-var ONE_LINE = "^[^\\r\\n\\u0085\\u2028\\u2029]+$";
+var ONE_LINE = `^[^${LINE_BREAKS}]+$`;
 var entryIds = (minItems, description) => Type3.Array(Type3.String({ minLength: 1, maxLength: 64 }), { minItems, maxItems: 20, uniqueItems: true, description });
 var fact2 = Type3.Object(
   {
@@ -1481,7 +1490,7 @@ var workNoteSchema = Type3.Object(
     gaps: Type3.Optional(
       Type3.Array(Type3.String({ minLength: 1, maxLength: 1e3, pattern: ONE_LINE }), {
         maxItems: 20,
-        description: "Open questions and missing information."
+        description: "Open questions and missing information; when given, it replaces the gaps of earlier notes, and an empty list closes them."
       })
     )
   },
@@ -1513,29 +1522,42 @@ function workNotes(branch, afterId) {
     const entry = branch[index];
     if (entry.type !== "custom" || entry.customType !== CONTEXT_NOTE_TYPE) continue;
     try {
-      result.push({ index, id: entry.id, note: validateWorkNote(entry.data, branch.slice(0, index)) });
+      const note = validateWorkNote(entry.data, branch.slice(0, index));
+      result.push({ index, id: entry.id, note, gapsListed: isRecord(entry.data) && entry.data.gaps !== void 0 });
     } catch {
     }
   }
   return result;
 }
 function mergeWorkNotes(previous, notes) {
-  const merged = structuredClone(
+  const merged = oneLineNote(
     previous ?? { instructions: [], failedPaths: [], reasons: [], state: [], nextSteps: [], files: [], gaps: [] }
   );
-  for (const note of notes) {
+  for (const { note, gapsListed } of notes) {
     const superseded = new Set(
       noteSections.flatMap((section) => note[section].flatMap((item) => item.supersedes ?? []))
     );
     const replaced = (item) => item.sources.some((id) => superseded.has(id));
     if (merged.instructions.some(replaced)) return void 0;
+    const droppable = [
+      ...merged.failedPaths,
+      ...merged.reasons,
+      ...merged.state,
+      ...merged.files,
+      ...note.nextSteps.length ? [] : merged.nextSteps
+    ];
+    const given = noteSections.flatMap((section) => note[section]);
+    for (const id of superseded) {
+      const earlier = droppable.filter((item) => item.sources.includes(id)).length;
+      if (earlier > given.filter((item) => item.supersedes?.includes(id)).length) return void 0;
+    }
     for (const section of ["failedPaths", "reasons", "state", "files"]) {
       const kept = merged[section].filter((item) => !replaced(item));
       const seen = new Set(kept.map((item) => JSON.stringify(item)));
       merged[section] = [...kept, ...note[section].filter((item) => !seen.has(JSON.stringify(item)))];
     }
     merged.nextSteps = note.nextSteps.length ? note.nextSteps : merged.nextSteps.filter((item) => !replaced(item));
-    merged.gaps = [.../* @__PURE__ */ new Set([...merged.gaps, ...note.gaps])];
+    if (gapsListed) merged.gaps = [...new Set(note.gaps)];
   }
   return Check3(noteSchema, merged) ? merged : void 0;
 }
@@ -1824,7 +1846,7 @@ async function writeMemory(options) {
     const value = parseNote(response);
     calls[calls.length - 1].noteBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
     report();
-    const note = validateNoteContent(value, options.branch);
+    const note = oneLineNote(validateNoteContent(value, options.branch));
     if (options.activeRequests?.length && !note.nextSteps.some((step) => step.text.trim()))
       throw new Error(
         "CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step"
@@ -2706,7 +2728,7 @@ var PreviewMemoryController = class {
         else if (event.customInstructions?.trim()) notesFallback = "custom-focus";
         else {
           const end = notes[notes.length - 1].index;
-          const merged = mergeWorkNotes(previous?.memory.note, increments);
+          const merged = mergeWorkNotes(previous?.memory.note, notes);
           try {
             notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
           } catch {

@@ -74,7 +74,7 @@ jobs:
           if [ "$candidate_version" = "0.4.0-preview.1" ]; then
             node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
             node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile v0.4.0-preview.1-a-functional
-          elif [ "$candidate_version" = "0.4.0" ]; then
+          elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ]; then
             node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
             node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile strict
           fi

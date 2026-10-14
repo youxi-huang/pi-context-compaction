@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
+/** Releases published only with the full strict scenario suite: no waiver, performance exception or known gap. */
+export const STRICT_RELEASES = Object.freeze(["0.4.0", "0.4.1"]);
+
 /** Only reviewed stable or numbered preview spellings; never normalize source refs. */
 export function parseReviewedVersion(version) {
 	assert.equal(typeof version, "string", "Expected a reviewed release version");
@@ -39,9 +42,9 @@ export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit
 	assert.equal(tag, reviewed.tag, "Expected an existing reviewed source tag");
 	assert.equal(packageTag, reviewed.packageTag, "Package tag must match the source version");
 	const functionalPreview = reviewed.version === VERSION;
-	const latencyRelease = reviewed.version === "0.4.0";
+	const latencyRelease = STRICT_RELEASES.includes(reviewed.version);
 	if (functionalPreview) assertFunctionalProfile(scenarioAcceptance);
-	if (latencyRelease) assertStrictReleaseProfile(scenarioAcceptance);
+	if (latencyRelease) assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 	const introduction = reviewed.preview
 		? `Pi Context Compaction ${tag} is an **experimental A-stage preview candidate** for **unmodified official Pi 1.1.0**.\n\n`
 		: `Pi Context Compaction ${tag} supplies an ordinary extension for **unmodified official Pi 1.1.0**.\n\n`;
@@ -57,7 +60,9 @@ export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit
 		: reviewed.preview
 		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi 1.1.0. These checks do not establish performance acceptance. The required growth check currently fails, and the 50 ms per-request target remains unmet. Neither check is waived. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
 		: `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi 1.1.0. Focused, security, evaluator and scenario results, with remaining known gaps, are in the validation record. Services are synthetic and loopback only. No real-provider quality, latency or interactive TUI claim is made.\n\n`;
-	const resident = reviewed.preview
+	const resident = reviewed.version === "0.4.1"
+		? "Resident release version remains v0.3.0; its build fingerprint changes with the one-line note fold, and the frozen evaluator is pinned to that source."
+		: reviewed.preview
 		? "Resident release version remains v0.3.0; shared-validation source identity and frozen comparison are tracked separately."
 		: "Resident runtime keeps its v0.3.0 fingerprint.";
 	return introduction
@@ -84,19 +89,19 @@ function assertFunctionalProfile(value) {
 	assert(Array.isArray(value.exceptions), "The acceptance profile must declare its raw exceptions");
 }
 
-function assertStrictReleaseProfile(value) {
-	assert.equal(value?.profile, "strict", "v0.4.0 requires strict scenario acceptance");
-	assert.equal(value.version, "0.4.0", "Strict release evidence must match v0.4.0");
-	assert.equal(value.accepted, true, "Every v0.4.0 scenario gate must pass");
-	assert.equal(value.rawPassed, true, "v0.4.0 cannot waive a raw scenario failure");
-	assert.deepEqual(value.exceptions, [], "v0.4.0 cannot accept performance exceptions");
+function assertStrictReleaseProfile(value, version) {
+	assert.equal(value?.profile, "strict", `v${version} requires strict scenario acceptance`);
+	assert.equal(value.version, version, `Strict release evidence must match v${version}`);
+	assert.equal(value.accepted, true, `Every v${version} scenario gate must pass`);
+	assert.equal(value.rawPassed, true, `v${version} cannot waive a raw scenario failure`);
+	assert.deepEqual(value.exceptions, [], `v${version} cannot accept performance exceptions`);
 }
 
 export function assertReleaseNotes(notes, { repository, packageTag, branch, scenarioAcceptance }) {
 	assert(packageTag.startsWith("extension-v"), "Expected a reviewed fixed package tag");
 	const reviewed = parseReviewedVersion(packageTag.slice("extension-v".length));
-	if (reviewed.version === "0.4.0") {
-		assertStrictReleaseProfile(scenarioAcceptance);
+	if (STRICT_RELEASES.includes(reviewed.version)) {
+		assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 		assert(notes.includes("strict acceptance and no performance exceptions or known gaps"), "Release notes must retain strict scenario acceptance");
 		assert(notes.includes("Pi's threshold compaction after completed text turns"), "Release notes must describe threshold compaction");
 		assert(notes.includes("B carries covered user messages in full"), "Release notes must describe complete user-message retention");

@@ -1,10 +1,10 @@
-# Independent extension preview — v0.4.0
+# Independent extension preview — v0.4.1
 
 This preview runs on unmodified official Pi **1.1.0** as an ordinary Pi package.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.4.0 supports manual and completed-turn threshold compaction.** Optional
+**v0.4.1 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -12,7 +12,8 @@ validated at trust boundaries, with incremental checks between them. The
 synthetic long-session scenario requires both the 50 ms request target and the
 growth bound under the strict profile; the first request after each checkpoint
 still pays one full check. Real-provider pause, cost, cache behavior and recovery
-benefits remain unproven. See the [release scope](v0.4.0-release.md) and
+benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
+[release scope](v0.4.0-release.md), the [changelog](../../CHANGELOG.md) and the
 [validation record](validation.md).
 
 ## Install, update and remove
@@ -20,7 +21,7 @@ benefits remain unproven. See the [release scope](v0.4.0-release.md) and
 Official Pi 1.1.0 users can install the pinned extension package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -53,7 +54,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.4.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0)
+The [v0.4.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.1)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -441,12 +442,13 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release after all assets are uploaded. v0.4.0 also
-reruns the complete strict scenario suite and binds its content-free evidence
+push, and publishes a pre-release after all assets are uploaded. v0.4.0 and
+v0.4.1 also rerun the complete strict scenario suite and binds its content-free evidence
 to the final artifact; the earlier A-preview exception applies only to
 v0.4.0-preview.1. Existing public
-assets and tags are never overwritten. The resident runtime retains its
-v0.3.0 fingerprint because the preview changes only the ordinary extension.
+assets and tags are never overwritten. The resident runtime keeps release
+version v0.3.0; v0.4.1 changes its build fingerprint for the one-line note fold,
+with the frozen evaluator pinned to that source.
 
 If publication tooling needs a fix after a source tag was created, merge the
 fix through the normal PR checks. Retry **Publish extension preview** from that

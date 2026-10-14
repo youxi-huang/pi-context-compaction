@@ -2,12 +2,19 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
 import { CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
-import { type MemoryNote, type NoteFact, noteSchema, noteSections, sourceText, validateNote } from "../notes.ts";
+import {
+	LINE_BREAKS,
+	type MemoryNote,
+	type NoteFact,
+	noteSchema,
+	noteSections,
+	oneLineNote,
+	sourceText,
+	validateNote,
+} from "../notes.ts";
 
 /** Each fact renders as one line, so model-written text cannot open a heading or a section of the checkpoint. */
-const LINE_BREAKS = "\\r\\n\\u0085\\u2028\\u2029";
 const ONE_LINE = `^[^${LINE_BREAKS}]+$`;
-const LINE_BREAK_RUN = new RegExp(`[${LINE_BREAKS}]+`, "gu");
 const entryIds = (minItems: number, description: string) =>
 	Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { minItems, maxItems: 20, uniqueItems: true, description });
 const fact = Type.Object(
@@ -42,20 +49,6 @@ export const workNoteSchema = Type.Object(
 	{ additionalProperties: false },
 );
 export type WorkNote = Static<typeof workNoteSchema>;
-
-/**
- * Every fact and gap of a note the preview commits, folded onto one line. The shared writer schema allows line
- * breaks and `renderNote` writes the text into Markdown as it stands, so a writer could otherwise open a heading
- * of its own. Rendering and stored checkpoints are unchanged: a checkpoint written earlier still reopens against
- * its exact summary. Quotes are rendered as JSON strings and stay exact.
- */
-export function oneLineNote(note: MemoryNote): MemoryNote {
-	const fold = (text: string) => text.replace(LINE_BREAK_RUN, " ");
-	const folded = structuredClone(note);
-	for (const section of noteSections) for (const item of folded[section]) item.text = fold(item.text);
-	folded.gaps = folded.gaps.map(fold);
-	return folded;
-}
 
 export const WORK_NOTE_GUIDELINE =
 	"Call context_note after a decision with its reason, a failed approach or a completed subtask, not every turn. Cite entry IDs from context_history.";

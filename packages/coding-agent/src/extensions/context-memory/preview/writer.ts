@@ -20,12 +20,12 @@ import {
 	noteBytes,
 	noteSchema,
 	noteSections,
+	oneLineNote,
 	sourceRole,
 	sourceText,
 	validateNote,
 	validateNoteContent,
 } from "../notes.ts";
-import { oneLineNote } from "./work-notes.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;

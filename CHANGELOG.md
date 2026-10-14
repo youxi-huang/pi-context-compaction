@@ -6,6 +6,25 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-10-14
+
+v0.4.1 fixes three defects in how checkpoints carry notes, found in an independent review of v0.4.0 and while confirming it. A writer note can no longer open a Markdown heading of its own in a checkpoint, in the preview or the resident runtime. Arm B now closes open questions that a later note resolves, and leaves an ambiguous correction to the writer instead of dropping facts it did not replace. Checkpoints written by v0.4.0 reopen unchanged. Both arms stay off by default, and real-provider latency, cost and recovery benefits remain unproven.
+
+### Security
+
+- Keep every fact and open question in a checkpoint on one line. The writer's note schema allowed line breaks and the summary renders facts into Markdown as they stand, so a writer note, or tool output it copied, could open a heading of its own such as a second `## instructions`. This gave the writer nothing it could not already write in the real `instructions` section, but the section boundary depended on the model. The preview now folds line breaks into spaces in every writer note, a prepared candidate's included, and in the earlier facts a notes checkpoint carries forward. Exact quotes were already rendered as JSON strings. Rendering and stored-checkpoint validation are unchanged, so checkpoints written by v0.4.0 reopen as before. The resident runtime folds its writer notes the same way; with the maintainer's approval its build fingerprint changes to `1.1.0-context-memory.0.3.0+src.038d16089b2ce840` and the frozen evaluator is pinned to that source, while its release version stays v0.3.0. Found by an independent review of v0.4.0.
+
+### Fixed
+
+- Let arm B close open questions. Gaps from the previous checkpoint and earlier notes were only ever added to, so a resolved blocker such as a pending approval stayed under `Unresolved` until the writer next rewrote the note. A work note that lists `gaps` now replaces the earlier list, an empty list closes it, and a note without `gaps` keeps it; the `context_note` schema says so.
+- Stop arm B from dropping facts a correction did not replace. `supersedes` names source entries, so correcting one fact dropped every earlier fact citing the same entry, such as other details from the same user message or tool output, with no writer call. When a superseded entry supports more earlier facts than the note gives in their place, the writer now merges, recorded as `notesFallback: "merge"`.
+
+### Maintenance
+
+- Document arm B's two remaining limits in the preview guide: a correction recorded without `supersedes` keeps the earlier fact beside the newer one, and accumulated facts reach the note schema's bounds and fall back to the writer more often on long tasks.
+- Publish v0.4.1 through the same gates as v0.4.0: the full default-settings scenario suite with strict acceptance, no performance exception or known gap, bound to the exact package and source commit.
+- Update `actions/setup-node` from 7.0.0 to 7.1.0 in the CI and publication workflows, still pinned by commit SHA.
+
 ## [v0.4.0] — 2026-10-13
 
 v0.4.0 delivers completed-turn threshold compaction and two optional preparation paths in the independent extension preview for official Pi 1.1.0. A prepares with the configured writer; B merges data-only work notes and carries covered user messages in full or falls back to the writer. Both are off by default. This remains an experimental pre-release: strict synthetic acceptance is required, while real-provider latency, cost and recovery benefits remain unproven. The earlier v0.4.0-preview.1 candidate was never published.

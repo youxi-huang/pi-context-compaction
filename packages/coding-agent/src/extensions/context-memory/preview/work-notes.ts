@@ -2,10 +2,19 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
 import { CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
-import { type MemoryNote, type NoteFact, noteSchema, noteSections, sourceText, validateNote } from "../notes.ts";
+import {
+	LINE_BREAKS,
+	type MemoryNote,
+	type NoteFact,
+	noteSchema,
+	noteSections,
+	oneLineNote,
+	sourceText,
+	validateNote,
+} from "../notes.ts";
 
 /** Each fact renders as one line, so model-written text cannot open a heading or a section of the checkpoint. */
-const ONE_LINE = "^[^\\r\\n\\u0085\\u2028\\u2029]+$";
+const ONE_LINE = `^[^${LINE_BREAKS}]+$`;
 const entryIds = (minItems: number, description: string) =>
 	Type.Array(Type.String({ minLength: 1, maxLength: 64 }), { minItems, maxItems: 20, uniqueItems: true, description });
 const fact = Type.Object(
@@ -32,7 +41,8 @@ export const workNoteSchema = Type.Object(
 		gaps: Type.Optional(
 			Type.Array(Type.String({ minLength: 1, maxLength: 1000, pattern: ONE_LINE }), {
 				maxItems: 20,
-				description: "Open questions and missing information.",
+				description:
+					"Open questions and missing information; when given, it replaces the gaps of earlier notes, and an empty list closes them.",
 			}),
 		),
 	},
@@ -67,6 +77,8 @@ export interface WorkNoteEntry {
 	index: number;
 	id: string;
 	note: MemoryNote;
+	/** The note gave `gaps`, possibly empty, and so replaces the open questions recorded before it. */
+	gapsListed: boolean;
 }
 
 /** Valid work notes after `afterId` on this branch, oldest first. Earlier formats and invalid entries are ignored. */
@@ -77,7 +89,8 @@ export function workNotes(branch: readonly SessionEntry[], afterId?: string): Wo
 		const entry = branch[index];
 		if (entry.type !== "custom" || entry.customType !== CONTEXT_NOTE_TYPE) continue;
 		try {
-			result.push({ index, id: entry.id, note: validateWorkNote(entry.data, branch.slice(0, index)) });
+			const note = validateWorkNote(entry.data, branch.slice(0, index));
+			result.push({ index, id: entry.id, note, gapsListed: isRecord(entry.data) && entry.data.gaps !== undefined });
 		} catch {
 			// A candidate that does not validate is not evidence; the writer reads the originals instead.
 		}
@@ -87,27 +100,45 @@ export function workNotes(branch: readonly SessionEntry[], afterId?: string): Wo
 
 /**
  * The previous checkpoint's note followed by the work notes since, in order. A fact that supersedes a source
- * drops the earlier facts citing it, and the latest nonempty nextSteps is the plan. Instructions are carried
- * unchanged: a work note that supersedes one of their sources, or a result beyond the note schema, is left to
- * the writer.
+ * drops the earlier facts citing it, the latest nonempty nextSteps is the plan and the latest listed gaps are the
+ * open questions. Instructions are carried unchanged. The writer merges instead when a work note supersedes the
+ * source of an instruction, when a superseded source supports more earlier facts than the note gives in their
+ * place, or when the result exceeds the note schema.
  */
-export function mergeWorkNotes(previous: MemoryNote | undefined, notes: readonly MemoryNote[]): MemoryNote | undefined {
-	const merged: MemoryNote = structuredClone(
+export function mergeWorkNotes(
+	previous: MemoryNote | undefined,
+	notes: readonly Pick<WorkNoteEntry, "note" | "gapsListed">[],
+): MemoryNote | undefined {
+	const merged = oneLineNote(
 		previous ?? { instructions: [], failedPaths: [], reasons: [], state: [], nextSteps: [], files: [], gaps: [] },
 	);
-	for (const note of notes) {
+	for (const { note, gapsListed } of notes) {
 		const superseded = new Set(
 			noteSections.flatMap((section) => note[section].flatMap((item) => item.supersedes ?? [])),
 		);
 		const replaced = (item: NoteFact) => item.sources.some((id) => superseded.has(id));
 		if (merged.instructions.some(replaced)) return undefined;
+		// `supersedes` names entries, not facts. When an entry supports more earlier facts than the note gives in
+		// their place, which of them it corrects is ambiguous, and dropping them all would lose the others.
+		const droppable = [
+			...merged.failedPaths,
+			...merged.reasons,
+			...merged.state,
+			...merged.files,
+			...(note.nextSteps.length ? [] : merged.nextSteps),
+		];
+		const given = noteSections.flatMap((section) => note[section]);
+		for (const id of superseded) {
+			const earlier = droppable.filter((item) => item.sources.includes(id)).length;
+			if (earlier > given.filter((item) => item.supersedes?.includes(id)).length) return undefined;
+		}
 		for (const section of ["failedPaths", "reasons", "state", "files"] as const) {
 			const kept = merged[section].filter((item) => !replaced(item));
 			const seen = new Set(kept.map((item) => JSON.stringify(item)));
 			merged[section] = [...kept, ...note[section].filter((item) => !seen.has(JSON.stringify(item)))];
 		}
 		merged.nextSteps = note.nextSteps.length ? note.nextSteps : merged.nextSteps.filter((item) => !replaced(item));
-		merged.gaps = [...new Set([...merged.gaps, ...note.gaps])];
+		if (gapsListed) merged.gaps = [...new Set(note.gaps)];
 	}
 	return Check(noteSchema, merged) ? merged : undefined;
 }

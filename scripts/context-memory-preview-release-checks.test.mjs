@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
-import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes, selectReviewedSourceTag } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes, selectReviewedSourceTag, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 test("reviewed versions retain exact stable and positive numbered-preview spellings", () => {
@@ -70,7 +70,7 @@ test("publication workflow uses the same source selector and preserved eight-com
 	assert.match(scope.run, /if \[ "\$candidate_version" = "0\.4\.0-preview\.1" \]/);
 	assert.match(scope.run, /--acceptance-profile v0\.4\.0-preview\.1-a-functional/);
 	assert.match(scope.run, /--version 1\.0\.4/);
-	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ]; then')[1];
+	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ]; then')[1];
 	assert.match(strict, /--version 1\.0\.4/);
 	assert.match(strict, /context-memory-preview-scenarios\.mjs.*--acceptance-profile strict/);
 	assert.doesNotMatch(strict, /v0\.4\.0-preview\.1-a-functional/);
@@ -171,9 +171,9 @@ test("functional-preview notes require the authorized profile and every raw-exce
 	}
 });
 
-test("v0.4.0 notes describe both opt-in arms, threshold compaction and strict exact-package evidence", () => {
-	const acceptance = { profile: "strict", version: "0.4.0", accepted: true, rawPassed: true, exceptions: [] };
-	const options = { ...noteOptions, tag: "v0.4.0", packageTag: "extension-v0.4.0", sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic.", scenarioAcceptance: acceptance };
+for (const version of STRICT_RELEASES) test(`v${version} notes describe both opt-in arms, threshold compaction and strict exact-package evidence`, () => {
+	const acceptance = { profile: "strict", version, accepted: true, rawPassed: true, exceptions: [] };
+	const options = { ...noteOptions, tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic.", scenarioAcceptance: acceptance };
 	const generated = releaseNotes(options);
 	assert.doesNotThrow(() => assertReleaseNotes(generated, options));
 	assert.match(generated, /two arms, both \*\*disabled by default\*\*/);
@@ -183,15 +183,18 @@ test("v0.4.0 notes describe both opt-in arms, threshold compaction and strict ex
 	assert.match(generated, /overflow recovery still requires explicit \/compact/);
 	assert.match(generated, /strict acceptance and no performance exceptions or known gaps/);
 	assert.doesNotMatch(generated, /A-stage|B.*incomplete and deferred|automatic compaction is cancelled/);
+	if (version === "0.4.1") assert.match(generated, /its build fingerprint changes with the one-line note fold/);
+	else assert.match(generated, /Resident runtime keeps its v0\.3\.0 fingerprint/);
 	for (const removed of ["strict acceptance and no performance exceptions or known gaps", "Pi's threshold compaction after completed text turns", "B carries covered user messages in full", "real-provider pause, total cost, cache behavior and recovery benefits remain unproven"]) {
 		assert.throws(() => assertReleaseNotes(generated.replace(removed, ""), options));
 	}
 });
 
-test("v0.4.0 cannot reuse preview waivers, another package's acceptance or failed raw gates", () => {
-	const accepted = { profile: "strict", version: "0.4.0", accepted: true, rawPassed: true, exceptions: [] };
-	const options = { ...noteOptions, tag: "v0.4.0", packageTag: "extension-v0.4.0", sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic." };
-	for (const invalid of [undefined, scenarioAcceptance, { ...accepted, version: "0.3.3" }, { ...accepted, profile: PROFILE }, { ...accepted, accepted: false }, { ...accepted, rawPassed: false }, { ...accepted, exceptions: scenarioAcceptance.exceptions }]) {
+for (const version of STRICT_RELEASES) test(`v${version} cannot reuse preview waivers, another package's acceptance or failed raw gates`, () => {
+	const accepted = { profile: "strict", version, accepted: true, rawPassed: true, exceptions: [] };
+	const options = { ...noteOptions, tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic." };
+	const other = STRICT_RELEASES.find((entry) => entry !== version);
+	for (const invalid of [undefined, scenarioAcceptance, { ...accepted, version: "0.3.3" }, { ...accepted, version: other }, { ...accepted, profile: PROFILE }, { ...accepted, accepted: false }, { ...accepted, rawPassed: false }, { ...accepted, exceptions: scenarioAcceptance.exceptions }]) {
 		assert.throws(() => releaseNotes({ ...options, scenarioAcceptance: invalid }));
 	}
 });

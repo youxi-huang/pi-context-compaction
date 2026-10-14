@@ -8,9 +8,9 @@ Pi Context Compaction explores a more traceable handover for [Pi](https://github
 
 The goal is **continuity with a route back to the source**, not perfect memory.
 
-**Current preview:** [v0.4.0](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
+**Current preview:** [v0.4.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.1) is an **independent extension preview** for unmodified official **Pi 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
 
-Two optional experiments are **off by default**: A prepares with the configured writer, and B uses data-only work notes from the session model. Both retain the checkpoint commit checks; B carries covered user messages in full or falls back to the writer. Sources are validated in full at trust boundaries, with incremental request checks between them. Synthetic A/B results show the paths and their costs; real-provider pause, cost and recovery benefits remain unproven. See the [v0.4.0 scope and evidence](docs/context-memory/v0.4.0-release.md).
+Two optional experiments are **off by default**: A prepares with the configured writer, and B uses data-only work notes from the session model. Both retain the checkpoint commit checks; B carries covered user messages in full or falls back to the writer. Sources are validated in full at trust boundaries, with incremental request checks between them. Synthetic A/B results show the paths and their costs; real-provider pause, cost and recovery benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the [v0.4.0 scope and evidence](docs/context-memory/v0.4.0-release.md) and the [v0.4.1 changes](CHANGELOG.md).
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
 
@@ -27,17 +27,17 @@ You need:
 - **Node.js 22.19 or newer**.
 - macOS or Linux. Windows has not been validated.
 
-Install the **fixed v0.4.0 extension package** from your terminal:
+Install the **fixed v0.4.1 extension package** from your terminal:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.0
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.1
 ```
 
 Preparation and work notes remain off until explicitly configured. The [extension guide](docs/context-memory/extension-preview.md) describes their limits and configuration.
 
 That is the whole installation. You don't need to clone this repository, rebuild Pi or configure a second model. Restart Pi afterwards.
 
-**Why `extension-v0.4.0` and not `v0.4.0`?** They are different Git tags. `extension-v0.4.0` holds the small installable package. `v0.4.0` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
+**Why `extension-v0.4.1` and not `v0.4.1`?** They are different Git tags. `extension-v0.4.1` holds the small installable package. `v0.4.1` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
 
 The extension does not replace Pi's executable or copy its credentials. Authentication stays in Pi's own configuration.
 
@@ -106,7 +106,7 @@ The [architecture](docs/context-memory/architecture.md) covers the note format, 
 
 The scope is deliberately narrow, so that its behavior can be tested and explained.
 
-**Supported in v0.4.0**
+**Supported in v0.4.1**
 
 - Official Pi **1.1.0**, with the extension installed independently of Pi.
 - Persistent, text-only sessions, either new or already handled by this preview, with one Pi process writing each session.
@@ -144,7 +144,7 @@ A protected session that gained old checkpoints from another compactor, image co
 
 Pi records one source per package repository. Installing the same repository with a different tag or branch **replaces** the recorded source; it never adds a second copy. Restart Pi after any install or update.
 
-The installation above is **pinned** to `extension-v0.4.0` and stays there until you install a different package tag.
+The installation above is **pinned** to `extension-v0.4.1` and stays there until you install a different package tag.
 
 To follow later previews automatically instead, install the **moving `extension-preview` branch**, which replaces the pinned tag:
 
@@ -168,11 +168,11 @@ pi remove git:github.com/youxi-huang/pi-context-compaction
 
 Updating or removing the package does not migrate, rewrite or delete sessions, and it leaves other packages and Pi's credentials alone.
 
-The [v0.4.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.0) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
+The [v0.4.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.1) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
 
 ## What has been tested
 
-The project publishes failures and limits next to the passing checks. v0.4.0 requires these gates on the final source and package:
+The project publishes failures and limits next to the passing checks. v0.4.1 requires these gates on the final source and package:
 
 | Evidence | Scope |
 | --- | --- |

@@ -394,6 +394,24 @@ function renderLineage(items: readonly CheckpointLineageItem[]): string {
 		.join("\n")}`;
 }
 
+/** Characters that end a line in Markdown or in a common renderer. */
+export const LINE_BREAKS = "\\r\\n\\u0085\\u2028\\u2029";
+const LINE_BREAK_RUN = new RegExp(`[${LINE_BREAKS}]+`, "gu");
+
+/**
+ * Every fact and gap of a note about to be committed, folded onto one line. The note schema allows line breaks
+ * and `renderNote` writes the text into Markdown as it stands, so a writer could otherwise open a heading of its
+ * own. Stored checkpoints are validated and rendered as before, so one written earlier still reopens against its
+ * exact summary. Quotes are rendered as JSON strings and stay exact.
+ */
+export function oneLineNote(note: MemoryNote): MemoryNote {
+	const fold = (text: string) => text.replace(LINE_BREAK_RUN, " ");
+	const folded = structuredClone(note);
+	for (const section of noteSections) for (const item of folded[section]) item.text = fold(item.text);
+	folded.gaps = folded.gaps.map(fold);
+	return folded;
+}
+
 export function renderNote(note: MemoryNote, lineage: readonly CheckpointLineageItem[] = []): string {
 	const sections = noteSections.map(
 		(section) =>

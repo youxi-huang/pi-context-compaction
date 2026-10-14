@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
 import { assertScenarioAcceptance, PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 const sourceRoot = process.env.PI_CONTEXT_RELEASE_ROOT;
@@ -56,7 +56,7 @@ assert.equal(pack.archive, `${manifest.name}-${version}.tgz`);
 assert.equal(pack.sha256, digest(readFileSync(join(artifacts, pack.archive))));
 
 let scenarioProfile;
-if (version === VERSION || version === "0.4.0") {
+if (version === VERSION || STRICT_RELEASES.includes(version)) {
 	const reportBytes = readFileSync(join(artifacts, "context-memory-preview-scenarios", "report.json"));
 	const report = JSON.parse(reportBytes.toString("utf8"));
 	const scenarioManifestBytes = readFileSync(join(artifacts, "context-memory-preview-scenarios", "manifest.json"));
@@ -70,7 +70,7 @@ if (version === VERSION || version === "0.4.0") {
 	const candidate = { version, sourceCommit, build: build.build, sourceHash: build.sourceHash,
 		manifestHash: acceptance.candidate.manifestHash, entryHash: acceptance.candidate.entryHash, buildMetadataHash: acceptance.candidate.buildMetadataHash };
 	const profileAcceptance = assertScenarioAcceptance(report, { profile: version === VERSION ? PROFILE : "strict", candidate });
-	if (version === "0.4.0") assert.deepEqual(report.knownGaps, [], "v0.4.0 requires every scenario gate without known gaps");
+	if (STRICT_RELEASES.includes(version)) assert.deepEqual(report.knownGaps, [], `v${version} requires every scenario gate without known gaps`);
 	// Content-free release evidence preserves raw grades and measurements; no source/session bodies are copied.
 	scenarioProfile = { candidate, acceptance: profileAcceptance, raw: { passed: report.passed, summary: report.summary, checks: report.checks }, reportSha256: digest(reportBytes), manifestSha256: digest(scenarioManifestBytes), runnerSha256: scenarioManifest.runnerSha256,
 		performance: report.cases.filter((entry) => entry.case === "long-session-overhead").flatMap((entry) => entry.observations.filter((value) => value.step === "overhead per model request").map((value) => ({ pi: entry.pi, rows: value.rows.map((row) => {

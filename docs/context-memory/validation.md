@@ -1,5 +1,34 @@
 # Validation record
 
+## v0.4.1: review fixes, 2026-10-14 UTC
+
+An independent review of v0.4.0 ran the published A and B functions in
+isolation and reported four findings. Each was reproduced against the
+repository source before any change; a fifth was found while confirming them.
+
+| Finding | Reproduced | v0.4.1 |
+| --- | --- | --- |
+| A writer fact or gap with a line break renders a second `## instructions` heading, and the checkpoint passes full validation on reopen | Yes, sync writer and A | Writer facts and gaps are folded onto one line before commit, in the preview and the resident runtime |
+| B keeps a resolved gap under `Unresolved` | Yes | A work note that lists `gaps` replaces them; an empty list closes them |
+| A B correction without `supersedes` keeps both facts | Yes | Documented limit |
+| 19 old and 2 new gaps exceed the schema and send B to the writer | Yes | Documented limit |
+| A B correction drops every earlier fact citing the same entry, related or not | Yes, found while confirming | The writer merges when an entry supports more earlier facts than the note replaces |
+
+Six new regressions cover the fixes; each fails with its fix reverted. A
+seventh, and the last step of the resident regression, check that a checkpoint
+stored with multi-line text, as v0.4.0 could write it, still validates and
+reopens; rendering and stored-checkpoint validation are unchanged. One resident assertion that pinned a writer's line
+breaks in stored text now expects the folded text.
+
+With the maintainer's approval in this task, the resident fingerprint changes
+to `1.1.0-context-memory.0.3.0+src.038d16089b2ce840` and `eval/runtime.ts` pins
+`d21bead46b85f35de6d3456b1def4dd5b107781e`. Fixture and scorer locks and
+historical results are unchanged. The synthetic A/B runner was not rerun.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs ci` at `96bb986`, clean | Exit 0. 104 script and 321 runtime checks; security 461; acceptance 27/27 on `stock-preview+src.576bfb140e4f6ea8`; scenarios 145 pass, 0 known gaps, strict profile accepted, both overhead checks pass; release checks and prepare pass; full offline evaluation 89 |
+
 ## Unreleased: B never shortens a user message, 2026-10-13 UTC
 
 The maintainer chose to keep B's promise after the Haiku run lost a fact in the

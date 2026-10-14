@@ -42,7 +42,12 @@ import {
 	queryHistory,
 	revokeHistoryGrant,
 } from "../src/extensions/context-memory/history.ts";
-import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, hashEntries } from "../src/extensions/context-memory/identity.ts";
+import {
+	CONTEXT_KEEP_NONE,
+	CONTEXT_MEMORY_KIND,
+	CONTEXT_NOTE_TYPE,
+	hashEntries,
+} from "../src/extensions/context-memory/identity.ts";
 import { SessionLease } from "../src/extensions/context-memory/lease.ts";
 import {
 	checkpointLineage,
@@ -1385,7 +1390,26 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		});
 		controller.refresh(model);
 		expect(() => controller.beforeRequest({ input: "x".repeat(30_000) })).not.toThrow();
-		expect(() => controller.beforeRequest({ input: "x".repeat(400_000) })).toThrow("CONTEXT_PAYLOAD_TOO_LARGE");
+		// Pi estimates four characters per token: 110,000 here, within the 128,000 window. UTF-8 bytes / 3 against
+		// the input allowance stopped it, and with default settings stopped English text near 84,000 estimated
+		// tokens, before Pi's own 102,400 threshold could compact.
+		expect(() => controller.beforeRequest({ input: "x".repeat(440_000) })).not.toThrow();
+		expect(() => controller.beforeRequest({ input: "x".repeat(520_000) })).toThrow("CONTEXT_PAYLOAD_TOO_LARGE");
+	});
+
+	it("note candidates reach the writer at compaction but are never re-inserted into the request", async () => {
+		const store = manager();
+		const original = seed(store);
+		store.appendCustomEntry(CONTEXT_NOTE_TYPE, note(original, "Candidate: the collector stays on port 4317."));
+		const { session, runtime } = await sdk(store);
+		const messages = store.buildSessionContext().messages;
+		const shaped = await session.extensionRunner.emitContext(messages);
+		expect(shaped).toHaveLength(messages.length);
+		expect(JSON.stringify(shaped)).not.toContain("Candidate: the collector stays on port 4317.");
+		expect(shaped.some((message) => message.role === "custom")).toBe(false);
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		expect(JSON.stringify(writer.mock.calls[0][1])).toContain("Candidate: the collector stays on port 4317.");
 	});
 
 	it("the natural tool loop automatically compacts twice at 5 percent and continues without another user prompt", async () => {

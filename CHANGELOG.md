@@ -6,6 +6,15 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop the resident runtime's payload guard from blocking before its own threshold compaction. It counted the serialized request at UTF-8 bytes / 3 against `window − max(16,384, maxTokens)`, so in a 128,000-token window English text was stopped near 84,000 estimated tokens, before the 102,400 threshold could compact. The guard now uses Pi's estimate of four characters per token and stops only a payload beyond the window, since it also counts JSON escaping and tool definitions. The `context` guard measures the system prompt the same way and keeps its input allowance. This matches the independent preview since v0.4.0.
+- Stop re-inserting `context_note` candidates at the head of every request in the resident runtime. They arrived as a user-role message with headings such as `## instructions`, although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The candidates already appear in context as the model's own tool calls and still reach the writer at compaction. The independent preview stopped this in v0.4.0.
+
+### Maintenance
+
+- With the maintainer's approval, the resident build fingerprint changes to `1.1.0-context-memory.0.3.0+src.7b6b865a3072b3e0` for the two fixes above and the frozen evaluator is pinned to that source; fixture and scorer locks are unchanged. The resident release version stays v0.3.0, and the independent preview's sources and package are unchanged.
+
 ## [v0.4.1] — 2026-10-14
 
 v0.4.1 fixes three defects in how checkpoints carry notes, found in an independent review of v0.4.0 and while confirming it. A writer note can no longer open a Markdown heading of its own in a checkpoint, in the preview or the resident runtime. Arm B now closes open questions that a later note resolves, and leaves an ambiguous correction to the writer instead of dropping facts it did not replace. Checkpoints written by v0.4.0 reopen unchanged. Both arms stay off by default, and real-provider latency, cost and recovery benefits remain unproven.

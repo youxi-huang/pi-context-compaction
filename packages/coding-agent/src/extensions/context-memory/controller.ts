@@ -34,7 +34,6 @@ import {
 	inProgressRequests,
 	latestMemory,
 	type MemoryCheckpoint,
-	type MemoryNote,
 	noteBytes,
 	noteIncrements,
 	renderContinuation,
@@ -160,28 +159,9 @@ export function chooseCut(branch: readonly SessionEntry[], keepRecentTokens: num
 	return latestTurn;
 }
 
-/** Replace any stale pending-notes message with the current unverified candidates, placed first. */
-function withPendingNotes(
-	messages: readonly AgentMessage[],
-	increments: readonly MemoryNote[],
-	noteTokens: number,
-): AgentMessage[] {
-	const result = messages.filter(
-		(message) => !(message.role === "custom" && message.customType === "context-memory-pending"),
-	);
-	if (increments.length) {
-		const content = `Unverified note candidates since the last checkpoint. Current user messages and original evidence take precedence.\n${increments.map((increment) => renderNote(increment)).join("\n\n")}`;
-		// If candidates overflow, the raw recent messages remain available and the writer will reconcile them.
-		if (textTokens(content) <= noteTokens)
-			result.unshift({
-				role: "custom",
-				customType: "context-memory-pending",
-				content,
-				display: false,
-				timestamp: 0,
-			});
-	}
-	return result;
+/** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
+function piTokens(text: string): number {
+	return Math.ceil(text.length / 4);
 }
 
 /** One controller survives extension reloads. No background summarizer or per-turn paid work. */
@@ -339,28 +319,28 @@ export class MemoryController {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the current checkpoint must remain in model context");
 			}
 		});
-		const increments = noteIncrements(branch, checkpoint?.entry.id);
 		const model = ctx.model;
 		const budget = this.guarded(() => memoryBudget(model, this.host.config));
-		const result = withPendingNotes(messages, increments, budget.noteTokens);
+		// Note candidates already appear in context as the model's own tool calls. Re-injecting them at the head as
+		// user-role text would change their authority and invalidate the provider's prompt cache with every note.
 		this.guarded(() => {
-			assertToolPairs(result);
+			assertToolPairs(messages);
 			const estimate =
-				result.reduce((total, message) => total + estimateTokens(message), 0) +
-				(getInitialSystemMessage(result) ? 0 : textTokens(ctx.getSystemPrompt()));
+				messages.reduce((total, message) => total + estimateTokens(message), 0) +
+				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
 			if (estimate > budget.inputLimit)
 				throw new Error(
 					"CONTEXT_INPUT_TOO_LARGE: request exceeds the input allowance; compact explicitly or split this input",
 				);
 		});
-		return result;
+		return messages;
 	}
 
 	/**
 	 * The request Pi would send next, rebuilt the way `context()` shapes it. Other extensions' `context` handlers
 	 * are not replayed here, so an extension that rewrites the context also breaks the provider's prefix cache.
 	 */
-	private sessionPrefix(ctx: ExtensionContext, increments: readonly MemoryNote[], noteTokens: number) {
+	private sessionPrefix(ctx: ExtensionContext) {
 		const messages = this.host.session.buildContextEntries().flatMap(sessionEntryToContextMessages);
 		// Overflow recovery removes the failed assistant message from agent state; mirror that here.
 		while (messages.length) {
@@ -368,7 +348,7 @@ export class MemoryController {
 			if (last.role === "assistant" && ["error", "aborted"].includes(last.stopReason)) messages.pop();
 			else break;
 		}
-		const converted = convertToLlm(withPendingNotes(messages, increments, noteTokens));
+		const converted = convertToLlm(messages);
 		assertToolPairs(converted);
 		// Pi 0.86 persists prompt/tool changes in the transcript. Re-adding the current
 		// prompt as a legacy header would duplicate instructions and revive removed tools.
@@ -385,9 +365,9 @@ export class MemoryController {
 			const checkpoint = latestMemory(this.host.session.getBranch());
 			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1)))
 				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost or changed the current checkpoint");
-			// Final payload also contains tool definitions and provider-specific context additions.
-			if (textTokens(serialized ?? "") > memoryBudget(model, this.host.config).inputLimit)
-				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the reserved input allowance");
+			// JSON escaping and tool schemas sit outside Pi's estimate, so only a payload beyond the window is stopped here.
+			if (piTokens(serialized ?? "") > model.contextWindow)
+				throw new Error("CONTEXT_PAYLOAD_TOO_LARGE: provider payload exceeds the model's context window");
 		});
 	}
 
@@ -522,7 +502,7 @@ export class MemoryController {
 				config: this.host.config,
 				runtime: this.host.runtime,
 				sessionModel: ctx.model,
-				prefix: session ? this.sessionPrefix(ctx, increments, budget.noteTokens) : undefined,
+				prefix: session ? this.sessionPrefix(ctx) : undefined,
 				sessionThinkingLevel: session ? ctx.thinkingLevel : undefined,
 				previous: previous?.memory.note,
 				increments,

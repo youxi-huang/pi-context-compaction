@@ -60,7 +60,7 @@ node packages/coding-agent/dist/bundle/cli.js --no-extensions
 
 `--no-extensions` disables ordinary extension discovery. The compaction extension is built into this host. Add trusted provider extensions explicitly with `-e` if your model needs one. The SDK is available from `packages/coding-agent/dist/index.js` after building.
 
-Use `/compaction-status` to inspect the build, writer, checkpoint, budget mode, repair setting, active/last attempt and request state. `budget.noteTokens` is the stable pending-candidate allowance, not a prediction of the next cut-dependent writer budget; `checkpointBudget` and attempt `budgetPolicy` are actual frozen decisions. Set `enabled` to `false` and restart Pi to use default Pi compaction. Storage protections and the opaque-checkpoint migration guard remain active in fallback mode.
+Use `/compaction-status` to inspect the build, writer, checkpoint, budget mode, repair setting, active/last attempt and request state. `budget.noteTokens` was the allowance for note candidates re-inserted into requests; candidates are no longer re-inserted, so it limits nothing and is not a prediction of the next cut-dependent writer budget; `checkpointBudget` and attempt `budgetPolicy` are actual frozen decisions. Set `enabled` to `false` and restart Pi to use default Pi compaction. Storage protections and the opaque-checkpoint migration guard remain active in fallback mode.
 
 ### Event log
 

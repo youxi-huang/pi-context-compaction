@@ -25,6 +25,7 @@ import {
 	validateNote,
 	validateNoteContent,
 } from "../notes.ts";
+import { oneLineNote } from "./work-notes.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -436,7 +437,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		const value = parseNote(response);
 		calls[calls.length - 1].noteBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 		report();
-		const note = validateNoteContent(value, options.branch);
+		const note = oneLineNote(validateNoteContent(value, options.branch));
 		if (options.activeRequests?.length && !note.nextSteps.some((step) => step.text.trim()))
 			throw new Error(
 				"CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step",

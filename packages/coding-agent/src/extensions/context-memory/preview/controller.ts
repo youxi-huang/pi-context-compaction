@@ -965,7 +965,7 @@ export class PreviewMemoryController {
 				else if (event.customInstructions?.trim()) notesFallback = "custom-focus";
 				else {
 					const end = notes[notes.length - 1].index;
-					const merged = mergeWorkNotes(previous?.memory.note, increments);
+					const merged = mergeWorkNotes(previous?.memory.note, notes);
 					try {
 						notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
 					} catch {

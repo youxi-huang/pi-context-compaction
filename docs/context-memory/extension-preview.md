@@ -167,6 +167,12 @@ fixed writer can be explicitly configured in `pi-context-memory.json` inside
 Pi's agent directory. Authentication stays with Pi's public model registry;
 the package does not copy credentials or choose a substitute on failure.
 
+Each fact and open question in a checkpoint is one line. The writer's schema
+allows line breaks, so the extension folds them into spaces before a note is
+committed, and a writer cannot open a heading of its own, such as a second
+`## instructions`. Exact quotes are rendered as JSON strings and stay exact.
+Checkpoints written by v0.4.0 keep their summaries and reopen unchanged.
+
 Configuration is latched for the process; restart Pi after changing it. The
 preview uses the writer, note-budget, repair and retained-text settings from
 that file. `compactAt` bounds the manual checkpoint budget but does not start
@@ -330,7 +336,9 @@ With it, a one-line tool guideline asks the session model for a work note after
 a decision, a failed approach or a completed subtask. At compaction the
 extension merges the previous checkpoint's note with the valid notes since, in
 order, without a model call. A fact that supersedes a source drops the earlier
-facts citing it, and the newest plan replaces the older one. Instructions from
+facts citing it, and the newest plan replaces the older one. A note that lists
+`gaps` replaces the open questions recorded before it, and an empty list closes
+them; a note without `gaps` keeps them. Instructions from
 the previous checkpoint are carried unchanged; no note can add or drop one. The
 merged note covers the branch through the last work note and is committed
 through the prefix path above, so everything after it stays verbatim.
@@ -343,13 +351,21 @@ originals, so an edited message blocks the session like an edited quote.
 
 The writer compacts synchronously instead, with the notes as hints, when those
 messages do not fit in full within 5% of the compaction threshold (at most 6,000
-estimated tokens), as with a long pasted log, when a note supersedes the source of a carried instruction, when the
-merge exceeds the note schema or budget, when the prefix conditions fail, when
+estimated tokens), as with a long pasted log, when a note supersedes the source of a carried instruction, when a
+superseded source supports more earlier facts than the note gives in their
+place, when the merge exceeds the note schema or budget, when the prefix conditions fail, when
 the commit would leave half the compaction threshold or more in context (the
 turn of the last note stays verbatim), or with custom focus. That writer also reads the user messages an earlier notes
 checkpoint carried. `details.preparation.path` is `notes` for these
 checkpoints, with `noteIds` naming the merged notes; when B leaves a compaction
 to the writer, `details.preparation.notesFallback` records why.
+
+Two limits remain. `supersedes` is optional and names entries, not facts: a
+correction recorded without it leaves the earlier fact in the note beside the
+newer one, and the merge does not guess which is current. Facts also accumulate
+until a note supersedes them or the writer rewrites the note, so a long task
+reaches the schema's bounds (40 facts per section, 20 gaps) and falls back to
+the writer more often. Both wait for a note schema with stable fact identities.
 
 ## Verification
 

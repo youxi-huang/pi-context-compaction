@@ -14,10 +14,10 @@ repository source before any change; a fifth was found while confirming them.
 | 19 old and 2 new gaps exceed the schema and send B to the writer | Yes | Documented limit |
 | A B correction drops every earlier fact citing the same entry, related or not | Yes, found while confirming | The writer merges when an entry supports more earlier facts than the note replaces |
 
-Six new regressions cover the fixes; each fails with its fix reverted. Two
-more check that a checkpoint stored with multi-line text, as v0.4.0 could
-write it, still validates and reopens; rendering and stored-checkpoint
-validation are unchanged. One resident assertion that pinned a writer's line
+Six new regressions cover the fixes; each fails with its fix reverted. A
+seventh, and the last step of the resident regression, check that a checkpoint
+stored with multi-line text, as v0.4.0 could write it, still validates and
+reopens; rendering and stored-checkpoint validation are unchanged. One resident assertion that pinned a writer's line
 breaks in stored text now expects the folded text.
 
 With the maintainer's approval in this task, the resident fingerprint changes

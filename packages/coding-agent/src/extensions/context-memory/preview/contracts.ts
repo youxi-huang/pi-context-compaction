@@ -54,6 +54,7 @@ export interface PreviewDiagnosis {
 	build: string;
 	host: string;
 	supportedHost: string;
+	supportedHosts: readonly string[];
 	protection: Protection;
 	reason?: InactiveReason;
 	state: "ready" | "pending" | "blocked" | "inactive";

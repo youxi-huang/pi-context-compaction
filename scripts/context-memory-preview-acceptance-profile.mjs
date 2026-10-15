@@ -95,7 +95,7 @@ function validateFullReport(report) {
 		assert.equal(result.case, expected.case, "Scenario raw case matrix must match the full suite");
 		assert.equal(result.variant, expected.variant, "Scenario raw variant matrix must match the full suite");
 		assert(!("skipped" in result), "Acceptance cannot skip a scenario");
-		const pi = expected.case === "other-pi-version" ? "1.0.4" : "1.1.0";
+		const pi = expected.case === "other-pi-version" ? "1.0.4" : report.candidate.version === "0.4.2" ? "1.2.0" : "1.1.0";
 		assert.equal(result.pi, pi, "Scenario must use the reviewed official Pi version");
 		assert(Array.isArray(result.checks), "Scenario raw checks must be an array");
 		assert.deepEqual(result.checks.map((check) => check?.key), expected.keys, "Scenario raw assertions are incomplete, duplicated or unreviewed");

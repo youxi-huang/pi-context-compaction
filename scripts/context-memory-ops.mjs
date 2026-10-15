@@ -68,6 +68,7 @@ const root = realpathSync(rootResult.stdout.trim());
 const extension = "packages/coding-agent/src/extensions/context-memory";
 const fingerprintFile = `${extension}/build.ts`;
 const stockRoot = join(root, ".artifacts/context-memory-preview-stock");
+const compatibleStockRoot = join(root, ".artifacts/context-memory-preview-stock-1.1.0");
 const otherStockRoot = join(root, ".artifacts/context-memory-preview-stock-1.0.4");
 const lockMarker = join(root, "node_modules/.context-memory-ops-lock");
 const identity = userInfo();
@@ -182,7 +183,7 @@ function dependencyState(hash) {
 	return { installed, marked };
 }
 
-function officialPiReady(directory = stockRoot, version = "1.1.0") {
+function officialPiReady(directory = stockRoot, version = "1.2.0") {
 	return officialPiCohortReady(directory, version);
 }
 
@@ -207,7 +208,8 @@ async function doctor() {
 		write(
 			`dependencies: ${installed ? "installed" : "missing/incomplete"}; lock marker: ${marked ? "current" : "missing/stale (deps will install)"}\n`,
 		);
-		write(`official Pi 1.1.0: ${officialPiReady() ? "ready" : "not ready (preview will install)"}\n`);
+		write(`official Pi 1.2.0: ${officialPiReady() ? "ready" : "not ready (preview will install)"}\n`);
+		write(`supported Pi 1.1.0: ${officialPiReady(compatibleStockRoot, "1.1.0") ? "ready" : "not ready (preview will install)"}\n`);
 		write(
 			`official Pi 1.0.4 scenario control: ${officialPiReady(otherStockRoot, "1.0.4") ? "ready" : "not ready (preview will install)"}\n`,
 		);
@@ -286,15 +288,22 @@ async function installOfficialPi(name, directory, version) {
 async function preview() {
 	await nodeStep("preview-build", ["scripts/context-memory-preview-build.mjs"]);
 	assertProfileVersion(profile, JSON.parse(readFileSync(join(root, ".artifacts/context-memory-preview-package/package.json"), "utf8")).version);
-	await installOfficialPi("official-pi", stockRoot, "1.1.0");
+	await installOfficialPi("official-pi", stockRoot, "1.2.0");
+	await installOfficialPi("official-pi-1.1.0", compatibleStockRoot, "1.1.0");
 	await nodeStep("preview-acceptance", [
 		"scripts/context-memory-preview-acceptance.mjs",
 		"--package-dir",
 		".artifacts/context-memory-preview-package",
 		"--stock-root",
 		".artifacts/context-memory-preview-stock",
+		"--compatible-stock-root",
+		compatibleStockRoot,
 		"--output-dir",
 		".artifacts/context-memory-preview-acceptance",
+	]);
+	await nodeStep("preview-acceptance-1.1.0", [
+		"scripts/context-memory-preview-acceptance.mjs", "--package-dir", ".artifacts/context-memory-preview-package",
+		"--stock-root", compatibleStockRoot, "--output-dir", ".artifacts/context-memory-preview-acceptance-1.1.0",
 	]);
 	await installOfficialPi("official-pi-1.0.4", otherStockRoot, "1.0.4");
 	await nodeStep("preview-scenarios", [

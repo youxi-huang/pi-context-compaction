@@ -1481,6 +1481,41 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(unsupportedReason(session)).toBe("image");
 		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
 	});
+	it.each(["1.2.0", "1.1.0"])(
+		"continues protected checkpoints on reviewed Pi %s and reports that host as supported",
+		(version) => {
+			protect();
+			const preview = controller({ hostVersion: version });
+			const ctx = context();
+			expect(unsupportedReason(session, version)).toBeUndefined();
+			expect(assertPreviewSession(session, version)).toBeDefined();
+			expect(() => preview.assertReady(ctx)).not.toThrow();
+			expect(preview.status(ctx)).toMatchObject({
+				state: "ready",
+				protection: "protected",
+				host: version,
+				supportedHost: "1.2.0",
+				supportedHosts: ["1.2.0", "1.1.0"],
+			});
+			expect(doctorReport(preview.diagnose(ctx), { disabled: false })).toContain(`host: ok - Pi ${version}`);
+		},
+	);
+	it.each(["1.0.4", "1.2.1", "1.3.0", "1.2.0-custom"])(
+		"keeps protected sessions blocked on unreviewed Pi %s",
+		(version) => {
+			protect();
+			const preview = controller({ hostVersion: version });
+			const abort = vi.fn();
+			preview.context(messages(), context(abort));
+			expect(abort).toHaveBeenCalledOnce();
+			expect(preview.status(context())).toMatchObject({
+				state: "blocked",
+				protection: "protected",
+				reason: "host",
+				code: "CONTEXT_PREVIEW_UNSUPPORTED",
+			});
+		},
+	);
 	it("classifies a native checkpoint as foreign and keeps the migration error", () => {
 		addNativeCheckpoint();
 		expect(unsupportedReason(session)).toBe("foreign-checkpoint");

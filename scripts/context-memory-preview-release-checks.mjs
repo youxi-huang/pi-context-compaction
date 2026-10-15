@@ -2,7 +2,20 @@ import assert from "node:assert/strict";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 /** Releases published only with the full strict scenario suite: no waiver, performance exception or known gap. */
-export const STRICT_RELEASES = Object.freeze(["0.4.0", "0.4.1"]);
+export const STRICT_RELEASES = Object.freeze(["0.4.0", "0.4.1", "0.4.2"]);
+
+/** Historical source tags keep their original host contract when publication is retried. */
+export function releasePiVersions(version) {
+	return version === "0.4.2" ? ["1.2.0", "1.1.0"] : ["1.1.0"];
+}
+
+/** Local preparation can describe Unreleased; publication requires its versioned changelog. */
+export function releaseChanges(changelog, tag, prepare = false) {
+	const section = changelog.split(`## [${tag}]`)[1]?.split("\n## [")[0]
+		?? (prepare ? changelog.split("## [Unreleased]")[1]?.split("\n## [")[0] : undefined);
+	assert(section?.trim(), "Release requires its own changelog section");
+	return section.replace(/^ —[^\n]*\n/, "").trim();
+}
 
 /** Only reviewed stable or numbered preview spellings; never normalize source refs. */
 export function parseReviewedVersion(version) {
@@ -43,18 +56,19 @@ export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit
 	assert.equal(packageTag, reviewed.packageTag, "Package tag must match the source version");
 	const functionalPreview = reviewed.version === VERSION;
 	const latencyRelease = STRICT_RELEASES.includes(reviewed.version);
+	const hosts = releasePiVersions(reviewed.version).join(" and ");
 	if (functionalPreview) assertFunctionalProfile(scenarioAcceptance);
 	if (latencyRelease) assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 	const introduction = reviewed.preview
-		? `Pi Context Compaction ${tag} is an **experimental A-stage preview candidate** for **unmodified official Pi 1.1.0**.\n\n`
-		: `Pi Context Compaction ${tag} supplies an ordinary extension for **unmodified official Pi 1.1.0**.\n\n`;
+		? `Pi Context Compaction ${tag} is an **experimental A-stage preview candidate** for **unmodified official Pi ${hosts}**.\n\n`
+		: `Pi Context Compaction ${tag} supplies an ordinary extension for **unmodified official Pi ${hosts}**.\n\n`;
 	const preparation = latencyRelease
 		? `Optional preparation has two arms, both **disabled by default**: A prepares with the configured writer; B merges data-only work notes from the session model. A validated candidate can commit its covered prefix without a writer call while every later original stays verbatim. B carries covered user messages in full and falls back to the configured writer when they do not fit. Every writer call is journaled, including cancelled or discarded preparation and unknown usage. These are experimental paths; real-provider pause, total cost, cache behavior and recovery benefits remain unproven.\n\n`
 		: reviewed.preview
 		? `A adds opt-in preparation using the same configured writer; it is **disabled by default**. The existing commit and failure gates remain in force. B, the new instruction-authority protocol and the full A/B comparison are incomplete and deferred. Improvements in foreground pause, total cost or recovery have not been established.\n\n`
 		: "";
 	const validation = latencyRelease
-		? `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi 1.1.0 and the full default-settings scenario suite with **strict acceptance and no performance exceptions or known gaps**. Scenario evidence is bound to this exact package and source commit; the 50 ms request-overhead target and checkpoint-growth bound are required checks. Focused, security and frozen evaluator checks also remain required on final main. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
+		? `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi ${hosts} and the full default-settings scenario suite on Pi ${releasePiVersions(reviewed.version)[0]} with **strict acceptance and no performance exceptions or known gaps**. Scenario evidence is bound to this exact package and source commit; the 50 ms request-overhead target and checkpoint-growth bound are required checks. Focused, security and frozen evaluator checks also remain required on final main. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
 		: functionalPreview
 		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi 1.1.0. The maintainer-approved \`${PROFILE}\` profile applies **only to v${VERSION}**. Only true failures of \`per-request-budget\` (50 ms) and \`checkpoint-overhead-growth-required\` are accepted as functional A-preview scope exceptions; correctness, security, persistence, identity, package and source checks must pass. Raw scenario gate: ${scenarioAcceptance.rawPassed ? "passed" : "failed"}. Declared raw performance exceptions: ${scenarioAcceptance.exceptions.map((entry) => `\`${entry.id}\` (${entry.status})`).join(", ") || "none"}. These are scope exceptions, not performance passes; the full v0.4.0 gates are unchanged. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
 		: reviewed.preview

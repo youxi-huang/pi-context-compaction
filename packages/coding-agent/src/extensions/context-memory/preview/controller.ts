@@ -31,6 +31,7 @@ import {
 } from "../notes.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
 import type { CallJournal } from "./call-journal.ts";
+import { PRIMARY_PI_VERSION, SUPPORTED_PI_LABEL, SUPPORTED_PI_VERSIONS, supportsPi } from "./compatibility.ts";
 import type {
 	InactiveReason,
 	NotesFallback,
@@ -39,7 +40,7 @@ import type {
 	PreviewFailureStoreContract,
 	PreviewSession,
 } from "./contracts.ts";
-import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice, SUPPORTED_PI } from "./notices.ts";
+import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
 import {
@@ -275,7 +276,7 @@ function unsupportedContent(entry: SessionEntry): InactiveReason | undefined {
 
 /** Host or session content this preview cannot check. Read-only: no IO beyond the session object. */
 export function unsupportedReason(session: PreviewSession, version: string = VERSION): InactiveReason | undefined {
-	if (version !== SUPPORTED_PI) return "host";
+	if (!supportsPi(version)) return "host";
 	if (!session.getSessionFile()) return "in-memory";
 	const branch = session.getBranch();
 	try {
@@ -292,7 +293,7 @@ export function unsupportedReason(session: PreviewSession, version: string = VER
 }
 
 const UNSUPPORTED_ERRORS: Record<InactiveReason, string> = {
-	host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi ${SUPPORTED_PI}`,
+	host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated on official Pi ${SUPPORTED_PI_LABEL}`,
 	"in-memory": "CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required",
 	"context-edit": "CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported",
 	"foreign-checkpoint":
@@ -578,7 +579,8 @@ export class PreviewMemoryController {
 		return {
 			build: PREVIEW_BUILD_ID,
 			host: this.hostVersion,
-			supportedHost: SUPPORTED_PI,
+			supportedHost: PRIMARY_PI_VERSION,
+			supportedHosts: SUPPORTED_PI_VERSIONS,
 			protection: inactive ? "not-protected" : isProtected ? "protected" : "eligible",
 			...(reason ? { reason } : {}),
 			state,
@@ -634,6 +636,7 @@ export class PreviewMemoryController {
 			lastWriter: this.lastProgress,
 			host: diagnosis.host,
 			supportedHost: diagnosis.supportedHost,
+			supportedHosts: diagnosis.supportedHosts,
 			protection: diagnosis.protection,
 			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
 			manualCompaction: diagnosis.manualCompaction,

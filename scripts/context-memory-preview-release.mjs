@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseChanges, releaseNotes, releasePiVersions, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
 import { assertScenarioAcceptance, PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 
 const sourceRoot = process.env.PI_CONTEXT_RELEASE_ROOT;
@@ -40,18 +40,26 @@ assert.equal(git("status", "--porcelain"), "", "Release source must be clean");
 assert.equal(build.sourceCommit, sourceCommit, "Rebuild from the final clean source commit");
 assert.equal(pack.sourceCommit, sourceCommit);
 assert.equal(build.version, version);
-assert.equal(build.supportedPi, "1.1.0");
+const hosts = releasePiVersions(version);
+assert.equal(build.supportedPi, hosts[0]);
+if (hosts.length > 1) assert.deepEqual(build.supportedPiVersions, hosts);
 assert.equal(pack.version, version);
 assert.deepEqual(pack.files.map((entry) => entry.path).sort(), expectedFiles);
 assert.deepEqual(readdirSync(packageDir).sort(), ["LICENSE", "README.md", "dist", "package.json", "preview-build.json"]);
 assert.deepEqual(readdirSync(join(packageDir, "dist")), ["extension.js"]);
 assert.equal(manifest.pi.extensions[0], "./dist/extension.js");
-assert.equal(acceptance.candidate.build, build.build);
-assert.equal(acceptance.candidate.sourceHash, build.sourceHash);
-assert.equal(acceptance.candidate.manifestHash, digest(readFileSync(join(packageDir, "package.json"))));
-assert.equal(acceptance.candidate.entryHash, digest(readFileSync(join(packageDir, "dist/extension.js"))));
-assert.equal(acceptance.candidate.buildMetadataHash, digest(readFileSync(join(packageDir, "preview-build.json"))));
-assert(acceptance.assertions.length >= 26 && acceptance.assertions.every((entry) => entry.passed), "Stock-Pi acceptance must pass");
+const expectedCandidate = { build: build.build, sourceHash: build.sourceHash,
+	manifestHash: digest(readFileSync(join(packageDir, "package.json"))), entryHash: digest(readFileSync(join(packageDir, "dist/extension.js"))), buildMetadataHash: digest(readFileSync(join(packageDir, "preview-build.json"))) };
+const hostAcceptance = hosts.map((host, index) => index === 0 ? acceptance : jsonFile(join(artifacts, `context-memory-preview-acceptance-${host}`, "report.json")));
+for (const [index, report] of hostAcceptance.entries()) {
+	assert.equal(report.stockProvenance.version, hosts[index], "Acceptance must use the required official host");
+	for (const [key, value] of Object.entries(expectedCandidate)) assert.equal(report.candidate[key], value, `Acceptance candidate ${key} must match the final package`);
+	assert(report.assertions.length >= (version === "0.4.2" ? 28 : 26) && report.assertions.every((entry) => entry.passed), "Stock-Pi acceptance must pass");
+}
+if (hosts.length > 1) {
+	assert.equal(acceptance.compatibleHost?.version, hosts[1], "Primary acceptance must include cross-version checkpoints");
+	for (const name of ["compatible official Pi 1.1.0 reopens and compacts the primary host checkpoint", "primary host reopens the compatible host checkpoint"]) assert(acceptance.assertions.some((entry) => entry.name === name && entry.passed), "Cross-version checkpoint checks must pass");
+}
 assert.equal(pack.archive, `${manifest.name}-${version}.tgz`);
 assert.equal(pack.sha256, digest(readFileSync(join(artifacts, pack.archive))));
 
@@ -65,7 +73,7 @@ if (version === VERSION || STRICT_RELEASES.includes(version)) {
 	assert.equal(scenarioManifest.runnerSha256, digest(readFileSync(join(root, "scripts/context-memory-preview-scenarios.mjs"))), "Scenario runner must match the final source");
 	assert.equal(scenarioManifest.only, null, "Publication requires the full scenario suite");
 	assert.equal(scenarioManifest.checkpointTarget, 20, "Publication requires 20 checkpoints");
-	assert.equal(scenarioManifest.host.version, "1.1.0");
+	assert.equal(scenarioManifest.host.version, hosts[0]);
 	assert.equal(scenarioManifest.otherHost.version, "1.0.4");
 	const candidate = { version, sourceCommit, build: build.build, sourceHash: build.sourceHash,
 		manifestHash: acceptance.candidate.manifestHash, entryHash: acceptance.candidate.entryHash, buildMetadataHash: acceptance.candidate.buildMetadataHash };
@@ -85,11 +93,9 @@ const sourceArchive = `pi-context-compaction-${tag}-source.tar.gz`;
 git("archive", "--format=tar.gz", `--prefix=pi-context-compaction-${tag}/`, `--output=${join(artifacts, sourceArchive)}`, sourceCommit);
 const packageFiles = expectedFiles.map((file) => ({ file, sha256: digest(readFileSync(join(packageDir, file))) }));
 const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-const section = changelog.split(`## [${tag}]`)[1]?.split("\n## [")[0];
-assert(section, "Release requires its own changelog section");
 const notes = releaseNotes({
 	repository, branch, tag, packageTag, sourceCommit, build: build.build,
-	acceptanceChecks: acceptance.assertions.length, changes: section.replace(/^ —[^\n]*\n/, "").trim(),
+	acceptanceChecks: hostAcceptance.reduce((sum, report) => sum + report.assertions.length, 0), changes: releaseChanges(changelog, tag, !publish),
 	scenarioAcceptance: scenarioProfile?.acceptance,
 });
 assertReleaseNotes(notes, { repository, packageTag, branch, scenarioAcceptance: scenarioProfile?.acceptance });
@@ -97,8 +103,8 @@ writeFileSync(join(artifacts, "context-memory-preview-release-notes.md"), notes)
 const provenance = {
 	version, sourceCommit, publicationToolingCommit, sourceTag: tag, packageTag, packageBranch: branch,
 	build: build.build, sourceHash: build.sourceHash, sources: build.sources,
-	supportedPi: build.supportedPi, checkpointSchema: build.checkpointSchema,
-	packageFiles, stockAcceptance: { passed: acceptance.assertions.length, providers: "synthetic loopback only" },
+	supportedPi: build.supportedPi, supportedPiVersions: hosts, checkpointSchema: build.checkpointSchema,
+	packageFiles, stockAcceptance: { passed: hostAcceptance.reduce((sum, report) => sum + report.assertions.length, 0), hosts: hosts.map((host, index) => ({ version: host, passed: hostAcceptance[index].assertions.length })), providers: "synthetic loopback only" },
 	...(scenarioProfile ? { scenarioAcceptance: scenarioProfile.acceptance, rawScenarioSummary: scenarioProfile.raw.summary, scenarioReportSha256: scenarioProfile.reportSha256 } : {}),
 };
 
@@ -180,7 +186,7 @@ if (!publish) {
 			assert(matching.length <= 1, "Multiple release records for the tag; resolve without overwriting assets");
 			release = matching[0] ?? null;
 		}
-		if (!release) release = await api("releases", "POST", { tag_name: tag, target_commitish: sourceCommit, name: `${tag} — Independent extension preview for Pi 1.1.0`, body: notes, draft: true, prerelease: true, make_latest: "false" });
+		if (!release) release = await api("releases", "POST", { tag_name: tag, target_commitish: sourceCommit, name: `${tag} — Independent extension preview for Pi ${hosts.join(" and ")}`, body: notes, draft: true, prerelease: true, make_latest: "false" });
 		assert.equal(release.prerelease, true);
 		for (const file of assets) {
 			const bytes = readFileSync(join(artifacts, file));

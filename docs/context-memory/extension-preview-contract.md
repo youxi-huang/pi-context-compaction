@@ -5,6 +5,10 @@ first delivered in v0.3.1. The [installation guide](extension-preview.md) owns p
 publication instructions. Resident build fingerprints and the six host
 integration files remain unchanged; provider-quality validation is separate.
 
+v0.4.2 extends the host matrix to official Pi 1.2.0 and 1.1.0. Its checkpoint
+schema and the resident 1.1.0 baseline stay unchanged. The first-candidate scope
+below records the original 1.1.0 delivery.
+
 ## Supported first candidate
 
 - Unmodified official Pi 1.1.0, Node.js 22.19 or newer, macOS/Linux.
@@ -78,7 +82,8 @@ claim on it: a checkpoint written by the preview (`details.kind` is
 the session file, or a pending or blocked marker, or a same-process sticky
 failure or active attempt. Content alone never removes protection.
 
-A session without such a claim is eligible when the host is official Pi 1.1.0,
+A session without such a claim is eligible on a reviewed official host (Pi 1.2.0
+or 1.1.0 for v0.4.2),
 the session is persistent, its branch has only preview checkpoints, text
 content and validated failed-response omissions. Eligible sessions get the full
 request guards and manual compaction. A compaction attempt, including the
@@ -107,7 +112,7 @@ changes the session.
 Agent C owns `packages/coding-agent/test/context-memory-preview.test.ts`, matching
 synthetic fixtures, and `scripts/context-memory-preview-acceptance.mjs`. It designs
 adversarial scenarios independently, tests the actual candidate against a clean
-official Pi 1.1.0 installation, and reports failure cases to A/B. It may not edit
+official Pi installation (both 1.2.0 and 1.1.0 for v0.4.2), and reports failure cases to A/B. It may not edit
 A/B implementation files. No agent creates additional agents.
 
 The main agent owns contracts, candidate build/pack scripts, documentation,

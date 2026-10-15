@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { OFFICIAL_PI_COHORT, inspectOfficialPi, installOfficialPi, officialPiReady, parseStockInstallArguments } from "./context-memory-preview-stock-install.mjs";
+import { OFFICIAL_PI_COHORT, OFFICIAL_PI_VERSIONS, inspectOfficialPi, installOfficialPi, officialPiCohort, officialPiReady, parseStockInstallArguments } from "./context-memory-preview-stock-install.mjs";
 
 const integrity = `sha512-${createHash("sha512").update("synthetic package bytes").digest("base64")}`;
 const script = fileURLToPath(new URL("./context-memory-preview-stock-install.mjs", import.meta.url));
@@ -23,12 +23,13 @@ function writeJson(file, value) {
 
 function fixture(directory, version = "1.1.0") {
 	const packages = {};
-	for (const name of OFFICIAL_PI_COHORT) {
+	const names = officialPiCohort(version);
+	for (const name of names) {
 		const key = `node_modules/${name}`;
 		const packageRoot = join(directory, key);
 		mkdirSync(join(packageRoot, "dist/bundle"), { recursive: true });
 		const dependencies = name.endsWith("/pi-coding-agent")
-			? Object.fromEntries(OFFICIAL_PI_COHORT.slice(1, 7).map((dependency) => [dependency, `^${version}`]))
+			? Object.fromEntries(names.filter((dependency) => dependency !== name && !dependency.endsWith("/pi-telemetry")).map((dependency) => [dependency, `^${version}`]))
 			: name.endsWith("/pi-ai") ? { "@earendil-works/pi-telemetry": `^${version}` } : {};
 		writeJson(join(packageRoot, "package.json"), { name, version, type: "module", dependencies });
 		writeFileSync(join(packageRoot, "dist/index.js"), `export const VERSION = ${JSON.stringify(version)}; export function createAgentSession() {} export class SessionManager {}\n`);
@@ -36,7 +37,7 @@ function fixture(directory, version = "1.1.0") {
 		packages[key] = { version, integrity, resolved: `https://registry.npmjs.org/${name}/-/${name.split("/")[1]}-${version}.tgz` };
 	}
 	writeJson(join(directory, "node_modules/.package-lock.json"), { lockfileVersion: 3, packages });
-	writeJson(join(directory, "package.json"), { dependencies: Object.fromEntries(OFFICIAL_PI_COHORT.map((name) => [name, version])) });
+	writeJson(join(directory, "package.json"), { dependencies: Object.fromEntries(names.map((name) => [name, version])) });
 }
 
 function changeLock(directory, operation) {
@@ -48,19 +49,21 @@ function changeLock(directory, operation) {
 
 test("CLI requires an isolated root and one reviewed exact version", () => {
 	assert.deepEqual(parseStockInstallArguments(["--version", "1.0.4", "--stock-root", "/tmp/stock", "--check"]), { check: true, version: "1.0.4", stockRoot: "/tmp/stock" });
-	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.2.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
+	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.3.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
 		assert.throws(() => parseStockInstallArguments(args));
 	}
 });
 
-test("both supported cohorts report every package version and npm integrity", (t) => {
-	for (const version of ["1.1.0", "1.0.4"]) {
+test("all reviewed cohorts report exact versions and npm provenance without redundant report hashes", (t) => {
+	for (const version of OFFICIAL_PI_VERSIONS) {
 		const directory = scratch(t);
 		fixture(directory, version);
 		const report = inspectOfficialPi(directory, version);
 		assert.equal(report.version, version);
-		assert.equal(report.packages.length, 8);
-		assert.ok(report.packages.every((record) => record.version === version && record.integrity === integrity && /^[a-f0-9]{64}$/.test(record.manifestSha256)));
+		assert.equal(report.packages.length, version === "1.2.0" ? 7 : 8);
+		assert.ok(report.packages.every((record) => record.version === version && record.integrity === integrity));
+		assert.deepEqual(Object.keys(report).sort(), ["host", "packages", "version"]);
+		assert.ok(report.packages.every((record) => !Object.hasOwn(record, "manifestSha256")));
 		assert.equal(officialPiReady(directory, version), true);
 		assert.equal(officialPiReady(directory, version === "1.1.0" ? "1.0.4" : "1.1.0"), false);
 	}
@@ -122,7 +125,7 @@ test("check mode never installs a missing or mixed host", (t) => {
 	assert.equal(calls, 0);
 });
 
-test("installation explicitly pins all eight official packages without overrides or scripts", (t) => {
+test("installation explicitly pins the older eight-package cohort without overrides or scripts", (t) => {
 	const directory = scratch(t);
 	const calls = [];
 	const report = installOfficialPi({ stockRoot: directory, version: "1.0.4" }, (program, args, options) => {
@@ -145,6 +148,35 @@ test("ready cache skips npm but still validates SDK startup with networking deni
 	const report = installOfficialPi({ stockRoot: directory, version: "1.1.0", check: true });
 	assert.equal(report.installed, false);
 	assert.equal(report.sdkStartup, "network-blocked import passed");
+});
+
+test("upgrading a cached older root drops chord and pins all seven Pi 1.2.0 packages", (t) => {
+	const directory = scratch(t);
+	fixture(directory, "1.1.0");
+	const calls = [];
+	const report = installOfficialPi({ stockRoot: directory, version: "1.2.0" }, (program, args) => {
+		calls.push({ program, args });
+		if (program === "npm") {
+			const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+			assert.deepEqual(manifest.dependencies, Object.fromEntries(officialPiCohort("1.2.0").map((name) => [name, "1.2.0"])));
+			rmSync(join(directory, "node_modules"), { recursive: true });
+			fixture(directory, "1.2.0");
+			return { status: 0, stdout: "", stderr: "" };
+		}
+		return { status: 0, stdout: "official-sdk-ready\n", stderr: "" };
+	});
+	assert.equal(report.installed, true);
+	assert.equal(report.packages.length, 7);
+	assert.deepEqual(calls[0].args.slice(-7), officialPiCohort("1.2.0").map((name) => `${name}@1.2.0`));
+});
+
+test("a 1.2.0 installation cannot keep chord as an extra dependency", (t) => {
+	const directory = scratch(t);
+	fixture(directory, "1.2.0");
+	const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+	manifest.dependencies["@earendil-works/chord"] = "1.1.0";
+	writeJson(join(directory, "package.json"), manifest);
+	assert.throws(() => inspectOfficialPi(directory, "1.2.0"), /pin every runtime cohort dependency exactly/);
 });
 
 test("actual startup networking and broken SDK exports are rejected without installation", (t) => {
@@ -171,7 +203,7 @@ test("an unrelated project is never used as an installation destination", (t) =>
 });
 
 test("invalid CLI versions fail before any npm call and help needs no installation", () => {
-	const invalid = spawnSync(process.execPath, [script, "--version", "1.2.0", "--stock-root", "/unused"], { encoding: "utf8" });
+	const invalid = spawnSync(process.execPath, [script, "--version", "1.3.0", "--stock-root", "/unused"], { encoding: "utf8" });
 	assert.equal(invalid.status, 2);
 	assert.match(invalid.stderr, /Unsupported official Pi version/);
 	const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });

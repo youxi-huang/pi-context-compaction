@@ -27,6 +27,13 @@ The durable facts of a session are the original records and the committed checkp
 
 ## Planned minor releases
 
+**Source-hash follow-up, unassigned.** `hashEntries` hashes `JSON.stringify()`
+output, so reordering object fields without changing their values can reject a
+checkpoint. v0.4.2 keeps the existing algorithm and stored format. A future
+canonical serialization needs an explicit compatibility plan for existing
+checkpoints and regressions that distinguish harmless field reordering from
+changed source content; citation checks alone cannot replace the latter check.
+
 **0.2.0, daily use.** Released 2026-09-09. The maintainer's own Pi installation runs this build as its only compactor, and the local event log records every compaction attempt. The deliverable of the 0.2.x period is a list of what feels slow, wrong or noisy in ordinary work; the first real two-checkpoint session already produced three changes that shipped in 0.2.0 itself. Every later release is shaped by that list.
 
 **0.3.0, measurement — released 2026-10-09; evaluation implemented, minimal live validation executed, full baseline deferred.** The release contains replayable synthetic fixtures, probes, deterministic scoring, a Pi runner and an explicitly authorized subscription runner under [the evaluation contract](../../eval/README.md). It answers the measurement question at the level of method: recovery can be measured reproducibly, and the first live record is partial. Each evaluated runtime is pinned and reported with its results. The intended native-Pi comparison is not complete: under the reduced evaluation budget, the remaining 16 runs were closed as unstarted rather than replaced by a claimed baseline.

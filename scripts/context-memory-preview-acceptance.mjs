@@ -8,6 +8,7 @@ import { createConnection, createServer as createTcpServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { inspectOfficialPi } from "./context-memory-preview-stock-install.mjs";
 
 // Uses only clean official host code and a loopback mock provider. Never contacts a model service.
 const script = fileURLToPath(import.meta.url);
@@ -25,6 +26,7 @@ const outputDir = resolve(argument("--output-dir"));
 // Workers receive the isolated working root as their --output-dir; the parent keeps only evidence in outputDir.
 let workDir = outputDir;
 const stockPackage = join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent");
+const stockVersion = JSON.parse(readFileSync(join(stockPackage, "package.json"), "utf8")).version;
 const workerCase = argument("--runtime-case", true);
 const installedPackage = resolve(argument("--installed-package-dir", true) ?? packageDir);
 mkdirSync(outputDir, { recursive: true });
@@ -127,15 +129,16 @@ async function runtimeAcceptance() {
 	let manager;
 	let capturedPendingMarker;
 	let writerMode = ["bad-quote", "bad-source", "bad-supersedes"].includes(workerCase) ? workerCase : ["cache-warming", "marker-corrupt"].includes(workerCase) ? "bad-source" : "good";
-	let mainMode = workerCase === "success" || workerCase === "reopen-success" ? "history" : "ack";
+	let mainMode = ["success", "repeat-compaction", "reopen-success"].includes(workerCase) ? "history" : "ack";
 	let onWriter;
 	const server = createHttpServer(async (request, response) => {
 		let raw = "";
 		for await (const chunk of request) raw += chunk;
 		let payload;
 		try { payload = JSON.parse(raw); } catch { response.writeHead(400); response.end(); return; }
-		const serialized = JSON.stringify(payload.messages ?? []);
-		const writer = serialized.includes("failedPaths") && serialized.includes("nextSteps") && serialized.includes("sources");
+		// A normal request can contain every note-schema field in a checkpoint and tool loadout.
+		// The session writer ends its request with an explicit handover instruction.
+		const writer = JSON.stringify(payload.messages?.at(-1) ?? "").includes("Internal context-compaction request, not a new user task or ruling.");
 		requests.push({ writer, model: payload.model });
 		if (writer) {
 			await onWriter?.();
@@ -188,6 +191,10 @@ async function runtimeAcceptance() {
 			const count = requests.length;
 			await session.prompt("Continue despite the earlier failed compaction.");
 			assert.equal(requests.length, count, "Blocked prompt reached the actual local HTTP provider");
+			if (workerCase === "bad-quote") {
+				await session.sendCustomMessage({ customType: "synthetic-guard", content: "Continue the blocked synthetic task.", display: false }, { triggerTurn: true });
+				assert.equal(requests.length, count, "Custom-triggered run bypassed the compaction failure guard");
+			}
 		}
 		if (automaticCase) {
 			await session.prompt("Continue the synthetic local service check.");
@@ -220,7 +227,7 @@ async function runtimeAcceptance() {
 			const status = JSON.parse(await commandOutput("/compaction-status"));
 			assert.equal(requests.length, 0, "The self-check reached the local HTTP provider");
 			assert(!existsSync(marker), "The self-check wrote a failure marker");
-			for (const line of ["extension: ok", "host: ok - Pi 1.1.0", "session: ok", "writer: ok", "manual /compact: unknown", "durable block: ok - none"]) assert(doctor.includes(line), `Doctor output lacks "${line}"`);
+			for (const line of ["extension: ok", `host: ok - Pi ${stockVersion}`, "session: ok", "writer: ok", "manual /compact: unknown", "durable block: ok - none"]) assert(doctor.includes(line), `Doctor output lacks "${line}"`);
 			assert.equal(status.state, "ready", "A fresh session did not report ready");
 			assert.equal(status.protection, "eligible", "A fresh session did not report eligible protection");
 			assert.equal(status.manualCompaction?.pi, "unknown", "Status claimed to know Pi's own compaction gate");
@@ -250,7 +257,7 @@ async function runtimeAcceptance() {
 			let compactError;
 			let result;
 			try { result = await session.compact(); } catch (error) { compactError = error; }
-			if (workerCase === "success" || workerCase === "unobserved-commit") {
+			if (["success", "repeat-compaction", "unobserved-commit"].includes(workerCase)) {
 				assert(!compactError, `Valid compaction failed: ${compactError?.message}`);
 				assert(result?.details?.kind === "pi-context-memory", "Stock host used native summarization instead of the extension");
 				assert(!existsSync(marker), "Confirmed successful commit did not clear the marker");
@@ -266,6 +273,13 @@ async function runtimeAcceptance() {
 					assert(!existsSync(marker), "Nothing/Already compacted operation manufactured a new failure marker");
 					await session.prompt("Verify the original decision with context_history.");
 					assert(toolResults.some((value) => JSON.stringify(value).includes("Do not deploy this synthetic service.")), "context_history did not retrieve the original evidence");
+					if (workerCase === "repeat-compaction") {
+						await session.compact();
+						assert(!existsSync(marker), "Repeated compaction left a failure marker");
+						const before = toolResults.length;
+						await session.sendCustomMessage({ customType: "synthetic-history", content: "Verify the original decision with context_history again.", display: false }, { triggerTurn: true });
+						assert(toolResults.slice(before).some((value) => JSON.stringify(value).includes("Do not deploy this synthetic service.")), "History lookup failed after repeated compaction and a custom-triggered run");
+					}
 				}
 			} else {
 				assert(compactError || existsSync(marker), "Invalid compaction completed without persistent failure state");
@@ -298,6 +312,9 @@ async function runtimeAcceptance() {
 					const beforeResume = requests.length;
 					await session.prompt("Continue the local check.");
 					assert(requests.length > beforeResume, "Confirmed recovery did not restore sending");
+					const beforeCustom = requests.length;
+					await session.sendCustomMessage({ customType: "synthetic-recovery", content: "Continue the recovered synthetic task.", display: false }, { triggerTurn: true });
+					assert(requests.length > beforeCustom, "Successful recovery did not restore custom-triggered runs");
 				}
 			}
 		}
@@ -332,7 +349,7 @@ async function parentAcceptance() {
 	assertNoShadowingHost(candidate);
 	workDir = isolatedRoot;
 	const isolation = { packageCopy: "temporary directory outside any Node project", shadowingHost: "none" };
-	const report = { host: "official npm Pi 1.1.0", providers: "loopback HTTP synthetic only", assertions: [], limitations: ["A filesystem that cannot persist even the first marker cannot preserve that failure across restart; same-process fail-closed behavior is verified.", "Compatible rollback uses the same preview schema and code with temporary distribution metadata, not a historical released preview."] };
+	const report = { host: `official npm Pi ${stockVersion}`, providers: "loopback HTTP synthetic only", assertions: [], limitations: ["A filesystem that cannot persist even the first marker cannot preserve that failure across restart; same-process fail-closed behavior is verified.", "Compatible rollback uses the same preview schema and code with temporary distribution metadata, not a historical released preview."] };
 	const stockFiles = ["package.json", "dist/bundle/cli.js", "dist/index.js", "dist/core/sdk.js", "dist/core/extensions/runner.js", "dist/core/session-manager.js"];
 	const originalStockHashes = Object.fromEntries(stockFiles.map((file) => [file, fileHash(join(stockPackage, file))]));
 	let daemon;
@@ -342,7 +359,7 @@ async function parentAcceptance() {
 	}
 	try {
 		await check("clean official host and independent package", () => {
-			assert.equal(JSON.parse(readFileSync(join(stockPackage, "package.json"), "utf8")).version, "1.1.0");
+			inspectOfficialPi(stockRoot, stockVersion);
 			assert(realpathSync(stockPackage).startsWith(`${realpathSync(stockRoot)}${sep}`), "Official host resolves outside the clean installation");
 			for (const file of ["core/sdk.js", "core/extensions/runner.js", "core/session-manager.js"]) assert(!readFileSync(join(stockPackage, "dist", file), "utf8").includes("CONTEXT_RESIDENT_REQUIRED"), "The supposedly stock runtime contains resident host changes");
 			const manifest = JSON.parse(readFileSync(join(candidate, "package.json"), "utf8"));
@@ -350,7 +367,7 @@ async function parentAcceptance() {
 			for (const name of ["@earendil-works/pi-coding-agent", "@earendil-works/pi-ai", "@earendil-works/pi-agent-core", "typebox"]) assert(!manifest.dependencies?.[name], `Host dependency ${name} was bundled as a runtime dependency`);
 			assert(!existsSync(join(candidate, "node_modules")), "Candidate carries a second host dependency tree");
 			const build = JSON.parse(readFileSync(join(candidate, "preview-build.json"), "utf8"));
-			assert.equal(build.supportedPi, "1.1.0");
+			assert((build.supportedPiVersions ?? [build.supportedPi]).includes(stockVersion), "Candidate does not declare this official host as supported");
 			assert(build.build.startsWith("stock-preview+src."), "Candidate has no independent preview build identity");
 			assert.equal(build.sourceHash.slice(0, 16), build.build.split(".").at(-1), "Candidate build ID does not match its source fingerprint");
 			assert(build.sources.every((entry) => /^packages\/coding-agent\/src\/extensions\/context-memory\/(?:(?:config|events|history|identity|notes)\.ts|preview\/[^/]+\.ts)$/.test(entry.file)), "Candidate source graph includes resident lifecycle or host modules");
@@ -460,7 +477,7 @@ async function parentAcceptance() {
 			assertExistingSettingsPreserved();
 			return { ref: "preview-compatible-initial", commit };
 		});
-		const runtimeCases = ["doctor-read-only", "success", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
+		const runtimeCases = ["doctor-read-only", "success", "repeat-compaction", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
 		const results = new Map();
 		for (const name of runtimeCases) {
 			const value = await check(`official host runtime: ${name}`, async () => {
@@ -474,6 +491,22 @@ async function parentAcceptance() {
 				assert(fixture, "Required runtime fixture did not pass");
 				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", name, "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
 				return JSON.parse(readFileSync(join(workDir, "runtime", name, "result.json"), "utf8"));
+			});
+		}
+		const compatibleRoot = argument("--compatible-stock-root", true);
+		if (compatibleRoot) {
+			const compatible = inspectOfficialPi(resolve(compatibleRoot), "1.1.0");
+			report.compatibleHost = { version: compatible.version };
+			const fixture = results.get("success");
+			await check("compatible official Pi 1.1.0 reopens and compacts the primary host checkpoint", async () => {
+				assert(fixture, "Required primary-host checkpoint fixture did not pass");
+				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", resolve(compatibleRoot), "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "repeat-compaction", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
+				return { host: compatible.version, passed: true };
+			});
+			await check("primary host reopens the compatible host checkpoint", async () => {
+				assert(fixture, "Required primary-host checkpoint fixture did not pass");
+				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "reopen-success", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
+				return { host: stockVersion, passed: true };
 			});
 		}
 		await check("stock CLI removes the package by repository, whichever ref is installed", async () => {

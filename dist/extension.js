@@ -1011,10 +1011,17 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.576bfb140e4f6ea8";
+var PREVIEW_BUILD_ID = "stock-preview+src.e647172b8fa33f9c";
+
+// packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
+var SUPPORTED_PI_VERSIONS = Object.freeze(["1.2.0", "1.1.0"]);
+var PRIMARY_PI_VERSION = SUPPORTED_PI_VERSIONS[0];
+var SUPPORTED_PI_LABEL = SUPPORTED_PI_VERSIONS.join(" or ");
+function supportsPi(version) {
+  return SUPPORTED_PI_VERSIONS.includes(version);
+}
 
 // packages/coding-agent/src/extensions/context-memory/preview/notices.ts
-var SUPPORTED_PI = "1.1.0";
 var PREFIX = "context-memory preview";
 var RETRY = "run /compact to try again.";
 var NEW_SESSION = "keep this session file and continue in a new session.";
@@ -1039,7 +1046,7 @@ var TOO_LARGE = { what: "The next request would exceed the model's input limit."
 var STORED = { what: "A checkpoint in this session no longer passes its checks.", next: NEW_SESSION };
 var ADVICE = {
   CONTEXT_PREVIEW_COMPACT_REQUIRED: {
-    what: "Pi tried to compact this session automatically, but the preview only compacts when you ask.",
+    what: "Pi tried context-overflow recovery, which needs an explicit compaction in this preview.",
     next: "run /compact."
   },
   CONTEXT_NOTE_QUOTE: {
@@ -1119,8 +1126,8 @@ function unsupportedAdvice(reason, version) {
   switch (reason) {
     case "host":
       return {
-        what: `This protected session needs Pi ${SUPPORTED_PI}, and this is Pi ${version}.`,
-        next: `open this session with Pi ${SUPPORTED_PI} and run /compact there to clear the block, or ${NEW_SESSION}`
+        what: `This protected session needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}.`,
+        next: `open this session with Pi ${SUPPORTED_PI_LABEL} and run /compact there to clear the block, or ${NEW_SESSION}`
       };
     case "image":
       return {
@@ -1148,15 +1155,15 @@ function adviceFor(code, reason, version) {
     next: "run /compaction-doctor for details."
   };
 }
-function blockedNotice(code, durable, reason, version = SUPPORTED_PI) {
+function blockedNotice(code, durable, reason, version = PRIMARY_PI_VERSION) {
   const advice = adviceFor(code, reason, version);
   const impact = durable ? "Requests in this session are paused; new input, /reload and restarting Pi do not clear this." : "Requests stop until this is fixed; no lasting block is recorded.";
   return `${PREFIX}: ${code}. ${advice.what} ${impact} Next: ${advice.next}`;
 }
 var INACTIVE = {
   host: (version) => [
-    `it is validated only on Pi ${SUPPORTED_PI}, and this is Pi ${version}`,
-    `Use Pi ${SUPPORTED_PI} to try the preview.`
+    `it is validated on Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}`,
+    `Use Pi ${SUPPORTED_PI_LABEL} to try the preview.`
   ],
   "in-memory": () => ["this session has no session file", "Start Pi with a saved session to use the preview."],
   "foreign-checkpoint": () => [
@@ -1204,8 +1211,8 @@ function doctorReport(diagnosis, settings) {
   );
   line(
     "host",
-    diagnosis.host === diagnosis.supportedHost ? "ok" : inactive ? "inactive" : "blocked",
-    diagnosis.host === diagnosis.supportedHost ? `Pi ${diagnosis.host}, the validated release` : `Pi ${diagnosis.host}; this preview is validated only on Pi ${diagnosis.supportedHost}`
+    supportsPi(diagnosis.host) ? "ok" : inactive ? "inactive" : "blocked",
+    supportsPi(diagnosis.host) ? `Pi ${diagnosis.host}, a validated release` : `Pi ${diagnosis.host}; this preview is validated on Pi ${SUPPORTED_PI_LABEL}`
   );
   if (inactive && reason === "host") {
     line("session", "inactive", "not checked on this Pi version; Pi's own compaction applies");
@@ -1268,7 +1275,7 @@ function doctorReport(diagnosis, settings) {
   else lines.push("Result: ready. Keep working, and run /compact once the conversation has grown.");
   return lines.join("\n");
 }
-function recoverRefusedNotice(code, reason, version = SUPPORTED_PI) {
+function recoverRefusedNotice(code, reason, version = PRIMARY_PI_VERSION) {
   if (code === "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED") {
     return `${PREFIX}: /compaction-recover found no checkpoint that Pi saved after the preview staged it (${code}), so there is nothing to confirm. It changed nothing. If requests are paused, run /compact to write a new checkpoint.`;
   }
@@ -1276,7 +1283,7 @@ function recoverRefusedNotice(code, reason, version = SUPPORTED_PI) {
   return `${PREFIX}: /compaction-recover could not confirm the staged checkpoint (${code}). ${advice.what} Next: ${advice.next}`;
 }
 function readyNotice(build) {
-  return `${PREFIX} is active (${build}). It compacts only when you run /compact; if Pi reaches its automatic compaction point, requests pause until you do. Run /compaction-doctor to check this session.`;
+  return `${PREFIX} is active (${build}). It compacts on /compact and at Pi's threshold after completed turns; context-overflow recovery needs /compact. Run /compaction-doctor to check this session.`;
 }
 function notify(ctx, text, kind) {
   try {
@@ -2172,7 +2179,7 @@ function unsupportedContent(entry) {
   return void 0;
 }
 function unsupportedReason(session, version = VERSION) {
-  if (version !== SUPPORTED_PI) return "host";
+  if (!supportsPi(version)) return "host";
   if (!session.getSessionFile()) return "in-memory";
   const branch = session.getBranch();
   try {
@@ -2188,7 +2195,7 @@ function unsupportedReason(session, version = VERSION) {
   return void 0;
 }
 var UNSUPPORTED_ERRORS = {
-  host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated only on official Pi ${SUPPORTED_PI}`,
+  host: `CONTEXT_PREVIEW_UNSUPPORTED: this preview is validated on official Pi ${SUPPORTED_PI_LABEL}`,
   "in-memory": "CONTEXT_PREVIEW_UNSUPPORTED: a persistent session is required",
   "context-edit": "CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported",
   "foreign-checkpoint": "CONTEXT_MIGRATION_REQUIRED: start a new preview session; existing checkpoints are not migrated",
@@ -2404,7 +2411,8 @@ var PreviewMemoryController = class {
     return {
       build: PREVIEW_BUILD_ID,
       host: this.hostVersion,
-      supportedHost: SUPPORTED_PI,
+      supportedHost: PRIMARY_PI_VERSION,
+      supportedHosts: SUPPORTED_PI_VERSIONS,
       protection: inactive ? "not-protected" : isProtected ? "protected" : "eligible",
       ...reason ? { reason } : {},
       state,
@@ -2452,6 +2460,7 @@ var PreviewMemoryController = class {
       lastWriter: this.lastProgress,
       host: diagnosis.host,
       supportedHost: diagnosis.supportedHost,
+      supportedHosts: diagnosis.supportedHosts,
       protection: diagnosis.protection,
       ...diagnosis.reason ? { reason: diagnosis.reason } : {},
       manualCompaction: diagnosis.manualCompaction,

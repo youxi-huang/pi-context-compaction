@@ -280,6 +280,19 @@ test("candidate hash syntax and build/source consistency cannot be bypassed", ()
 	}
 });
 
+test("v0.4.2 publication requires the full Pi 1.2.0 scenario evidence", () => {
+	const report = fixture({ allPass: true });
+	report.candidate.version = "0.4.2";
+	const expected = { ...report.candidate };
+	assert.throws(() => publication(report, "strict", expected), /reviewed official Pi version/);
+	for (const result of report.cases) if (result.case !== "other-pi-version") result.pi = "1.2.0";
+	regradeRaw(report);
+	assert.doesNotThrow(() => publication(report, "strict", expected));
+	report.cases[0].pi = "1.2.1";
+	regradeRaw(report);
+	assert.throws(() => publication(report, "strict", expected), /reviewed official Pi version/);
+});
+
 test("publication recomputes acceptance rather than trusting a recorded approval", () => {
 	for (const mutate of [
 		(report) => { delete report.acceptance; },

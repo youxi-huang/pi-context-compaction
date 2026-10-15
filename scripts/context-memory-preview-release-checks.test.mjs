@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
-import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseNotes, selectReviewedSourceTag, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseChanges, releaseNotes, releasePiVersions, selectReviewedSourceTag, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
+import { SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
 
 test("reviewed versions retain exact stable and positive numbered-preview spellings", () => {
 	for (const version of ["0.3.3", "0.4.0", "0.4.0-preview.1", "12.34.56-preview.123", "0.0.0"]) {
@@ -42,7 +43,7 @@ test("source selection accepts only exact reviewed existing source-tag forms", (
 	}
 });
 
-test("publication workflow uses the same source selector and preserved eight-component installer", () => {
+test("publication workflow preserves version-aware installation and historical source selection", () => {
 	const document = parseDocument(readFileSync(new URL("../.github/workflows/context-memory-preview-release.yml", import.meta.url), "utf8"));
 	assert.deepEqual(document.errors, []);
 	const steps = document.toJS().jobs.publish.steps;
@@ -62,7 +63,8 @@ test("publication workflow uses the same source selector and preserved eight-com
 	}
 	const install = steps.find((step) => step.name === "Install official Pi baseline");
 	assert.match(install.run, /context-preview-publisher\/scripts\/context-memory-preview-stock-install\.mjs/);
-	assert.match(install.run, /--version 1\.1\.0/);
+	assert.match(install.run, /preview-build\.json/);
+	assert.match(install.run, /--version "\$host_version"/);
 	assert.doesNotMatch(install.run, /npm install/);
 	const publish = steps.find((step) => step.name === "Publish checked package and source archives");
 	assert.match(publish.run, /context-preview-publisher\/scripts\/context-memory-preview-release\.mjs" --publish/);
@@ -70,16 +72,37 @@ test("publication workflow uses the same source selector and preserved eight-com
 	assert.match(scope.run, /if \[ "\$candidate_version" = "0\.4\.0-preview\.1" \]/);
 	assert.match(scope.run, /--acceptance-profile v0\.4\.0-preview\.1-a-functional/);
 	assert.match(scope.run, /--version 1\.0\.4/);
-	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ]; then')[1];
+	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ] || [ "$candidate_version" = "0.4.2" ]; then')[1];
 	assert.match(strict, /--version 1\.0\.4/);
 	assert.match(strict, /context-memory-preview-scenarios\.mjs.*--acceptance-profile strict/);
 	assert.doesNotMatch(strict, /v0\.4\.0-preview\.1-a-functional/);
+	const acceptance = steps.find((step) => step.name === "Verify the release package on stock Pi");
+	assert.match(acceptance.run, /--version 1\.1\.0/);
+	assert.match(acceptance.run, /--compatible-stock-root/);
+	assert.match(acceptance.run, /context-memory-preview-acceptance-1\.1\.0/);
+});
+
+test("v0.4.2 requires both supported hosts while historical tags keep Pi 1.1.0", () => {
+	assert.deepEqual(releasePiVersions("0.4.2"), ["1.2.0", "1.1.0"]);
+	assert.deepEqual(releasePiVersions("0.4.2"), SUPPORTED_PI_VERSIONS);
+	for (const version of ["0.3.3", "0.4.0-preview.1", "0.4.0", "0.4.1"]) assert.deepEqual(releasePiVersions(version), ["1.1.0"]);
+});
+
+test("local preparation can use Unreleased without authorizing publication from it", () => {
+	const changelog = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- New compatibility.\n\n## [v0.4.1] — past\n\n- Earlier changes.\n";
+	assert.equal(releaseChanges(changelog, "v0.4.2", true), "### Added\n\n- New compatibility.");
+	assert.throws(() => releaseChanges(changelog, "v0.4.2"), /own changelog section/);
+	assert.equal(releaseChanges(changelog, "v0.4.1"), "- Earlier changes.");
 });
 
 test("main CI requires strict scenarios without removing other gates", () => {
 	const document = parseDocument(readFileSync(new URL("../.github/workflows/context-memory.yml", import.meta.url), "utf8"));
 	assert.deepEqual(document.errors, []);
 	const runs = document.toJS().jobs.verify.steps.flatMap((step) => step.run ? [step.run] : []);
+	assert(runs.some((run) => run.includes("--version 1.2.0")));
+	assert(runs.some((run) => run.includes("--version 1.1.0")));
+	assert(runs.some((run) => run.includes("--compatible-stock-root")));
+	assert(runs.some((run) => run.includes("context-memory-preview-acceptance-1.1.0")));
 	assert(runs.some((run) => run.includes("context-memory-preview-scenarios.mjs") && run.includes("--acceptance-profile strict")));
 	assert(!runs.some((run) => run.includes(`--acceptance-profile ${PROFILE}`)));
 	for (const required of ["context-memory-check.mjs", "security-regression-check.mjs", "context-memory-preview-acceptance.mjs", "context-memory-preview-release.mjs --prepare", "eval/check.mjs"]) {
@@ -182,6 +205,7 @@ for (const version of STRICT_RELEASES) test(`v${version} notes describe both opt
 	assert.match(generated, /Pi's threshold compaction after completed text turns/);
 	assert.match(generated, /overflow recovery still requires explicit \/compact/);
 	assert.match(generated, /strict acceptance and no performance exceptions or known gaps/);
+	if (version === "0.4.2") assert.match(generated, /unmodified official Pi 1\.2\.0 and 1\.1\.0/);
 	assert.doesNotMatch(generated, /A-stage|B.*incomplete and deferred|automatic compaction is cancelled/);
 	if (version === "0.4.1") assert.match(generated, /its build fingerprint changes with the one-line note fold/);
 	else assert.match(generated, /Resident runtime keeps its v0\.3\.0 fingerprint/);

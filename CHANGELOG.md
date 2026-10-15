@@ -6,14 +6,28 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.4.2] — 2026-10-15
+
+v0.4.2 adds official Pi 1.2.0 support to the independent extension while retaining Pi 1.1.0 and existing checkpoints. It removes unused installer-report hashes while preserving source integrity, dependency verification and release evidence. Both optional preparation paths remain disabled by default. The compatibility evidence uses isolated official hosts and synthetic providers; a requested GPT Luna probe was blocked by the environment's network proxy before any model response.
+
+### Added
+
+- Independent preview v0.4.2 supports official Pi 1.2.0 alongside 1.1.0. The same checkpoint schema reopens across both hosts; other versions remain outside the verified scope. Status retains `supportedHost` as the primary host and adds `supportedHosts` for the complete list. The resident source build remains based on Pi 1.1.0.
+
 ### Fixed
+
+- Describe completed-turn threshold compaction in the preview's startup notice, and distinguish explicit context-overflow recovery from ordinary automatic compaction.
+- Identify synthetic acceptance writer requests by their final handover instruction. After repeated checkpoints, ordinary requests can contain the note-schema field names in summaries and tool definitions; the earlier detector answered those requests with a writer note instead of exercising history retrieval.
 
 - Stop the resident runtime's payload guard from blocking before its own threshold compaction. It counted the serialized request at UTF-8 bytes / 3 against `window − max(16,384, maxTokens)`, so in a 128,000-token window English text was stopped near 84,000 estimated tokens, before the 102,400 threshold could compact. The guard now uses Pi's estimate of four characters per token and stops only a payload beyond the window, since it also counts JSON escaping and tool definitions. The `context` guard measures the system prompt the same way and keeps its input allowance. This matches the independent preview since v0.4.0.
 - Stop re-inserting `context_note` candidates at the head of every request in the resident runtime. They arrived as a user-role message with headings such as `## instructions`, although the model had written them, and each new note invalidated the provider's prompt cache for the whole context. The candidates already appear in context as the model's own tool calls and still reach the writer at compaction. The independent preview stopped this in v0.4.0.
 
 ### Maintenance
 
-- With the maintainer's approval, the resident build fingerprint changes to `1.1.0-context-memory.0.3.0+src.7b6b865a3072b3e0` for the two fixes above and the frozen evaluator is pinned to that source; fixture and scorer locks are unchanged. The resident release version stays v0.3.0, and the independent preview's sources and package are unchanged.
+- Use seven exactly pinned official runtime packages for Pi 1.2.0 and retain `chord` for older hosts. Reusing an older isolated installation removes the obsolete direct dependency. CI and publication require the same v0.4.2 package on both supported hosts, cross-version checkpoint readback, and the full strict Pi 1.2.0 scenario suite.
+- Remove unused SHA-256 values for official package manifests, the isolated installation manifest and its lockfile from installer reports. They were computed without an expected value or acceptance decision. Keep npm integrity and registry-origin checks, exact-version and nested-copy checks, network-blocked SDK startup, plugin/package fingerprints, host mutation checks and checkpoint source hashes: these protect different boundaries.
+
+- With the maintainer's earlier approval, the resident build fingerprint changed to `1.1.0-context-memory.0.3.0+src.7b6b865a3072b3e0` for the two resident fixes above and the frozen evaluator was pinned to that source; fixture and scorer locks are unchanged. Those fixes leave the independent preview unchanged. The Pi 1.2.0 compatibility update preserves this resident fingerprint and evaluation pin; the resident release version stays v0.3.0.
 
 ## [v0.4.1] — 2026-10-14
 

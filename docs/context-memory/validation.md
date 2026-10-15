@@ -1,5 +1,75 @@
 # Validation record
 
+## v0.4.2: Pi 1.2.0 compatibility, 2026-10-15 UTC
+
+The independent extension supports exactly official Pi 1.2.0 and 1.1.0. The
+tested local candidate is `stock-preview+src.e647172b8fa33f9c`, package version
+0.4.2, tested before committing on top of `c74253a`. The resident source baseline, build
+fingerprint, model-data pin and frozen evaluator pin are unchanged. No host
+source, checkpoint schema, source-hash algorithm or stored hash format changed.
+
+The installer uses seven official runtime packages on 1.2.0 and eight on older
+hosts that require `chord`. An actual isolated installation was upgraded from
+1.1.0 to 1.2.0 in the same directory; all seven packages matched, the obsolete
+dependency was removed and the SDK started with networking blocked. Both hosts
+loaded the same extension package from outside the source workspace. Added
+cases cover repeated compaction, custom-triggered request blocking and recovery,
+and checkpoint readback and further compaction across both supported hosts.
+
+An additional local probe created a checkpoint using the unmodified v0.4.1
+extension (`stock-preview+src.576bfb140e4f6ea8`) on official Pi 1.1.0, then
+reopened and compacted it with v0.4.2 on official Pi 1.2.0. Original-history
+retrieval succeeded after both compactions despite the different build IDs.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 0; build and resident fingerprint gate passed; 110 script and 328 runtime checks; 461 host security checks |
+| `context-memory-check.mjs`, after the final publication-helper regression | Exit 0; 111 script and 328 runtime checks; static checks passed |
+| `context-memory-preview-build.mjs` | Exit 0; v0.4.2 five-file extension package, both hosts declared |
+| `context-memory-preview-stock-install.mjs`, 1.1.0 then 1.2.0 in one isolated root | Both exit 0; seven exact 1.2.0 runtime packages; network-blocked SDK import passed |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.2.0 with `--compatible-stock-root` pointing to official 1.1.0 | Exit 0; 30/30 checks, including both cross-version checkpoint checks |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.1.0 | Exit 0; 28/28 checks on the identical package |
+| `context-memory-preview-scenarios.mjs --acceptance-profile strict`, official Pi 1.2.0 with 1.0.4 control | Exit 0; 145 passed, no gaps, failures, skips or exceptions; all 20 checkpoints and both overhead gates passed |
+| `context-memory-preview-ab.mjs --logs model`, official Pi 1.2.0 | Exit 0; sync, A and B each passed 8/8 recovery probes; no arm errors |
+| `eval/check.mjs`, network blocked and zero model budget | Exit 0; 89 frozen offline evaluation checks |
+| Local old-checkpoint probe using the acceptance runtime cases | Exit 0; v0.4.1 checkpoint created on 1.1.0, reopened and compacted on 1.2.0 with v0.4.2, original evidence retrieved |
+
+All passing provider traffic in these checks was synthetic and loopback-only.
+Interactive TUI and Windows validation were not run. Release `--prepare` and
+publication had not run at this stage: the checkout was uncommitted, and the
+clean-source publication gate was retained. Actual publication still requires
+a versioned changelog section and successful final-main verification and CodeQL.
+
+At the maintainer's request, an additional bounded probe used the existing
+Codex login with `codex exec --ephemeral --sandbox read-only -m gpt-6-luna`.
+The network proxy rejected the connection with HTTP 403; the 45-second command
+deadline ended with exit 124 and no final response. No Luna response, writer
+call or real-provider compatibility result was obtained. This attempt is not
+counted among the passing synthetic checks, and no network-policy workaround
+was attempted.
+
+### Hash review
+
+Removed only `packages[].manifestSha256`, `installManifestSha256` and
+`lockSha256` from the official-host installer report. The first had a test
+checking its shape; none was compared with an expected digest or used to decide
+acceptance. They were copied into reports without adding a verification step.
+The installer no longer computes them or imports `node:crypto` for that work.
+
+Kept npm's download-integrity verification, registry URL and integrity-metadata
+checks, exact runtime pins, nested-copy rejection and official-host isolation.
+These reject file/git substitutes and mixed cached installations. Also kept
+the dependency-cache lock hash, preview source/build identity, package and
+release digests, exact-package evidence binding, official-host before/after
+mutation checks, checkpoint source hashes and recovery-marker hashes. Their
+consumers and comparison values protect different boundaries.
+
+`hashEntries` still hashes `JSON.stringify()` output. Object field reordering
+can therefore reject an otherwise unchanged checkpoint. This is recorded as an
+unassigned [follow-up](roadmap.md#planned-minor-releases); v0.4.2 does not
+normalize or rewrite existing hashes. `AGENTS.md` now states the distinction
+between source integrity, build identity and dependency provenance.
+
 ## Unreleased: resident request guards and note candidates, 2026-10-14 UTC
 
 The maintainer approved a resident fingerprint change for the two resident

@@ -44,14 +44,26 @@ jobs:
         run: >-
           node scripts/context-memory-preview-stock-install.mjs
           --stock-root "${{ runner.temp }}/context-preview-stock"
+          --version 1.2.0
+      - name: Install the supported Pi 1.1.0 host
+        run: >-
+          node scripts/context-memory-preview-stock-install.mjs
+          --stock-root "${{ runner.temp }}/context-preview-compatible"
           --version 1.1.0
       - name: Verify candidate on official Pi with loopback provider and Git source
         run: >-
           node scripts/context-memory-preview-acceptance.mjs
           --package-dir .artifacts/context-memory-preview-package
           --stock-root "${{ runner.temp }}/context-preview-stock"
+          --compatible-stock-root "${{ runner.temp }}/context-preview-compatible"
           --output-dir .artifacts/context-memory-preview-acceptance
-      - name: Install a second official Pi version for scenario checks
+      - name: Verify the same package on supported Pi 1.1.0
+        run: >-
+          node scripts/context-memory-preview-acceptance.mjs
+          --package-dir .artifacts/context-memory-preview-package
+          --stock-root "${{ runner.temp }}/context-preview-compatible"
+          --output-dir .artifacts/context-memory-preview-acceptance-1.1.0
+      - name: Install an unsupported official Pi for scenario checks
         run: >-
           node scripts/context-memory-preview-stock-install.mjs
           --stock-root "${{ runner.temp }}/context-preview-other"

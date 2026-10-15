@@ -1,12 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// Reviewed runtime cohort from the official 1.1.0 and 1.0.4 manifests. The coding
-// agent names the first six dependencies; pi-ai also names pi-telemetry. Dev-only
-// client/protocol/server packages are deliberately not installed.
+// Reviewed runtime cohort. Pi 1.2.0 removed chord; the older hosts still need it.
+// Dev-only client/protocol/server packages are deliberately not installed.
 export const OFFICIAL_PI_COHORT = Object.freeze([
 	"@earendil-works/pi-coding-agent",
 	"@earendil-works/chord",
@@ -17,14 +15,18 @@ export const OFFICIAL_PI_COHORT = Object.freeze([
 	"@earendil-works/pi-tui",
 	"@earendil-works/pi-telemetry",
 ]);
-export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.1.0", "1.0.4"]);
+export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.2.0", "1.1.0", "1.0.4"]);
 const cohort = new Set(OFFICIAL_PI_COHORT);
-const usage = "Usage: node scripts/context-memory-preview-stock-install.mjs --stock-root <directory> --version <1.1.0|1.0.4> [--check]";
-const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const usage = "Usage: node scripts/context-memory-preview-stock-install.mjs --stock-root <directory> --version <1.2.0|1.1.0|1.0.4> [--check]";
 
 function checkedVersion(version) {
 	if (!OFFICIAL_PI_VERSIONS.includes(version)) throw new Error(`Unsupported official Pi version: ${version}`);
 	return version;
+}
+
+export function officialPiCohort(version) {
+	checkedVersion(version);
+	return OFFICIAL_PI_COHORT.filter((name) => version !== "1.2.0" || name !== "@earendil-works/chord");
 }
 
 export function parseStockInstallArguments(args) {
@@ -56,46 +58,45 @@ function assertIntegrity(record, name, version) {
 }
 
 export function inspectOfficialPi(stockRoot, version) {
-	checkedVersion(version);
+	const names = officialPiCohort(version);
+	const expected = new Set(names);
 	const directory = realpathSync(resolve(stockRoot));
 	assertIsolatedInstallTarget(directory);
 	const installation = readJson(join(directory, "package.json"));
-	if (OFFICIAL_PI_COHORT.some((name) => installation.dependencies?.[name] !== version)) {
+	if (names.some((name) => installation.dependencies?.[name] !== version) || Object.keys(installation.dependencies ?? {}).length !== names.length) {
 		throw new Error("Official installation must pin every runtime cohort dependency exactly");
 	}
-	const lockBytes = readFileSync(join(directory, "node_modules/.package-lock.json"));
-	const lock = JSON.parse(lockBytes.toString("utf8"));
+	const lock = readJson(join(directory, "node_modules/.package-lock.json"));
 	if (!lock.packages || lock.lockfileVersion < 2) throw new Error("Missing official installation lock metadata");
 	const packages = [];
-	for (const name of OFFICIAL_PI_COHORT) {
+	for (const name of names) {
 		const packageKey = `node_modules/${name}`;
 		const packageRoot = join(directory, packageKey);
 		if (!realpathSync(packageRoot).startsWith(`${directory}${sep}`)) throw new Error(`Official package escapes isolated root: ${name}`);
-		const manifestBytes = readFileSync(join(packageRoot, "package.json"));
-		const manifest = JSON.parse(manifestBytes.toString("utf8"));
+		const manifest = readJson(join(packageRoot, "package.json"));
 		if (manifest.name !== name || manifest.version !== version) throw new Error(`Official cohort version mismatch: ${name}`);
 		const provenance = lock.packages[packageKey];
 		assertIntegrity(provenance, name, version);
 		const dependencies = Object.fromEntries(Object.entries({ ...manifest.dependencies, ...manifest.optionalDependencies }).filter(([dependency]) => dependency.startsWith("@earendil-works/")));
 		for (const [dependency, requested] of Object.entries(dependencies)) {
-			if (!cohort.has(dependency) || ![version, `^${version}`, `~${version}`].includes(requested)) {
+			if (!expected.has(dependency) || ![version, `^${version}`, `~${version}`].includes(requested)) {
 				throw new Error(`Unreviewed official runtime dependency: ${name} -> ${dependency}`);
 			}
 		}
 		if (!existsSync(join(packageRoot, "dist/index.js"))) throw new Error(`Missing official package entry: ${name}`);
-		packages.push({ name, version, integrity: provenance.integrity, resolved: provenance.resolved, manifestSha256: sha256(manifestBytes), dependencies });
+		packages.push({ name, version, integrity: provenance.integrity, resolved: provenance.resolved, dependencies });
 	}
 	// A top-level exact pin is insufficient when a nested Pi copy still resolves
 	// to a newer version. Inspect every recorded official runtime package.
 	for (const [key, record] of Object.entries(lock.packages)) {
 		const match = key.match(/(?:^|\/)node_modules\/(\@earendil-works\/[^/]+)$/);
 		if (!match) continue;
-		if (!cohort.has(match[1])) throw new Error(`Unreviewed installed official package: ${match[1]}`);
+		if (!expected.has(match[1])) throw new Error(`Unreviewed installed official package: ${match[1]}`);
 		assertIntegrity(record, match[1], version);
 		if (key !== `node_modules/${match[1]}`) throw new Error(`Nested official cohort copy: ${match[1]}`);
 	}
 	if (!existsSync(join(directory, "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"))) throw new Error("Missing official Pi CLI");
-	return { host: "official npm Pi", version, packages, installManifestSha256: sha256(readFileSync(join(directory, "package.json"))), lockSha256: sha256(lockBytes) };
+	return { host: "official npm Pi", version, packages };
 }
 
 export function officialPiReady(stockRoot, version) {
@@ -130,7 +131,11 @@ export function installOfficialPi(options, run = spawnSync) {
 		if (options.check) return inspectOfficialPi(directory, version);
 		assertIsolatedInstallTarget(directory);
 		mkdirSync(directory, { recursive: true });
-		successful(run("npm", ["install", "--prefix", directory, "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=true", "--save-exact", "--fetch-timeout=30000", "--fetch-retries=0", ...OFFICIAL_PI_COHORT.map((name) => `${name}@${version}`)], {
+		// Reusing an older isolated root must drop chord as well as repin the remaining packages.
+		const manifestFile = join(directory, "package.json");
+		const manifest = existsSync(manifestFile) ? readJson(manifestFile) : {};
+		writeFileSync(manifestFile, `${JSON.stringify({ ...manifest, dependencies: Object.fromEntries(officialPiCohort(version).map((name) => [name, version])) }, null, 2)}\n`);
+		successful(run("npm", ["install", "--prefix", directory, "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=true", "--save-exact", "--fetch-timeout=30000", "--fetch-retries=0", ...officialPiCohort(version).map((name) => `${name}@${version}`)], {
 			cwd: directory, env: process.env, encoding: "utf8", timeout: 180_000, maxBuffer: 4 * 1024 * 1024,
 		}), "Official cohort installation");
 		installed = true;

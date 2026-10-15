@@ -4,10 +4,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, w
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const name = "pi-context-compaction-preview";
-const version = "0.4.1";
+const version = "0.4.2";
 const extensionRoot = "packages/coding-agent/src/extensions/context-memory/";
 const previewRoot = `${extensionRoot}preview/`;
 const shared = new Set(["config.ts", "events.ts", "history.ts", "identity.ts", "notes.ts"]);
@@ -49,7 +50,7 @@ for (const input of inputs) {
 		throw new Error(`Preview must not bundle host or resident lifecycle code: ${input}`);
 	}
 }
-const hash = createHash("sha256").update("official-pi-1.1.0\0");
+const hash = createHash("sha256").update("official-pi-extension\0");
 const sources = inputs.map((file) => {
 	const bytes = readFileSync(resolve(root, file));
 	hash.update(file).update("\0").update(bytes).update("\0");
@@ -82,7 +83,7 @@ const manifest = {
 	name,
 	version,
 	private: true,
-	description: "Source-linked compaction preview for unmodified Pi 1.1.0",
+	description: `Source-linked compaction preview for unmodified Pi ${SUPPORTED_PI_VERSIONS.join(" and ")}`,
 	repository: { type: "git", url: "https://github.com/youxi-huang/pi-context-compaction.git" },
 	homepage: "https://github.com/youxi-huang/pi-context-compaction/blob/main/docs/context-memory/extension-preview.md",
 	type: "module",
@@ -109,7 +110,7 @@ try {
 	writeFileSync(resolve(staging, "LICENSE"), readFileSync(resolve(root, "LICENSE")));
 	writeFileSync(resolve(staging, "README.md"), readFileSync(resolve(root, "docs/context-memory/extension-preview.md")));
 	writeFileSync(resolve(staging, "preview-build.json"), `${JSON.stringify({
-		build: buildId, version, sourceCommit, supportedPi: "1.1.0", checkpointSchema: 1, sourceHash, sources,
+		build: buildId, version, sourceCommit, supportedPi: PRIMARY_PI_VERSION, supportedPiVersions: SUPPORTED_PI_VERSIONS, checkpointSchema: 1, sourceHash, sources,
 		externalImports: [...new Set(imports)].sort(),
 	}, null, 2)}\n`);
 	if (existsSync(output)) rmSync(output, { recursive: true });

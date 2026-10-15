@@ -1,6 +1,6 @@
 # Agent instructions for this repository
 
-This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. Its root is not a Pi package. A separate stock-Pi extension preview lives in `context-memory/preview/`; its package builder emits only the independent extension. Upstream release, publishing, labeling and changelog rules do not apply here.
+This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. Its root is not a Pi package. A separate stock-Pi extension preview lives in `packages/coding-agent/src/extensions/context-memory/preview/`; its package builder emits only the independent extension. Upstream release, publishing, labeling and changelog rules do not apply here.
 
 The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UPSTREAM_AGENTS.md). Their code-quality rules for TypeScript still hold in this repository: no `any`, top-level imports only, erasable TypeScript syntax only, no hardcoded key checks. Their commands, release process and issue conventions do not apply. Where this file and [CONTRIBUTING.md](CONTRIBUTING.md) say something different from the upstream file, this file wins.
 
@@ -33,8 +33,8 @@ The last two commands are the acceptance bar and are what CI runs. `context-memo
 
 For changes to the independent preview, also build with
 `node scripts/context-memory-preview-build.mjs` and run
-`scripts/context-memory-preview-acceptance.mjs` against a clean official Pi
-1.1.0 npm installation. See [the preview guide](docs/context-memory/extension-preview.md).
+`scripts/context-memory-preview-acceptance.mjs` against clean official Pi
+1.2.0 and 1.1.0 npm installations. See [the preview guide](docs/context-memory/extension-preview.md).
 Do not use this repository's patched host as evidence of stock-Pi compatibility.
 
 Do not run the full upstream vitest suite or `npm test`; they include end-to-end tests that activate when provider credentials are present. Do not run live provider tests with credentials that are not yours. Simulated results and provider runs are reported as different things.
@@ -49,6 +49,8 @@ Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
 
 - Keep memory policy inside the extension directory. A change to a host file must state why the extension layer cannot enforce the behavior itself, must be added to `docs/context-memory/upstream-delta.md`, and must be added to the file list in `scripts/stamp-context-memory.mjs` so the build fingerprint covers it.
 - Add focused regressions for any change to persistence, authorization, compaction lifecycle or the event log.
+- Preserve checkpoint source hashes: citations alone do not detect changed content under the same record ID. Changes to their serialization, algorithm or stored format need a compatibility plan for older checkpoints.
+- Before removing a hash, trace its producer, consumers and comparison value. Keep build IDs and artifact digests that bind validation to code or package bytes; a different build ID alone does not make a checkpoint incompatible. Remove only unused fields or redundant checks, while retaining npm's integrity verification, exact CI versions and official-host isolation.
 - Do not add a second history database. Do not substitute a writer on failure. A failed compaction blocks the next request by design.
 - Record user-visible changes under **Unreleased** in the root `CHANGELOG.md`, grouped as Added, Changed, Fixed, Security or Maintenance. The changelogs under `packages/` are upstream history and are not edited.
 - Do not change version strings, build fingerprints, tags or release assets. Releases are made by the maintainer. The root `package.json` carries upstream workspace metadata and is not this project's version.

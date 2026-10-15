@@ -1,8 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { PRIMARY_PI_VERSION, SUPPORTED_PI_LABEL, supportsPi } from "./compatibility.ts";
 import type { InactiveReason, PreviewDiagnosis } from "./contracts.ts";
-
-/** The only official Pi release this preview has been validated on. */
-export const SUPPORTED_PI = "1.1.0";
 
 const PREFIX = "context-memory preview";
 const RETRY = "run /compact to try again.";
@@ -36,7 +34,7 @@ const STORED: Advice = { what: "A checkpoint in this session no longer passes it
 /** Each controlled code answers what happened and what to do next. No provider text, note text or paths. */
 const ADVICE: Record<string, Advice> = {
 	CONTEXT_PREVIEW_COMPACT_REQUIRED: {
-		what: "Pi tried to compact this session automatically, but the preview only compacts when you ask.",
+		what: "Pi tried context-overflow recovery, which needs an explicit compaction in this preview.",
 		next: "run /compact.",
 	},
 	CONTEXT_NOTE_QUOTE: {
@@ -118,8 +116,8 @@ function unsupportedAdvice(reason: InactiveReason | undefined, version: string):
 	switch (reason) {
 		case "host":
 			return {
-				what: `This protected session needs Pi ${SUPPORTED_PI}, and this is Pi ${version}.`,
-				next: `open this session with Pi ${SUPPORTED_PI} and run /compact there to clear the block, or ${NEW_SESSION}`,
+				what: `This protected session needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}.`,
+				next: `open this session with Pi ${SUPPORTED_PI_LABEL} and run /compact there to clear the block, or ${NEW_SESSION}`,
 			};
 		case "image":
 			return {
@@ -155,7 +153,12 @@ function adviceFor(code: string, reason: InactiveReason | undefined, version: st
  * What happened, whether work is paused, and the next step. `durable` states that the block
  * survives new input, /reload and restarts; otherwise only the current request was stopped.
  */
-export function blockedNotice(code: string, durable: boolean, reason?: InactiveReason, version = SUPPORTED_PI): string {
+export function blockedNotice(
+	code: string,
+	durable: boolean,
+	reason?: InactiveReason,
+	version = PRIMARY_PI_VERSION,
+): string {
 	const advice = adviceFor(code, reason, version);
 	const impact = durable
 		? "Requests in this session are paused; new input, /reload and restarting Pi do not clear this."
@@ -165,8 +168,8 @@ export function blockedNotice(code: string, durable: boolean, reason?: InactiveR
 
 const INACTIVE: Record<InactiveReason, (version: string) => [string, string]> = {
 	host: (version) => [
-		`it is validated only on Pi ${SUPPORTED_PI}, and this is Pi ${version}`,
-		`Use Pi ${SUPPORTED_PI} to try the preview.`,
+		`it is validated on Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}`,
+		`Use Pi ${SUPPORTED_PI_LABEL} to try the preview.`,
 	],
 	"in-memory": () => ["this session has no session file", "Start Pi with a saved session to use the preview."],
 	"foreign-checkpoint": () => [
@@ -231,10 +234,10 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 	);
 	line(
 		"host",
-		diagnosis.host === diagnosis.supportedHost ? "ok" : inactive ? "inactive" : "blocked",
-		diagnosis.host === diagnosis.supportedHost
-			? `Pi ${diagnosis.host}, the validated release`
-			: `Pi ${diagnosis.host}; this preview is validated only on Pi ${diagnosis.supportedHost}`,
+		supportsPi(diagnosis.host) ? "ok" : inactive ? "inactive" : "blocked",
+		supportsPi(diagnosis.host)
+			? `Pi ${diagnosis.host}, a validated release`
+			: `Pi ${diagnosis.host}; this preview is validated on Pi ${SUPPORTED_PI_LABEL}`,
 	);
 	if (inactive && reason === "host") {
 		line("session", "inactive", "not checked on this Pi version; Pi's own compaction applies");
@@ -307,7 +310,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 }
 
 /** /compaction-recover never creates a block; a refusal says what it checked and what to do instead. */
-export function recoverRefusedNotice(code: string, reason?: InactiveReason, version = SUPPORTED_PI): string {
+export function recoverRefusedNotice(code: string, reason?: InactiveReason, version = PRIMARY_PI_VERSION): string {
 	if (code === "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED") {
 		return `${PREFIX}: /compaction-recover found no checkpoint that Pi saved after the preview staged it (${code}), so there is nothing to confirm. It changed nothing. If requests are paused, run /compact to write a new checkpoint.`;
 	}
@@ -316,7 +319,7 @@ export function recoverRefusedNotice(code: string, reason?: InactiveReason, vers
 }
 
 export function readyNotice(build: string): string {
-	return `${PREFIX} is active (${build}). It compacts only when you run /compact; if Pi reaches its automatic compaction point, requests pause until you do. Run /compaction-doctor to check this session.`;
+	return `${PREFIX} is active (${build}). It compacts on /compact and at Pi's threshold after completed turns; context-overflow recovery needs /compact. Run /compaction-doctor to check this session.`;
 }
 
 /** Unrequested notices go to the UI, or to stderr so print-mode output stays clean. */

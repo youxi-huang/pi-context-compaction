@@ -14,6 +14,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Maintenance
 
 - With the maintainer's approval, the resident build fingerprint changes to `1.1.0-context-memory.0.3.0+src.7b6b865a3072b3e0` for the two fixes above and the frozen evaluator is pinned to that source; fixture and scorer locks are unchanged. The resident release version stays v0.3.0, and the independent preview's sources and package are unchanged.
+- Add a handoff protocol shared by Claude Code and Codex for continuing work across sessions, local or cloud. A handoff is a `HANDOFF.md` on the work branch that references existing records instead of copying them, marks each state claim as verified, inferred or not run, and is deleted before merge. The next session checks it against the branch before acting and records what it missed, repeated or found wrong, which feeds changes to the protocol. The October 13 cloud handoff, which still described PR #40 as open, moves to the documentation archive. Runtime behavior, build fingerprints and evaluation contracts are unchanged.
 
 ## [v0.4.1] — 2026-10-14
 

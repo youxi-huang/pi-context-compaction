@@ -48,6 +48,27 @@ call or real-provider compatibility result was obtained. This attempt is not
 counted among the passing synthetic checks, and no network-policy workaround
 was attempted.
 
+### Clean-source CI and local diagnostic
+
+At clean commit `4b59d85`, the complete [GitHub CI sequence](https://github.com/youxi-huang/pi-context-compaction/actions/runs/38683025719)
+and all three CodeQL analyses passed. Official-host acceptance passed 30 checks
+on 1.2.0 and 28 on 1.1.0; strict scenarios passed all 145 checks without gaps
+or exceptions, and release preparation bound the archives to that clean commit.
+
+The local `context-memory-ops.mjs ci` at the same commit exited 1: all steps
+through release preparation passed, but one of the 89 frozen offline tests
+failed its assertion that every probe records a forbidden history grant. A
+focused diagnostic of that existing test exited 0 (one selected test passed),
+and `eval/check.mjs` with retained diagnostic artifacts then exited 0 (89/89).
+All 16 retained grant-probe traces contained the expected rejection. The first
+failure's cause remains unestablished; it is not erased by those later passes.
+The evaluator, its frozen inputs and runtime pin were not changed or bypassed.
+
+An additional read-only dependency audit exited 1 with two high findings in a
+workspace example. The independent package has no runtime dependencies of its
+own, and its checked import graph and five-file archive contain neither affected
+package. No audit fix or unrelated upstream-file change was applied.
+
 ### Hash review
 
 Removed only `packages[].manifestSha256`, `installManifestSha256` and

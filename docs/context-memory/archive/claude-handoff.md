@@ -1,4 +1,11 @@
-# Claude Code cloud handoff: simplify the plugin and close a minimal B loop
+# Claude Code cloud handoff: simplify the plugin and close a minimal B loop (archived)
+
+Archived on 2026-10-15. This brief steered the v0.4.0 preview work in PR #40,
+merged as `d0a63d7`; PRs #41 to #45 followed. Its branch, status, rules and open
+items describe that time and are not current instructions. Handoffs now live
+on their work branch and are deleted before merge; see the
+[handoff protocol](../handoff-protocol.md). The text below is kept unchanged as
+a record, apart from relative link paths.
 
 ## Status and next brief, 2026-10-13
 
@@ -14,11 +21,11 @@ The PR contains the earlier handoff PR #39 (`da6276b`) plus the commits below.
 CI (`verify` and CodeQL) was green on every pushed head so far. Do not merge,
 tag or publish; the maintainer decides releases.
 
-The maintainer accepted four decisions, D15–D18 in the [plan](v0.4.0-plan.md).
+The maintainer accepted four decisions, D15–D18 in the [plan](../v0.4.0-plan.md).
 Steps 1–5 implement D15–D17, step 6 implements D18 and step 7 measures them:
 
 1. The instruction-authority prototypes are removed; the design is
-   [archived](archive/instruction-authority-design.md).
+   [archived](instruction-authority-design.md).
 2. `context_note` candidates no longer enter the request context; they reach
    only the writer at compaction.
 3. Full source validation and session readback run at trust boundaries (load,
@@ -50,7 +57,7 @@ Steps 1–5 implement D15–D17, step 6 implements D18 and step 7 measures them:
    cases from the earlier brief, and found that a writer call without a usage
    event was journaled as free (fixed). `scripts/context-memory-preview-ab.mjs`
    compares sync, A and B on one synthetic script; its first results are in
-   the [validation record](validation.md).
+   the [validation record](../validation.md).
 
 ### Decisions taken after step 7
 
@@ -66,7 +73,7 @@ The maintainer ruled on the four questions step 7 raised:
    goes to the writer.
 4. **Real-provider runs** are deferred until a key and a budget exist (the
    maintainer may use a DeepSeek key). Meanwhile one run used Haiku subagents
-   through the runner's `--bridge`; see the [validation record](validation.md).
+   through the runner's `--bridge`; see the [validation record](../validation.md).
 
 ### B and long user messages
 
@@ -149,7 +156,7 @@ cloud-accessible primary path. A patch alone does not preserve pinned history:
 fetch C1 or import the bundle before running the frozen evaluator.
 
 Read `AGENTS.md`, `CONTRIBUTING.md` and
-[operations](operations.md) first. This project uses the official Pi 1.1.0
+[operations](../operations.md) first. This project uses the official Pi 1.1.0
 baseline, not the upstream release process. Root `package.json` is workspace
 metadata, not the extension version. Never use this repository's patched host
 as proof of independent stock-Pi compatibility.
@@ -204,7 +211,7 @@ failures and the scope exception; it must not become a performance pass or a
 general exemption for v0.4.0. S2's tiny synthetic controls prove candidate reuse
 and accounting interfaces, not natural hit rates, provider cache behavior,
 complete billing, semantic recovery or stable whole-task benefit. Preserve
-[validation](validation.md), including earlier failed artifacts and runs.
+[validation](../validation.md), including earlier failed artifacts and runs.
 
 ## Complexity audit: default recommendations
 

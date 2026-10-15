@@ -17,7 +17,7 @@ identities remain separate decisions.
 Latest handoff direction: the maintainer authorizes reassessing or deleting this
 design. The complete strict protocol and unused prototypes are not presumed
 necessary for B's first candidate-data experiment. Evaluate the narrower
-[cloud handoff](../claude-handoff.md) first; retain any required mechanical boundary
+[cloud handoff](claude-handoff.md) first; retain any required mechanical boundary
 and explicitly defer stronger promises. Ordinary input should not acquire a
 mandatory repeated review workflow.
 

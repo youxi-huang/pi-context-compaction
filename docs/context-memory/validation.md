@@ -242,7 +242,7 @@ time.
 
 ## Unreleased: end-to-end cases and a synthetic A/B runner, 2026-10-13 UTC
 
-Step 7 of the [handoff brief](claude-handoff.md). Everything here uses official Pi
+Step 7 of the [handoff brief](archive/claude-handoff.md). Everything here uses official Pi
 1.1.0 with a loopback provider and synthetic credentials. None of it is a
 real-provider latency, cost or quality result.
 
@@ -326,7 +326,7 @@ put to the maintainer.
 
 ## Unreleased: arm B as data-only work notes, 2026-10-13 UTC
 
-Step 6 of the [handoff brief](claude-handoff.md), decision D18, at `9b97b47` on
+Step 6 of the [handoff brief](archive/claude-handoff.md), decision D18, at `9b97b47` on
 `claude/affectionate-cray-21pzua`. `context_note` takes data only; with
 `previewWorkNotes.enabled` a compaction can commit merged work notes through the
 prefix path without a model call, with the user's own messages rendered after
@@ -459,7 +459,7 @@ The maintainer selected an unmerged PR and cloud handoff as this session's
 endpoint, with no tags, package-branch update or release. Arm A remains an
 opt-in experiment; B remains disabled. The next worker may reassess or delete
 the designs under the source/branch/disk/failure/cost constraints in the
-[executable handoff](claude-handoff.md).
+[executable handoff](archive/claude-handoff.md).
 
 Only `v0.4.0-preview.1` has explicit approval for a functional experimental
 acceptance scope. Its internal profile retains raw failed growth grading and

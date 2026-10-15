@@ -15,6 +15,7 @@ The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UP
 | `eval/` | Project recovery fixtures, scoring and isolated evaluation runners. The independent preview has separate stock-Pi acceptance and is not part of the frozen resident-runtime comparison. |
 | Six host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
 | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `.github/` | Project documentation and CI. |
+| `HANDOFF.md`, on work branches only | The current handoff between sessions, deleted before merge. See [the handoff protocol](docs/context-memory/handoff-protocol.md). |
 
 Everything else is unchanged upstream Pi code, imported as a snapshot without upstream history. Do not refactor, reformat or "clean up" upstream files. A task that seems to need a change outside the locations above is a host change and follows the rule below.
 
@@ -57,6 +58,10 @@ Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
 - Do not commit, push, open pull requests or create releases unless asked.
 - Do not add credentials, session logs, note content or local file paths to the repository, to fixtures or to issue text.
 - Do not add `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads this file only when none of them exists, and Codex reads it natively.
+
+## Handoffs between sessions
+
+Work often stops in one session and continues in another, in Claude Code or Codex, local or cloud. When a task names a branch that carries `HANDOFF.md`, or the user asks for a handoff, follow [the handoff protocol](docs/context-memory/handoff-protocol.md). Check the handoff against the branch before acting on it. A request for a handoff includes committing and pushing it on the work branch.
 
 ## Where to look
 

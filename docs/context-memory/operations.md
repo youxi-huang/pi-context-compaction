@@ -113,5 +113,6 @@ real-provider evidence; report failures as they occurred. Commit messages use
 Before starting, inspect open PRs and branches to avoid duplicate work. Use one
 branch per task and never rewrite another agent's branch. When the same class of
 problem appears for the third time, propose adding its handling to this runbook
-in the PR description. Personal language and writing preferences belong in each
-platform's user settings, not here.
+in the PR description. To stop mid-task or continue another session's work,
+follow the [handoff protocol](handoff-protocol.md). Personal language and
+writing preferences belong in each platform's user settings, not here.

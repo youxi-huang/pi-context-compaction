@@ -897,7 +897,7 @@ Timed components include scheduling/GC effects and instrumentation overhead.
 does not establish arbitrary Unicode or malformed-byte equivalence.
 
 The [authority](archive/instruction-authority-design.md) and
-[historical-prefix](historical-prefix-design.md) proposals are design evidence
+[historical-prefix](archive/historical-prefix-design.md) proposals are design evidence
 only. Neither activates arm B, retained-tail submission, a new checkpoint format
 or live model work.
 

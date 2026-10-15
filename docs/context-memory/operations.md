@@ -101,13 +101,13 @@ Stop maintenance decisions at either gate and wait for the maintainer:
 
 ## Never
 
-- Push `v*` tags or `release/publish-v*` branches; they trigger publication.
-- Change version strings, build fingerprints, tags, or release assets without
-  the maintainer's explicit authorization.
-- Run `npm test` or the complete upstream vitest suite.
-- Use any credentials to run a real provider, or modify upstream snapshot files.
-- Put session logs, note contents, credentials, or identifying local paths in
-  the repository, fixtures, issues, or PRs. Keep operational logs local.
+The rules in [AGENTS.md](../../AGENTS.md) apply in full: publication triggers,
+version strings and fingerprints, `npm test`, and what may not enter the
+repository, issues or PRs. Routine maintenance adds three:
+
+- Use any credentials to run a real provider.
+- Modify upstream snapshot files; a needed host change is a separate task.
+- Copy operational logs anywhere but the local machine.
 
 ## Evidence
 

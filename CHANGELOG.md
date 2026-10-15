@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- Tighten the agent instructions shared by Claude Code and Codex. `AGENTS.md` sends builds through the operations script, now states the publication triggers and the two maintainer gates, keeps one copy of each repository-wide rule, and says when to open the documents agents most often need. Two superseded design records move to `docs/context-memory/archive/`.
+
 ## [v0.4.2] — 2026-10-15
 
 v0.4.2 adds official Pi 1.2.0 support to the independent extension while retaining Pi 1.1.0 and existing checkpoints. It removes unused installer-report hashes while preserving source integrity, dependency verification and release evidence. Both optional preparation paths remain disabled by default. The compatibility evidence uses isolated official hosts and synthetic providers; a requested GPT Luna probe was blocked by the environment's network proxy before any model response.

@@ -1,6 +1,6 @@
 # Agent instructions for this repository
 
-This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` (commit `abe508e1b89912adde45528136c3221eb69acdd7`) and adds a context-compaction extension plus a small number of host changes. Its root is not a Pi package. A separate stock-Pi extension preview lives in `packages/coding-agent/src/extensions/context-memory/preview/`; its package builder emits only the independent extension. Upstream release, publishing, labeling and changelog rules do not apply here.
+This repository is Pi Context Compaction, an experimental distribution of [Pi](https://github.com/earendil-works/pi) built from source. It is based on upstream Pi `v1.1.0` and adds a context-compaction extension plus a small number of host changes; the baseline commit and every changed host file are recorded in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). Its root is not a Pi package. A separate stock-Pi extension preview lives in `packages/coding-agent/src/extensions/context-memory/preview/`; its package builder emits only the independent extension. Upstream release, publishing, labeling and changelog rules do not apply here.
 
 The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UPSTREAM_AGENTS.md). Their code-quality rules for TypeScript still hold in this repository: no `any`, top-level imports only, erasable TypeScript syntax only, no hardcoded key checks. Their commands, release process and issue conventions do not apply. Where this file and [CONTRIBUTING.md](CONTRIBUTING.md) say something different from the upstream file, this file wins.
 
@@ -11,9 +11,9 @@ The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UP
 | `packages/coding-agent/src/extensions/context-memory/` | The compaction runtime: writer, notes, storage, leases, history retrieval, grants, events, policy. |
 | `packages/coding-agent/test/context-memory*.test.ts` and `test/fixtures/context-memory-*` | The focused regressions for the resident runtime and independent preview. |
 | `scripts/context-memory-*.mjs`, `scripts/stamp-context-memory.mjs`, `scripts/security-regression-check.mjs` | Build stamping, model data, checks, migration and the event-log report. |
-| `docs/context-memory/` | Architecture, validation record, roadmap and the upstream delta. |
+| `docs/context-memory/` | Architecture, runbook, validation record, roadmap and the upstream delta; see [Documents](#documents). |
 | `eval/` | Project recovery fixtures, scoring and isolated evaluation runners. The independent preview has separate stock-Pi acceptance and is not part of the frozen resident-runtime comparison. |
-| Six host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
+| Changed host source files | Listed with reasons in [docs/context-memory/upstream-delta.md](docs/context-memory/upstream-delta.md). |
 | `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `THIRD_PARTY_NOTICES.md`, `.github/` | Project documentation and CI. |
 | `HANDOFF.md`, on work branches only | The current handoff between sessions, deleted before merge. See [the handoff protocol](docs/context-memory/handoff-protocol.md). |
 
@@ -21,30 +21,19 @@ Everything else is unchanged upstream Pi code, imported as a snapshot without up
 
 ## Build and verify
 
+Build and check through the operations script, described in [operations.md](docs/context-memory/operations.md):
+
 ```sh
-npm ci --ignore-scripts
-node scripts/context-memory-model-data.mjs
-node scripts/stamp-context-memory.mjs
-npm run build:offline
-node scripts/context-memory-check.mjs
-node scripts/security-regression-check.mjs
+node scripts/context-memory-ops.mjs doctor   # read-only readiness inventory
+node scripts/context-memory-ops.mjs verify   # build, then the acceptance bar
+node scripts/context-memory-ops.mjs ci       # the complete CI sequence
 ```
 
-The last two commands are the acceptance bar and are what CI runs. `context-memory-check.mjs` runs static checks and the context-memory regressions without calling a model. `security-regression-check.mjs` runs the host security regressions with synthetic input. Neither needs provider credentials.
+`verify` installs dependencies, rejects stray duplicates such as `events 2.ts`, stamps, builds, and runs the two acceptance checks CI runs: `context-memory-check.mjs` and `security-regression-check.mjs`. Neither calls a model or needs provider credentials.
 
-For changes to the independent preview, also build with
-`node scripts/context-memory-preview-build.mjs` and run
-`scripts/context-memory-preview-acceptance.mjs` against clean official Pi
-1.2.0 and 1.1.0 npm installations. See [the preview guide](docs/context-memory/extension-preview.md).
-Do not use this repository's patched host as evidence of stock-Pi compatibility.
+For changes to the independent preview, also build with `node scripts/context-memory-preview-build.mjs` and run `scripts/context-memory-preview-acceptance.mjs` against the clean official Pi installations listed in [the preview guide](docs/context-memory/extension-preview.md). Do not use this repository's patched host as evidence of stock-Pi compatibility.
 
 Do not run the full upstream vitest suite or `npm test`; they include end-to-end tests that activate when provider credentials are present. Do not run live provider tests with credentials that are not yours. Simulated results and provider runs are reported as different things.
-
-Before stamping, make sure there are no stray duplicate files (for example `events 2.ts`) in the extension directory or `scripts/`. The stamp reads every `.ts` file in the extension directory, so an untracked duplicate makes the local fingerprint differ from CI and `verify` fails.
-
-For routine operations, first read [docs/context-memory/operations.md](docs/context-memory/operations.md).
-Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
-`node scripts/context-memory-ops.mjs ci` reproduces the complete CI sequence.
 
 ## Making changes
 
@@ -53,15 +42,24 @@ Run `node scripts/context-memory-ops.mjs verify` for the acceptance line;
 - Preserve checkpoint source hashes: citations alone do not detect changed content under the same record ID. Changes to their serialization, algorithm or stored format need a compatibility plan for older checkpoints.
 - Before removing a hash, trace its producer, consumers and comparison value. Keep build IDs and artifact digests that bind validation to code or package bytes; a different build ID alone does not make a checkpoint incompatible. Remove only unused fields or redundant checks, while retaining npm's integrity verification, exact CI versions and official-host isolation.
 - Do not add a second history database. Do not substitute a writer on failure. A failed compaction blocks the next request by design.
+- Two results wait for the maintainer: stamping that changes the extension's `build.ts`, whose new fingerprint is committed only with approval given in the task, and `EVAL_FROZEN_INPUT_CHANGED`, which is never cleared by moving the `eval/runtime.ts` pin or changing tests. See [the two gates](docs/context-memory/operations.md#two-deliberate-gates).
 - Record user-visible changes under **Unreleased** in the root `CHANGELOG.md`, grouped as Added, Changed, Fixed, Security or Maintenance. The changelogs under `packages/` are upstream history and are not edited.
-- Do not change version strings, build fingerprints, tags or release assets. Releases are made by the maintainer. The root `package.json` carries upstream workspace metadata and is not this project's version.
-- Do not commit, push, open pull requests or create releases unless asked.
-- Do not add credentials, session logs, note content or local file paths to the repository, to fixtures or to issue text.
+- Do not change version strings, build fingerprints, tags or release assets, and never push `v*` tags or `release/publish-v*` branches: they trigger publication. Releases are made by the maintainer. The root `package.json` carries upstream workspace metadata and is not this project's version.
+- Do not commit, push, open pull requests or create releases unless asked. A request for a handoff includes committing and pushing `HANDOFF.md` on the work branch.
+- Do not add credentials, session logs, note content or local file paths to the repository, to fixtures, or to issue and pull request text.
 - Do not add `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads this file only when none of them exists, and Codex reads it natively.
 
-## Handoffs between sessions
+## Documents
 
-Work often stops in one session and continues in another, in Claude Code or Codex, local or cloud. When a task names a branch that carries `HANDOFF.md`, or the user asks for a handoff, follow [the handoff protocol](docs/context-memory/handoff-protocol.md). Check the handoff against the branch before acting on it. A request for a handoff includes committing and pushing it on the work branch.
+Open a document in `docs/context-memory/` when its row applies, not by default. The others are named for their subject.
+
+| Document | Read when |
+| --- | --- |
+| [operations.md](docs/context-memory/operations.md) | Before routine maintenance: red CI, dependency and security updates, CodeQL alerts, upstream ports. |
+| [handoff-protocol.md](docs/context-memory/handoff-protocol.md) | A task names a branch that carries `HANDOFF.md`, or the user asks for a handoff. |
+| [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
+| [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
+| [archive/](docs/context-memory/archive/) | Tracing history only. Archived documents are never current instructions. |
 
 ## Where to look
 

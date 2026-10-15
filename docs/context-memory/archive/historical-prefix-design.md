@@ -1,6 +1,9 @@
-# Historical prefix with retained originals: proposed contract
+# Historical prefix with retained originals: proposed contract (archived)
 
-Superseded on 2026-10-13 by decision D16 in the [plan](v0.4.0-plan.md). The
+Archived on 2026-10-15. The text below is unchanged apart from relative link
+paths.
+
+Superseded on 2026-10-13 by decision D16 in the [plan](../v0.4.0-plan.md). The
 preview now commits a prepared note for the prefix it covers and keeps every
 later original verbatim, without the authority contract this proposal required:
 newer messages keep their own words and position after the note, as in an
@@ -27,7 +30,7 @@ retained input must be reported separately.
 An old note may contain an instruction that a newer user ruling revokes. Keeping
 the newer original gives the model evidence; it does not prove that the old note
 was reconciled. The proposal therefore needs both temporal scoping and the
-[instruction-authority contract](archive/instruction-authority-design.md). Until the
+[instruction-authority contract](instruction-authority-design.md). Until the
 consumer can mechanically keep historical model prose out of its authoritative
 instruction lane, use the current merge or synchronous path.
 

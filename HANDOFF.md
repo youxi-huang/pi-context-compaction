@@ -1,55 +1,51 @@
 ---
 branch: claude/busy-gates-o71sr0
 pr: none
-head: 6fe5906
+head: 7df8c04
 written: 2026-10-16, Claude Code, cloud
 ---
 
-# Handoff: bounded live trial of the preview on Pi 1.3.0 with an OpenCode free model
+# Handoff: Pi 1.3.0 support and its bounded provider run, ready for a PR
 
 ## Goal and done-when
 
-Run one bounded real-provider trial of this branch's preview on official Pi 1.3.0 with `opencode/deepseek-v4.1-flash-free`, and record it in `docs/context-memory/validation.md` as a provider run, kept apart from synthetic evidence. Done when one representative task has gone through two manual compactions with its continuation checks recorded, or the trial stopped at its budget or a failure that is recorded as it occurred. Then open a PR for the branch only if the user asks.
+The branch adds Pi 1.3.0 support to the preview and records one bounded real-provider trial. The trial is done. What remains is a PR to `main`, opened only when the user asks, with CI and CodeQL green.
 
 ## State
 
-- [verified] Pi 1.3.0 support, host-driven release tooling, doctor recovery states and per-session status: commits `2587da3`, `11bdae6`; documentation and results in the top entry of `docs/context-memory/validation.md` and under Unreleased in `CHANGELOG.md`.
-- [verified] `node scripts/context-memory-ops.mjs verify`, exit 0, on the code committed as `2587da3`; resident fingerprint unchanged.
-- [verified] `node scripts/context-memory-ops.mjs preview`, exit 0, at `11bdae6`: acceptance 32/28/28 on 1.3.0/1.2.0/1.1.0, strict scenarios 145 passed on 1.3.0, release `--prepare` passed.
-- [verified] `node eval/check.mjs` with `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, `EVAL_MODEL_CALL_BUDGET=0`: 89 passed, exit 0, at `11bdae6`.
-- [verified] The session's network policy denied `opencode.ai` (CONNECT 403).
-- [inferred] The user is adding the key as a Network secret of type Bearer for `opencode.ai`, path prefix `/inference/`, based on their settings screenshot in this session: the proxy adds `Authorization: Bearer <key>` to those requests, and the key never enters the container or `OPENCODE_API_KEY`. Whether it replaces a header Pi already sends is unknown.
-- [inferred] Pi 1.3.0 reads `OPENCODE_API_KEY`; its catalog lists `deepseek-v4.1-flash-free` under provider `opencode` at `https://opencode.ai/inference/v1`, 200,000-token window, 32,000 max output, reasoning on, zero listed cost. Based on the 1.3.0 `pi-ai` package data.
-- [not run] Any real-provider call; GitHub CI and CodeQL for this branch.
+- [verified] Pi 1.3.0 support, doctor recovery states and host-driven release tooling: commits `2587da3`, `11bdae6`; checks in the second entry of `docs/context-memory/validation.md`; changes under Unreleased in `CHANGELOG.md`.
+- [verified] `node scripts/context-memory-preview-build.mjs`, exit 0, at `06f1f0e`: build `stock-preview+src.6d21d37d4e59aefe`, the same candidate validated at `11bdae6`.
+- [verified] `node scripts/context-memory-preview-stock-install.mjs --version 1.3.0`, exit 0, network-blocked SDK import passed.
+- [verified] Provider run on official Pi 1.3.0 with `deepseek/deepseek-flash`, 51 requests in 6 min 15 s: first `/compact` failed with `CONTEXT_NOTE_QUOTE`, its retry and the second `/compact` committed, checks 5/5 and 9/9. Full record in the top entry of `docs/context-memory/validation.md`, commit `7df8c04`.
+- [verified] `opencode/deepseek-v4.1-flash-free` returns HTTP 403 `FreeTierError` to Pi and to plain `curl` on `/inference/v1` and `/inference/openai/v1`.
+- [not run] `context-memory-ops.mjs verify` and `preview` after `11bdae6`; only documentation changed since. GitHub CI and CodeQL for this branch.
 
 ## Decisions
 
-- The user authorized a live trial with their own OpenCode key and the free DeepSeek V4.1 Flash model. Budget not yet set: propose one task, two compactions, at most 60 model requests and 45 minutes, and confirm with the user before the first request.
-- Compact manually. Pi's threshold sits at 183,616 tokens for this window (window minus 16,384), too far for a bounded trial; manual `/compact` needs about 31,000 estimated tokens of history first (Pi keeps 20,000 by default).
-- Use the official Pi 1.3.0 host, not this repository's patched build, with the built package installed in an isolated agent directory, so the result speaks for stock Pi. The A/B runner's `--bridge` mode is the fallback if driving the CLI proves impractical.
-- The key stays in the proxy. Pi sends no request without a configured key, so give only the Pi process `OPENCODE_API_KEY=proxy-injected` as a placeholder. Never try to read, print or log the real key, and keep session files and note text out of the repository; validation.md gets counts, codes, timings and pass or fail per probe.
-- Package version stays 0.4.2. Bumping to 0.4.3, the changelog section and tags are the maintainer's.
-- Not done on purpose: no optimization of the request scans (measured 4.7 ms p50 at 10,000 entries on 1.3.0), no change to `beforeRequest`'s string check (`context()` already checks the summary's position), no `hashEntries` change (roadmap, Source-hash follow-up).
+- Model: the user switched to their own DeepSeek key, injected by the proxy for `api.deepseek.com`, after the OpenCode free tier refused non-OpenCode clients. Rejected: imitating the OpenCode client, because it bypasses the provider's access control and would not speak for Pi users.
+- Budget: 60 model requests and 45 minutes, confirmed by the user before the first DeepSeek request; the three refused OpenCode requests are counted separately. Writer calls are not RPC message events, so the count adds them from `/compaction-status` `calls`.
+- The failed first compaction was retried once with `/compact`, the documented recovery, and recorded as it occurred.
+- The model's `bash` tool was excluded; long tool outputs came from paged `read` calls.
+- Left unchanged on purpose: the statements in `roadmap.md` and `extension-preview.md` that real-provider behavior remains unproven or outstanding. One bounded run does not settle them; the maintainer decides.
+- Package version stays 0.4.2; the bump, changelog section and tags are the maintainer's.
 
 ## Read first
 
-`AGENTS.md`; `docs/context-memory/operations.md` sections Evidence and Never; the top entry of `docs/context-memory/validation.md`; `docs/context-memory/extension-preview.md` sections Before updating Pi and Verification; the paragraph on further live work in `docs/context-memory/roadmap.md` (0.3.0 entry).
+`AGENTS.md`; the top two entries of `docs/context-memory/validation.md`; `CHANGELOG.md` Unreleased; the Finishing section of `docs/context-memory/handoff-protocol.md`.
 
 ## Settled
 
-- `/compaction-status` cross-session leak: unreachable in Pi's CLI, which runs the extension factory again for each session; fixed only for consistency. CHANGELOG Unreleased, Fixed.
-- Whether a new release needs list edits: no; strict scenarios apply to every version after v0.4.0-preview.1. CHANGELOG Unreleased, Maintenance.
+- Whether the OpenCode free model can serve this trial: no, recorded in the top entry of `validation.md`.
+- `/compaction-status` cross-session leak and release-list edits: as in the previous handoff, recorded in CHANGELOG Unreleased.
 
 ## Next steps
 
-1. Check the route: `curl -sS -o /dev/null -w "%{http_code}\n" https://opencode.ai/inference/v1/models` must return an HTTP status, not a CONNECT 403; 200 means the injected key was accepted. Then confirm the proxy replaces Pi's own header: one tiny request through official Pi 1.3.0 with the placeholder key (the installed host's `node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js -p` with `--model opencode/deepseek-v4.1-flash-free`) must succeed. A 401 means the placeholder reached OpenCode; then stop and ask the user to add the key as an environment variable instead.
-2. Build and install: `node scripts/context-memory-preview-build.mjs`, then `node scripts/context-memory-preview-stock-install.mjs --stock-root <isolated dir> --version 1.3.0`.
-3. Confirm the budget with the user, then run the task: an early constraint, a decision, a later correction, one long tool output and a stated next step; `/compact` after each half; record `/compaction-status` `lastCompaction` and `calls`, `/compaction-doctor` on any failure, and continuation answers.
-4. Add a provider-run entry to validation.md, commit and push to this branch.
+1. When the user asks, open a PR from `claude/busy-gates-o71sr0` to `main`. Delete `HANDOFF.md` in its last commit and move the Previous handoff check below into the PR description.
+2. Drive CI and CodeQL on the PR to green.
 
 ## Previous handoff check
 
-- Missing: none
+- Missing: Next steps put a probe request before the budget confirmation that Decisions required before the first request; the budget was confirmed first. The budget count did not say that writer calls fall outside RPC message events.
 - Repeated: none
-- Wrong: none
-- Unused: none
+- Wrong: the plan assumed the free OpenCode model accepts Pi's requests; it refuses every non-OpenCode client with 403 `FreeTierError`, not the anticipated 401.
+- Unused: `extension-preview.md` section Before updating Pi.

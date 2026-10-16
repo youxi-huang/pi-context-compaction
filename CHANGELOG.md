@@ -6,6 +6,24 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+These changes are in the independent preview only. The resident runtime, its build fingerprint and the evaluation pin are unchanged.
+
+### Added
+
+- One quotation repair. When a candidate note fails only because quotations do not match the entries they cite, for at most five facts, the writer gets one request about those facts alone: the entries they cite and the entries that do contain the quoted text, with their roles. A replacement may change only its sources and quote, or withdraw the fact; the rest of the note is kept as written and the whole note is checked again. `noteRepair` governs this repair and the size repair, and a compaction spends at most one. A second failure blocks as before, and the extension never moves a quotation to another entry on its own.
+- `context_history` lists one kind of item with `operation: "list"`: the constraints, decisions, failed approaches, files, plans and state that committed checkpoints recorded, plus edits and errors read from tool records, newest first, with superseded items marked and their original entries named. The list is computed on every call and stores nothing; search and read are unchanged.
+- `/compaction-status` reports under `lastWriter` the first refused candidate's quotation failures by class, the kind of repair that ran and what a quotation repair changed.
+
+### Changed
+
+- The session writer's handover request lists every uncovered user message in full beside its entry ID, and says that the manifest's openings are not to be copied as quotations. Both recorded live runs lost a checkpoint to a quotation cited to the wrong entry.
+- A refused quotation's message counts the failures by class: text found in other entries, text that differs only in spacing or punctuation, and text found nowhere. A refused `context_note` names each failing field and the entries that contain its quoted text.
+
+### Maintenance
+
+- `eval/preview` adds an evaluation set for the preview, separate from the frozen fixtures: two invented sessions with revisions, withdrawn work, forbidden retries and quotation traps, 47 typed probes and their scorer. `scripts/context-memory-preview-bench.mjs` runs a writer bench and the probes on official Pi, offline by default.
+- The stock-Pi scenarios check quotation repair and the typed list end to end.
+
 ## [v0.4.3] — 2026-10-16
 
 v0.4.3 adds official Pi 1.3.0 to the independent extension as its primary host, while retaining Pi 1.2.0, Pi 1.1.0 and existing checkpoints. `/compaction-doctor` now tells a failure that a new `/compact` can clear from one it cannot, and publication reads its host list from the candidate itself. Both optional preparation paths remain disabled by default. One bounded real-provider run on Pi 1.3.0 with DeepSeek V4.1 Flash is in the validation record: two checkpoints, the first after one refused note, and both continuation checks passed. It covers one task and is not a quality or cost comparison.

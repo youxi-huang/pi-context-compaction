@@ -99,7 +99,10 @@ earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
 `blocked`. `manualCompaction.preview` is `ready`, `retry`, `waiting-for-turn`,
 `blocked` or `not-active`, and `manualCompaction.recover` says whether
 `/compaction-recover` has a saved checkpoint to confirm. `lastWriter` and
-`lastCompaction` describe the current session only.
+`lastCompaction` describe the current session only. Since 0.5.0, `lastWriter`
+also reports the first refused candidate's quotation failures by class
+(`quotations`), the kind of a repair that ran (`repairKind`) and what a
+quotation repair changed (`quotationRepair`); all are counts.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -176,6 +179,16 @@ line with the original entries it rests on. A note has no field for
 instructions. The model retrieves original records on the current branch with
 `context_history`. The JSONL remains the only history store.
 
+`context_history` can also list one kind of item, newest first: the
+constraints, decisions, failed approaches, files, plans and state that
+committed checkpoints recorded, edits read from `edit` and `write` tool calls
+with their outcome, and errors from failed tool results and shell commands. A
+fact restated by several checkpoints appears once; one that a later fact
+supersedes is marked with what replaced it; every item names its original
+entries and carries an excerpt of one. The list is computed from the current
+branch on every call and stores nothing. It can miss what a writer left out, so
+search remains the way to check.
+
 For SDK use, select the same agent directory through `PI_CODING_AGENT_DIR`
 before importing Pi and pass it consistently to the session/resource loader.
 The extension uses public `getAgentDir()` for configuration and operational
@@ -191,6 +204,19 @@ allows line breaks, so the extension folds them into spaces before a note is
 committed, and a writer cannot open a heading of its own, such as a second
 `## instructions`. Exact quotes are rendered as JSON strings and stay exact.
 Checkpoints written by v0.4.0 keep their summaries and reopen unchanged.
+
+The session writer reads the conversation without entry IDs, so its handover
+request also lists every uncovered user message in full beside its ID, whole
+or not at all, within the note's hard allowance; the request drops this block
+before it shortens anything else. When a candidate fails only on quotations,
+for at most five facts, the writer gets one repair request that names those
+facts, the entries they cite and the entries that do contain the quoted text,
+with their roles. A replacement may change only its sources and quote, or
+withdraw the fact; every other fact stays as written, and the whole note is
+checked again. `noteRepair` governs this repair and the size repair, and a
+compaction spends at most one of them. A second failure blocks as before. The
+extension never moves a quotation to another entry on its own: text found
+only in an assistant message or a tool output is not a user ruling.
 
 Configuration is latched for the process; restart Pi after changing it. The
 preview uses the writer, note-budget, repair and retained-text settings from

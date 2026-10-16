@@ -1,0 +1,9 @@
+{
+	"version": "0.5-preview-fixtures.1",
+	"files": {
+		"P1/session.jsonl": "1ed066d583ab1aa284d6a99e36a9276f26b0c983f16c387766c721b6d97f4124",
+		"P1/gold.json": "1aeb5f68ab31509a2bec5ade9028ccb1e67fdf9250f9218d29d4ae1f92427c25",
+		"P2/session.jsonl": "647b882c83a1137934ed98585e8eddd916711268c3558f211dec4f5eb9ea856e",
+		"P2/gold.json": "6917a2c50acb057b85b008a411e7d2945f42399604f37c3be8e28b33ce60bdbf"
+	}
+}

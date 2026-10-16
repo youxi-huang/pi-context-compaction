@@ -192,7 +192,10 @@ async function worker() {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
 		runtime.registerProvider(model.provider, { api: model.api, apiKey: "bench-loopback-only", baseUrl: model.baseUrl, models: [model] });
 	} else {
-		model = runtime.find(MEASURED.provider, MEASURED.id);
+		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
+		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
+		dispatcher.configureHttpDispatcher();
+		model = runtime.getModel(MEASURED.provider, MEASURED.id);
 		if (!model) throw new Error(`${MEASURED.provider}/${MEASURED.id} is not in this Pi's catalog`);
 	}
 	const settingsManager = stock.SettingsManager.create(cwd, agentDir);
@@ -286,6 +289,7 @@ async function worker() {
 			rounds,
 			roundLimit: rounds >= PROBE_ROUNDS,
 			stopReason: last?.stopReason ?? null,
+			...(last?.errorMessage ? { errorMessage: String(last.errorMessage).slice(0, 300) } : {}),
 			reply: last && last.stopReason === "stop" ? last.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : undefined,
 			history: { search: calls.filter((op) => op === "search").length, read: calls.filter((op) => op === "read").length, list: calls.filter((op) => op === "list").length, other: calls.filter((op) => !["search", "read", "list"].includes(op)).length },
 			usage,
@@ -487,7 +491,7 @@ async function parent() {
 		writeLines(file, [fixture.header, ...fixture.entries.slice(0, end + 1)]);
 		const result = await run({ type: "probe", provider, fixture: "P1", sessionFile: file, condition: "none", prompt: "Reply with the single word OK.", thinking: "low" });
 		spend(result, provider !== "loopback");
-		report.smoke = { reached: result.reached, stopReason: result.stopReason, reply: result.reply?.slice(0, 40), error: result.error ?? null, crashed: result.crashed ?? false, usage: result.usage ?? null, diagnostics: result.diagnostics ?? [] };
+		report.smoke = { reached: result.reached, stopReason: result.stopReason, errorMessage: result.errorMessage ?? null, reply: result.reply?.slice(0, 40), error: result.error ?? null, crashed: result.crashed ?? false, ...(result.crashed ? { exitCode: result.exitCode, stderr: result.stderr } : {}), usage: result.usage ?? null, diagnostics: result.diagnostics ?? [] };
 	}
 
 	if (mode === "writer") {
@@ -592,7 +596,7 @@ async function parent() {
 					for (const op of ["search", "read", "list", "other"]) calls[condition][op] += result.history?.[op] ?? 0;
 					(probe.evidence.some((entry) => cited.has(entry)) || probe.expected.type === "unknown" ? missed[condition].cited : missed[condition].uncited).push(score);
 					record("probes.jsonl", { probe: probe.id, kind: probe.kind, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage });
-					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null });
+					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null, errorMessage: result.errorMessage ?? null });
 				});
 				if (k + 1 < fixture.gold.checkpoints.length) lines = [...lines, ...segment(fixture, k, lines.at(-1).id)];
 			}

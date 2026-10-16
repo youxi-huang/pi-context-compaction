@@ -6,9 +6,13 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.4.3] — 2026-10-16
+
+v0.4.3 adds official Pi 1.3.0 to the independent extension as its primary host, while retaining Pi 1.2.0, Pi 1.1.0 and existing checkpoints. `/compaction-doctor` now tells a failure that a new `/compact` can clear from one it cannot, and publication reads its host list from the candidate itself. Both optional preparation paths remain disabled by default. One bounded real-provider run on Pi 1.3.0 with DeepSeek V4.1 Flash is in the validation record: two checkpoints, the first after one refused note, and both continuation checks passed. It covers one task and is not a quality or cost comparison.
+
 ### Added
 
-- The independent preview supports official Pi 1.3.0 alongside 1.2.0 and 1.1.0, with 1.3.0 as the primary host in `supportedHost`. The extension API declarations Pi 1.3.0 exposes to extensions are unchanged from 1.2.0; stock-Pi acceptance runs on all three hosts, and a checkpoint written on 1.3.0 is compacted on each older host and reopened on 1.3.0. On an unlisted Pi version a protected session still stays blocked, which the preview guide now explains before an update. Version strings are unchanged until the maintainer releases.
+- The independent preview supports official Pi 1.3.0 alongside 1.2.0 and 1.1.0, with 1.3.0 as the primary host in `supportedHost`. The extension API declarations Pi 1.3.0 exposes to extensions are unchanged from 1.2.0; stock-Pi acceptance runs on all three hosts, and a checkpoint written on 1.3.0 is compacted on each older host and reopened on 1.3.0. On an unlisted Pi version a protected session still stays blocked, which the preview guide now explains before an update.
 
 ### Fixed
 

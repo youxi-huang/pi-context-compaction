@@ -1,10 +1,10 @@
-# Independent extension preview — v0.4.2
+# Independent extension preview — v0.4.3
 
-This extension runs on unmodified official Pi **1.2.0 and 1.1.0** as an ordinary Pi package. v0.4.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.4.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.4.2 supports manual and completed-turn threshold compaction.** Optional
+**v0.4.3 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -18,10 +18,10 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 
 ## Install, update and remove
 
-Official Pi 1.2.0 and 1.1.0 users can install the pinned package:
+Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.3
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,14 +41,13 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.4.2
-preview supports Pi 1.2.0 and 1.1.0.
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.4.3
+preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first. v0.4.2 does
-not list Pi 1.3.0; support for it is on `main` and not yet released. On a Pi
-version the preview does not list, sessions it never protected are left to
+Check that the installed preview lists the new Pi version first; v0.4.3 lists
+1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
 on that host. To continue such a session, reopen it with a listed Pi version
@@ -65,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.4.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.2)
+The [v0.4.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.3)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -116,13 +115,13 @@ The preview distinguishes three kinds of session:
 - **Protected:** the session has a checkpoint written by this preview, or a
   pending or failed attempt recorded by it. Every check below is strict, and a
   failure is recorded durably.
-- **Eligible:** a persistent, text-only session on Pi 1.2.0 or 1.1.0 with no
+- **Eligible:** a persistent, text-only session on Pi 1.3.0, 1.2.0 or 1.1.0 with no
   checkpoint from another compactor. The preview handles its compaction: Pi's
   threshold compaction after a completed turn and `/compact` both write a
   checked checkpoint, and overflow recovery is cancelled until `/compact`. The
   first attempt, or a cancelled overflow recovery, makes it protected.
 - **Not protected:** a session the preview has never protected and cannot
-  check: Pi outside 1.2.0 and 1.1.0, an in-memory session, a native or other
+  check: Pi outside 1.3.0, 1.2.0 and 1.1.0, an in-memory session, a native or other
   compactor's checkpoint, an image or other non-text content, or an
   unsupported context edit. The preview stands aside. It writes no failure
   record, does not stop requests, leaves manual and automatic compaction and
@@ -495,8 +494,8 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release after all assets are uploaded. v0.4.0,
-v0.4.1 and v0.4.2 also rerun the complete strict scenario suite and bind its content-free evidence
+push, and publishes a pre-release after all assets are uploaded. Every release
+since v0.4.0 also reruns the complete strict scenario suite and binds its content-free evidence
 to the final artifact; the earlier A-preview exception applies only to
 v0.4.0-preview.1. Existing public
 assets and tags are never overwritten. The resident runtime keeps release

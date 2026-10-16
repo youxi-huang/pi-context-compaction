@@ -1,6 +1,6 @@
 # Validation record
 
-## Unreleased: bounded provider run on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
+## v0.4.3: bounded provider run on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It
 used the preview candidate `stock-preview+src.6d21d37d4e59aefe`, built from
@@ -64,7 +64,7 @@ on a different model and runtime. Shell tools, threshold compaction and
 preparation were not exercised. Session files, notes and logs stayed on the
 local machine.
 
-## Unreleased: Pi 1.3.0, doctor recovery states and host-driven release tooling, 2026-10-16 UTC
+## v0.4.3: Pi 1.3.0, doctor recovery states and host-driven release tooling, 2026-10-16 UTC
 
 The independent extension lists official Pi 1.3.0, 1.2.0 and 1.1.0, with 1.3.0
 as the primary host. The tested candidate is `stock-preview+src.6d21d37d4e59aefe`

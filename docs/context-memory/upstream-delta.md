@@ -17,7 +17,7 @@ The upstream `README.md`, `CONTRIBUTING.md` and `AGENTS.md` are kept as `UPSTREA
 ## Independent preview
 
 `context-memory/preview/` is a separate ordinary extension using public imports
-from official Pi 1.2.0 and 1.1.0 in the v0.4.2 source candidate. Its package builder rejects runtime imports of resident
+from official Pi 1.3.0, 1.2.0 and 1.1.0 in the v0.4.3 source candidate. Its package builder rejects runtime imports of resident
 lifecycle or host source code, bundles only preview code and shared note/history
 primitives, and gives that artifact its own source fingerprint. None of the six
 resident host files or their existing fingerprint changes for the v0.3.1 preview.

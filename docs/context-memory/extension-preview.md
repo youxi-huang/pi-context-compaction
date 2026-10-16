@@ -101,8 +101,9 @@ earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
 `/compaction-recover` has a saved checkpoint to confirm. `lastWriter` and
 `lastCompaction` describe the current session only. Since 0.5.0, `lastWriter`
 also reports the first refused candidate's quotation failures by class
-(`quotations`), the kind of a repair that ran (`repairKind`) and what a
-quotation repair changed (`quotationRepair`); all are counts.
+(`quotations`), the kind of a repair that ran (`repairKind`), what a
+quotation repair changed (`quotationRepair`) and how many writer responses
+called a tool instead of writing the note (`toolCallResponses`); all are counts.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens

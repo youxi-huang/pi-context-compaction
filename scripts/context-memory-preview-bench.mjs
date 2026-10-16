@@ -249,6 +249,7 @@ async function worker() {
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			quotationRepair: writer.quotationRepair ?? null,
+			toolCalls: writer.toolCallResponses ?? 0,
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
 		};
@@ -559,6 +560,7 @@ async function parent() {
 				quotationClasses: { elsewhere: sum((row) => row.quotations?.elsewhere), format: sum((row) => row.quotations?.format), absent: sum((row) => row.quotations?.absent) },
 				repairs: { quotation: list.filter((row) => row.repairKind === "quotation").length, size: list.filter((row) => row.repairKind === "size").length },
 				repairedAndCommitted: list.filter((row) => row.repairKind && row.ok).length,
+				toolCallResponses: sum((row) => row.toolCalls),
 				repairOutcome: { requoted: sum((row) => row.quotationRepair?.requoted), unquoted: sum((row) => row.quotationRepair?.unquoted), dropped: sum((row) => row.quotationRepair?.dropped) },
 				writerCalls: sum((row) => row.writerCalls),
 				usage: { input: sum((row) => row.usage?.input), output: sum((row) => row.usage?.output), cacheRead: sum((row) => row.usage?.cacheRead), costUsd: Number(sum((row) => row.usage?.cost?.total).toFixed(4)) },
@@ -596,7 +598,7 @@ async function parent() {
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});
@@ -632,7 +634,7 @@ async function parent() {
 		}
 		const rate = (list) => ({ planned: list.length, passed: list.filter((row) => row.pass).length });
 		report.probes = {
-			compactions: { attempts: compactions.length, committed: compactions.filter((row) => row.ok).length, refusedByCode: compactions.filter((row) => !row.ok).reduce((codes, row) => ({ ...codes, [row.code ?? "UNKNOWN"]: (codes[row.code ?? "UNKNOWN"] ?? 0) + 1 }), {}), notes: noteSummary(compactions) },
+			compactions: { attempts: compactions.length, committed: compactions.filter((row) => row.ok).length, refusedByCode: compactions.filter((row) => !row.ok).reduce((codes, row) => ({ ...codes, [row.code ?? "UNKNOWN"]: (codes[row.code ?? "UNKNOWN"] ?? 0) + 1 }), {}), toolCallResponses: compactions.reduce((sum, row) => sum + (row.toolCalls ?? 0), 0), notes: noteSummary(compactions) },
 			history: summarizePreview(scores.history),
 			none: summarizePreview(scores.none),
 			callsPerQuestion: Object.fromEntries(

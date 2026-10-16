@@ -496,6 +496,7 @@ describe("preview writer provider-call reservations and settlements", () => {
 		);
 		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
 		expect(test.requests).toHaveBeenCalledTimes(1);
+		expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, toolCallResponses: 1 });
 		const instruction = test.requests.mock.calls[0][1].messages.at(-1)?.content;
 		expect(instruction).toContain("call no tool");
 	});

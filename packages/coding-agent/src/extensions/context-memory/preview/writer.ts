@@ -184,6 +184,8 @@ export interface WriterProgress {
 	repairKind?: "size" | "quotation";
 	/** What a quotation repair changed, as counts. */
 	quotationRepair?: QuoteRepairOutcome;
+	/** Writer responses that called a tool instead of writing the note; each refuses the note, and none is run. */
+	toolCallResponses?: number;
 }
 
 export interface WriteMemoryResult {
@@ -362,6 +364,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let quotations: QuoteCounts | undefined;
 	let repairKind: WriterProgress["repairKind"];
 	let quotationRepair: QuoteRepairOutcome | undefined;
+	let toolCallResponses = 0;
 	const report = () =>
 		options.onProgress?.({
 			writerModel,
@@ -374,6 +377,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			...(quotations ? { quotations: { ...quotations } } : {}),
 			...(repairKind ? { repairKind } : {}),
 			...(quotationRepair ? { quotationRepair: { ...quotationRepair } } : {}),
+			...(toolCallResponses ? { toolCallResponses } : {}),
 		});
 	const complete: PreviewComplete = async (selected, context, request) => {
 		options.signal.throwIfAborted();
@@ -411,6 +415,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 				}
 			}
 			response = await stream.result();
+			if (response.content.some((block) => block.type === "toolCall")) toolCallResponses++;
 			const usage = reportedUsage(response);
 			if (usage) {
 				usages.push(usage);

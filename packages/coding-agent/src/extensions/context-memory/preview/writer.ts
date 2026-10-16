@@ -26,6 +26,7 @@ import {
 	validateNote,
 	validateNoteContent,
 } from "../notes.ts";
+import { diagnoseQuotes, type QuoteCounts, quoteCounts, quoteFailureMessage } from "./quote-diagnostics.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -164,6 +165,8 @@ export interface WriterProgress {
 	usage?: Usage;
 	repairUsed: boolean;
 	writerCallDetails: WriterCallRecord[];
+	/** Quotation failures of the first refused candidate, by class; counts only. */
+	quotations?: QuoteCounts;
 }
 
 export interface WriteMemoryResult {
@@ -324,6 +327,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let repairUsed = false;
 	let phase: WriterCallRecord["phase"] = "generate";
 	const calls: WriterCallRecord[] = [];
+	let quotations: QuoteCounts | undefined;
 	const report = () =>
 		options.onProgress?.({
 			writerModel,
@@ -333,6 +337,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			repairUsed,
 			writerCallDetails: structuredClone(calls),
 			...(usages.length ? { usage: sumMemoryUsage(usages) } : {}),
+			...(quotations ? { quotations: { ...quotations } } : {}),
 		});
 	const complete: PreviewComplete = async (selected, context, request) => {
 		options.signal.throwIfAborted();
@@ -432,12 +437,25 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		if (failed) throw failure;
 		return response!;
 	};
+	/** The validator decides; a quotation failure is classified for status and the message, never accepted. */
+	const validateCandidate = (value: unknown): MemoryNote => {
+		try {
+			return validateNoteContent(value, options.branch);
+		} catch (error) {
+			if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
+			// The schema check precedes every quotation check, so the value is a complete note here.
+			const counts = quoteCounts(diagnoseQuotes(value as MemoryNote, options.branch).failures);
+			quotations ??= counts;
+			report();
+			throw new Error(quoteFailureMessage(counts));
+		}
+	};
 	const readCandidate = (response: NoteResponse): MemoryNote => {
 		options.signal.throwIfAborted();
 		const value = parseNote(response);
 		calls[calls.length - 1].noteBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 		report();
-		const note = oneLineNote(validateNoteContent(value, options.branch));
+		const note = oneLineNote(validateCandidate(value));
 		if (options.activeRequests?.length && !note.nextSteps.some((step) => step.text.trim()))
 			throw new Error(
 				"CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step",

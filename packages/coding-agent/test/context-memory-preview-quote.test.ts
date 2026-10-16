@@ -524,6 +524,10 @@ describe("session writer quotable originals", () => {
 		await writeMemory(roomy.options);
 		const full = roomy.instructions[0];
 		expect(full).toContain("Quotable user messages, complete and verbatim");
+		// The list serves quotation; it must not read as the whole task and demote the assistant's announced plan.
+		expect(full).toContain(
+			"work the assistant announced within the task stays a next step unless a user message withdrew it",
+		);
 		expect(full).toContain('{"entryId":"u3","text":"The threshold is 15."}');
 		expect(full).toContain("The openings only locate entries; never copy a quotation from them.");
 		const start = full.indexOf("Quotable user messages");

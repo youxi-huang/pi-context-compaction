@@ -803,7 +803,7 @@ function handoverInstruction(
 		continuationInstruction(options),
 		noteBudgetInstruction(options.noteTokens, options.baseNoteTokens),
 		quotable.length
-			? `Quotable user messages, complete and verbatim, each with its entry ID. Copy a quote from one of these texts and cite that same entry ID; to quote any other entry, copy its exact text from the conversation above and cite its ID.\n${quotable.map((item) => JSON.stringify(item)).join("\n")}`
+			? `Quotable user messages, complete and verbatim, each with its entry ID. Copy a quote from one of these texts and cite that same entry ID; to quote any other entry, copy its exact text from the conversation above and cite its ID. This list exists for exact quotation only and does not bound the task: work the assistant announced within the task stays a next step unless a user message withdrew it.\n${quotable.map((item) => JSON.stringify(item)).join("\n")}`
 			: "",
 		`Entry IDs for citations, in conversation order (ID role: opening words, whitespace collapsed). The openings only locate entries; never copy a quotation from them. Cite these IDs or the host-selected active request IDs above; quote text verbatim from the corresponding original.\n${manifest.join("\n")}`,
 		`Attachments:\n${JSON.stringify(attachments)}`,

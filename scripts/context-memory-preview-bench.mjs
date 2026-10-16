@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // requires --max-requests, --max-minutes and --max-cost-usd; the run stops before a unit that would start past any
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
+// --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");
@@ -33,7 +34,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--thinking high] [--concurrency 1] [--label name] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -617,7 +618,7 @@ async function parent() {
 
 	report.used = { ...used, costUsd: Number(used.costUsd.toFixed(4)), minutes: Number(((Date.now() - started) / 60_000).toFixed(1)) };
 	writeFileSync(join(runDir, "summary.json"), `${JSON.stringify(report, null, 2)}\n`);
-	rmSync(join(runDir, "copies"), { recursive: true, force: true });
+	if (!args.includes("--keep-sessions")) rmSync(join(runDir, "copies"), { recursive: true, force: true });
 	rmSync(join(runDir, "cwd"), { recursive: true, force: true });
 	process.stdout.write(`${JSON.stringify(report.used)}\nSummary: ${join(runDir, "summary.json")}\n`);
 	if (!existsSync(join(runDir, "summary.json"))) process.exit(1);

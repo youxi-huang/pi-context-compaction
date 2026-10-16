@@ -4,7 +4,7 @@
 
 Two implementations read the same `pi-context-memory.json` file in Pi's agent directory (normally `~/.pi/agent/`):
 
-- The **stock-Pi preview** is the ordinary Pi package installed with `pi install`. It compacts only on request and uses a subset of the settings. Its scope and recovery rules are in [the preview guide](extension-preview.md).
+- The **stock-Pi preview** is the ordinary Pi package installed with `pi install`. It compacts on `/compact` and at Pi's threshold after a completed turn, and uses a subset of the settings. Its scope and recovery rules are in [the preview guide](extension-preview.md).
 - The **resident build** is the v0.3.0 source build with six host changes, kept for development and comparison. Everything else on this page, from [Resident build](#resident-build) on, describes it.
 
 ## Settings

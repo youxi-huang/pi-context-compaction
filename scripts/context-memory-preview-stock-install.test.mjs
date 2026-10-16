@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { OFFICIAL_PI_COHORT, OFFICIAL_PI_VERSIONS, inspectOfficialPi, installOfficialPi, officialPiCohort, officialPiReady, parseStockInstallArguments } from "./context-memory-preview-stock-install.mjs";
+import { CHORD_PI_VERSIONS, OFFICIAL_PI_COHORT, OFFICIAL_PI_VERSIONS, inspectOfficialPi, installOfficialPi, officialPiCohort, officialPiReady, parseStockInstallArguments } from "./context-memory-preview-stock-install.mjs";
 
 const integrity = `sha512-${createHash("sha512").update("synthetic package bytes").digest("base64")}`;
 const script = fileURLToPath(new URL("./context-memory-preview-stock-install.mjs", import.meta.url));
@@ -49,7 +49,7 @@ function changeLock(directory, operation) {
 
 test("CLI requires an isolated root and one reviewed exact version", () => {
 	assert.deepEqual(parseStockInstallArguments(["--version", "1.0.4", "--stock-root", "/tmp/stock", "--check"]), { check: true, version: "1.0.4", stockRoot: "/tmp/stock" });
-	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.3.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
+	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.4.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
 		assert.throws(() => parseStockInstallArguments(args));
 	}
 });
@@ -60,7 +60,7 @@ test("all reviewed cohorts report exact versions and npm provenance without redu
 		fixture(directory, version);
 		const report = inspectOfficialPi(directory, version);
 		assert.equal(report.version, version);
-		assert.equal(report.packages.length, version === "1.2.0" ? 7 : 8);
+		assert.equal(report.packages.length, CHORD_PI_VERSIONS.includes(version) ? 8 : 7);
 		assert.ok(report.packages.every((record) => record.version === version && record.integrity === integrity));
 		assert.deepEqual(Object.keys(report).sort(), ["host", "packages", "version"]);
 		assert.ok(report.packages.every((record) => !Object.hasOwn(record, "manifestSha256")));
@@ -179,6 +179,19 @@ test("a 1.2.0 installation cannot keep chord as an extra dependency", (t) => {
 	assert.throws(() => inspectOfficialPi(directory, "1.2.0"), /pin every runtime cohort dependency exactly/);
 });
 
+test("hosts after 1.1.0 omit chord, and a newer host that still needed it fails inspection", (t) => {
+	for (const version of OFFICIAL_PI_VERSIONS) {
+		assert.equal(officialPiCohort(version).includes("@earendil-works/chord"), CHORD_PI_VERSIONS.includes(version), version);
+	}
+	assert.deepEqual(officialPiCohort("1.3.0"), officialPiCohort("1.2.0"));
+	const directory = scratch(t);
+	fixture(directory, "1.3.0");
+	const agent = join(directory, "node_modules/@earendil-works/pi-coding-agent/package.json");
+	const manifest = JSON.parse(readFileSync(agent, "utf8"));
+	writeJson(agent, { ...manifest, dependencies: { ...manifest.dependencies, "@earendil-works/chord": "1.3.0" } });
+	assert.throws(() => inspectOfficialPi(directory, "1.3.0"), /Unreviewed official runtime dependency: @earendil-works\/pi-coding-agent -> @earendil-works\/chord/);
+});
+
 test("actual startup networking and broken SDK exports are rejected without installation", (t) => {
 	for (const code of ["await fetch('https://example.invalid');", "export const VERSION='1.1.0';"]) {
 		const directory = scratch(t);
@@ -203,7 +216,7 @@ test("an unrelated project is never used as an installation destination", (t) =>
 });
 
 test("invalid CLI versions fail before any npm call and help needs no installation", () => {
-	const invalid = spawnSync(process.execPath, [script, "--version", "1.3.0", "--stock-root", "/unused"], { encoding: "utf8" });
+	const invalid = spawnSync(process.execPath, [script, "--version", "1.4.0", "--stock-root", "/unused"], { encoding: "utf8" });
 	assert.equal(invalid.status, 2);
 	assert.match(invalid.stderr, /Unsupported official Pi version/);
 	const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });

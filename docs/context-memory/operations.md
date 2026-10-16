@@ -15,7 +15,7 @@ Run `node scripts/context-memory-ops.mjs <command>` from any repository director
 | `deps` | Run `npm ci --ignore-scripts --no-audit --no-fund --prefer-offline` when the lock hash/installation is stale; record the hash in `node_modules/.context-memory-ops-lock`. |
 | `build` | deps, duplicate check, model data, stamp, fingerprint gate, `npm run build:offline`. |
 | `verify` | build, `context-memory-check.mjs`, `security-regression-check.mjs`. |
-| `preview` | build, preview build, Pi 1.2.0 and 1.1.0 acceptance with cross-version checkpoints, Pi 1.0.4, default-settings scenarios on 1.2.0, release checks, release `--prepare`. |
+| `preview` | build, preview build, acceptance on every Pi host the candidate lists (primary first, with cross-version checkpoints for each older host), Pi 1.0.4, default-settings scenarios on the primary host, release checks, release `--prepare`. |
 | `eval [--full] [--keep]` | build, network-blocked reduced evaluation; `--full` uses `eval/check.mjs`; remove scratch artifacts unless `--keep`. |
 | `ci` | build, both acceptance checks, all preview steps, full offline evaluation, in CI order. |
 
@@ -31,9 +31,12 @@ services and synthetic credentials; it is not a real-provider result.
 Both preview runners load a copy of the package from a temporary directory
 outside any Node project, so its Pi imports reach the official host under test
 rather than this repository's workspace build; do not bypass that check.
-All three official Pi versions use `context-memory-preview-stock-install.mjs`, which
-pins seven runtime components for 1.2.0 and eight for older hosts, including
-`chord`, and checks registry provenance and SDK startup with networking denied. npm
+Every official Pi version uses `context-memory-preview-stock-install.mjs`, which
+pins seven runtime components for 1.3.0 and 1.2.0 and eight for 1.1.0 and 1.0.4,
+including `chord`, and checks registry provenance and SDK startup with networking
+denied. The host list comes from the candidate's `preview-build.json`
+(`context-memory-preview-release-checks.mjs --plan`), the same source CI and
+publication read; no script branches on a release or host version. npm
 verifies download integrity. The installer does not hash manifests or lockfiles
 again for unused report fields. A complete matching
 cache skips npm; a mixed or incomplete cache is repaired. Scenarios report listed known gaps; new failures or a listed gap
@@ -54,7 +57,7 @@ gate, 2 means invalid usage; a failed command retains its own exit code.
 Preview `--prepare` requires a clean committed checkout. It only prepares local
 archives and never publishes. Do not bypass its clean-source check.
 
-The v0.4.2 independent extension keeps a source fingerprint to bind package
+The v0.4.3 independent extension keeps a source fingerprint to bind package
 acceptance and scenario evidence to its exact inputs. Host file hashes before
 and after acceptance check that testing did not patch official Pi. Checkpoint
 source hashes protect persisted evidence and recovery. These checks cover

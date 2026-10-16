@@ -41,8 +41,15 @@ export type Protection = "protected" | "eligible" | "not-protected";
 
 /** Pi's own manual-compaction gate is not visible through the public extension API. */
 export interface ManualCompaction {
-	/** What this preview requires: a completed turn, no queued input and no durable block. */
-	preview: "ready" | "waiting-for-turn" | "blocked" | "not-active";
+	/**
+	 * What this preview requires before /compact can write a checkpoint: `ready` at a completed turn with no
+	 * queued input; `retry` when a new /compact replaces a pending or failed attempt; `waiting-for-turn` until
+	 * the turn allows either; `blocked` when /compact cannot help here, as with an unsupported session, an
+	 * unreadable configuration or an unavailable writer.
+	 */
+	preview: "ready" | "retry" | "waiting-for-turn" | "blocked" | "not-active";
+	/** A checkpoint Pi already saved after staging awaits /compaction-recover, which confirms it without a model call. */
+	recover: boolean;
 	/** Pi decides from its own settings whether enough older history exists. */
 	pi: "unknown";
 	contextTokens: number | null;

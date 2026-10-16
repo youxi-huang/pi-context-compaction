@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// Reviewed runtime cohort. Pi 1.2.0 removed chord; the older hosts still need it.
+// Reviewed runtime cohort. Pi 1.2.0 removed chord; only the hosts listed in CHORD_PI_VERSIONS still need it.
 // Dev-only client/protocol/server packages are deliberately not installed.
 export const OFFICIAL_PI_COHORT = Object.freeze([
 	"@earendil-works/pi-coding-agent",
@@ -15,9 +15,11 @@ export const OFFICIAL_PI_COHORT = Object.freeze([
 	"@earendil-works/pi-tui",
 	"@earendil-works/pi-telemetry",
 ]);
-export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.2.0", "1.1.0", "1.0.4"]);
+export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0", "1.0.4"]);
+// A newer host that still needed chord fails inspection as an unreviewed dependency instead of installing it silently.
+export const CHORD_PI_VERSIONS = Object.freeze(["1.1.0", "1.0.4"]);
 const cohort = new Set(OFFICIAL_PI_COHORT);
-const usage = "Usage: node scripts/context-memory-preview-stock-install.mjs --stock-root <directory> --version <1.2.0|1.1.0|1.0.4> [--check]";
+const usage = `Usage: node scripts/context-memory-preview-stock-install.mjs --stock-root <directory> --version <${OFFICIAL_PI_VERSIONS.join("|")}> [--check]`;
 
 function checkedVersion(version) {
 	if (!OFFICIAL_PI_VERSIONS.includes(version)) throw new Error(`Unsupported official Pi version: ${version}`);
@@ -26,7 +28,7 @@ function checkedVersion(version) {
 
 export function officialPiCohort(version) {
 	checkedVersion(version);
-	return OFFICIAL_PI_COHORT.filter((name) => version !== "1.2.0" || name !== "@earendil-works/chord");
+	return OFFICIAL_PI_COHORT.filter((name) => name !== "@earendil-works/chord" || CHORD_PI_VERSIONS.includes(version));
 }
 
 export function parseStockInstallArguments(args) {

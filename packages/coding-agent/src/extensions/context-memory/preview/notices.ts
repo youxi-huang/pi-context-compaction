@@ -285,12 +285,32 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 			? ""
 			: ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`;
 	const gate = `Pi decides whether there is enough older history. It keeps the most recent ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} estimated tokens by default (compaction.keepRecentTokens) and answers "Nothing to compact (session too small)" until there is more, which is not a failure.${tokens}`;
+	const recover = "/compaction-recover can confirm the checkpoint Pi already saved, without a model call";
 	if (manual.preview === "not-active")
 		line("manual /compact", "inactive", "handled by Pi's own compaction in this session");
-	else if (manual.preview === "blocked")
-		line("manual /compact", "blocked", `${diagnosis.code ?? "the block below"} has to be resolved first`);
+	else if (manual.preview === "blocked") {
+		const blocking = diagnosis.code ?? diagnosis.writerError;
+		line(
+			"manual /compact",
+			"blocked",
+			blocking
+				? `/compact cannot clear ${blocking} here: ${adviceFor(blocking, reason, diagnosis.host).next}`
+				: "/compact cannot run here yet",
+		);
+	} else if (manual.preview === "retry")
+		line(
+			"manual /compact",
+			"retry",
+			manual.recover
+				? `${recover}; otherwise a new /compact retries. ${gate}`
+				: `a new /compact retries, and requests resume once its checkpoint is confirmed on disk. ${gate}`,
+		);
 	else if (manual.preview === "waiting-for-turn")
-		line("manual /compact", "unknown", `the preview needs a finished turn with no queued input first; ${gate}`);
+		line(
+			"manual /compact",
+			"unknown",
+			`the preview needs a finished turn with no queued input first${manual.recover ? `; ${recover} now` : ""}. ${gate}`,
+		);
 	else line("manual /compact", "unknown", `the preview is ready; ${gate}`);
 	const durable =
 		diagnosis.state === "pending" || (diagnosis.state === "blocked" && diagnosis.protection === "protected");
@@ -303,8 +323,16 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		line("durable block", "ok", "none");
 	}
 	if (inactive) lines.push("Result: inactive. Nothing was changed in this session; Pi's own compaction applies.");
+	else if (diagnosis.code && manual.recover)
+		lines.push(
+			"Result: blocked. Run /compaction-recover to confirm the saved checkpoint; if it is refused, run /compact.",
+		);
 	else if (diagnosis.code)
 		lines.push(`Result: blocked. ${sentence(adviceFor(diagnosis.code, reason, diagnosis.host).next)}`);
+	else if (diagnosis.writerError)
+		lines.push(
+			`Result: ready, but /compact cannot write a checkpoint yet. ${sentence(adviceFor(diagnosis.writerError, reason, diagnosis.host).next)}`,
+		);
 	else lines.push("Result: ready. Keep working, and run /compact once the conversation has grown.");
 	return lines.join("\n");
 }

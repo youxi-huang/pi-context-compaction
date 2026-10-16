@@ -4,9 +4,25 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
-import { assertFinalMainWorkflows, assertReleaseNotes, parseReviewedVersion, releaseChanges, releaseNotes, releasePiVersions, selectReviewedSourceTag, STRICT_RELEASES } from "./context-memory-preview-release-checks.mjs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { assertFinalMainWorkflows, assertReleaseNotes, compareReleaseVersions, crossVersionChecks, hostList, isStrictRelease, minimumAcceptanceChecks, parseReviewedVersion, releaseChanges, releaseNotes, releasePiVersions, releasePlan, scenarioProfile, selectReviewedSourceTag } from "./context-memory-preview-release-checks.mjs";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
-import { SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
+import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
+
+/** Released stable versions held to strict scenarios, and the next ones, which need no list entry. */
+const STRICT_RELEASES = ["0.4.0", "0.4.1", "0.4.2", "0.4.3", "0.5.0"];
+/** Host declarations recorded by each released tag's build metadata. */
+const HISTORICAL_BUILDS = {
+	"0.3.3": { supportedPi: "1.1.0" },
+	"0.4.0": { supportedPi: "1.1.0" },
+	"0.4.1": { supportedPi: "1.1.0" },
+	"0.4.2": { supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.1.0"] },
+};
+function hostsFor(version) {
+	return releasePiVersions(HISTORICAL_BUILDS[version] ?? { supportedPi: PRIMARY_PI_VERSION, supportedPiVersions: SUPPORTED_PI_VERSIONS });
+}
 
 test("reviewed versions retain exact stable and positive numbered-preview spellings", () => {
 	for (const version of ["0.3.3", "0.4.0", "0.4.0-preview.1", "12.34.56-preview.123", "0.0.0"]) {
@@ -61,31 +77,82 @@ test("publication workflow preserves version-aware installation and historical s
 		assert.equal(result.status === 0, accepted, ref);
 		if (accepted) assert.equal(result.stdout, selectReviewedSourceTag({ triggerRef: ref }));
 	}
-	const install = steps.find((step) => step.name === "Install official Pi baseline");
+	const plan = steps.find((step) => step.id === "plan");
+	assert.match(plan.run, /context-preview-publisher\/scripts\/context-memory-preview-release-checks\.mjs" --plan \.artifacts\/context-memory-preview-package >> "\$GITHUB_OUTPUT"/);
+	const install = steps.find((step) => step.name === "Install every official Pi host the candidate declares");
 	assert.match(install.run, /context-preview-publisher\/scripts\/context-memory-preview-stock-install\.mjs/);
-	assert.match(install.run, /preview-build\.json/);
-	assert.match(install.run, /--version "\$host_version"/);
+	assert.match(install.run, /for host in \$PLAN_HOSTS/);
+	assert.match(install.run, /--version "\$host"/);
 	assert.doesNotMatch(install.run, /npm install/);
 	const publish = steps.find((step) => step.name === "Publish checked package and source archives");
 	assert.match(publish.run, /context-preview-publisher\/scripts\/context-memory-preview-release\.mjs" --publish/);
-	const scope = steps.find((step) => step.name === "Verify final release scenarios");
-	assert.match(scope.run, /if \[ "\$candidate_version" = "0\.4\.0-preview\.1" \]/);
-	assert.match(scope.run, /--acceptance-profile v0\.4\.0-preview\.1-a-functional/);
-	assert.match(scope.run, /--version 1\.0\.4/);
-	const strict = scope.run.split('elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ] || [ "$candidate_version" = "0.4.2" ]; then')[1];
-	assert.match(strict, /--version 1\.0\.4/);
-	assert.match(strict, /context-memory-preview-scenarios\.mjs.*--acceptance-profile strict/);
-	assert.doesNotMatch(strict, /v0\.4\.0-preview\.1-a-functional/);
 	const acceptance = steps.find((step) => step.name === "Verify the release package on stock Pi");
-	assert.match(acceptance.run, /--version 1\.1\.0/);
 	assert.match(acceptance.run, /--compatible-stock-root/);
-	assert.match(acceptance.run, /context-memory-preview-acceptance-1\.1\.0/);
+	assert.match(acceptance.run, /context-memory-preview-acceptance-\$host/);
+	const scope = steps.find((step) => step.name === "Verify final release scenarios");
+	assert.match(scope.run, /if \[ -n "\$PLAN_PROFILE" \]/);
+	assert.match(scope.run, /--version "\$PLAN_OTHER"/);
+	assert.match(scope.run, /context-memory-preview-scenarios\.mjs.*--acceptance-profile "\$PLAN_PROFILE"/);
+	// Step outputs reach the shell through the environment, and no step branches on a literal version again.
+	for (const step of steps) {
+		if (!step.run) continue;
+		assert.doesNotMatch(step.run, /\$\{\{\s*steps\./, `${step.name ?? step.id} interpolates a step output into its script`);
+		assert.doesNotMatch(step.run, /candidate_version|--version 1\.|acceptance-1\.\d/, `${step.name ?? step.id} hardcodes a release or host version`);
+	}
 });
 
-test("v0.4.2 requires both supported hosts while historical tags keep Pi 1.1.0", () => {
-	assert.deepEqual(releasePiVersions("0.4.2"), ["1.2.0", "1.1.0"]);
-	assert.deepEqual(releasePiVersions("0.4.2"), SUPPORTED_PI_VERSIONS);
-	for (const version of ["0.3.3", "0.4.0-preview.1", "0.4.0", "0.4.1"]) assert.deepEqual(releasePiVersions(version), ["1.1.0"]);
+test("the plan reads every declared host from the candidate and fails closed on an unreviewed one", (t) => {
+	const directory = mkdtempSync(join(tmpdir(), "pi-preview-plan-"));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	const write = (manifest, build) => {
+		writeFileSync(join(directory, "package.json"), JSON.stringify(manifest));
+		writeFileSync(join(directory, "preview-build.json"), JSON.stringify(build));
+	};
+	const script = fileURLToPath(new URL("./context-memory-preview-release-checks.mjs", import.meta.url));
+	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.3.0", supportedPiVersions: ["1.3.0", "1.2.0", "1.1.0"] });
+	const result = spawnSync(process.execPath, [script, "--plan", directory], { encoding: "utf8" });
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout, "hosts=1.3.0 1.2.0 1.1.0\nprofile=strict\nother=1.0.4\n");
+	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.4.0", supportedPiVersions: ["1.4.0", "1.3.0"] });
+	assert.notEqual(spawnSync(process.execPath, [script, "--plan", directory], { encoding: "utf8" }).status, 0);
+	assert.equal(spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8" }).status, 2);
+	assert.throws(() => releasePlan({ manifest: { version: "0.4.3" }, build: { version: "0.4.2", supportedPi: "1.2.0" } }), /packaged version/);
+});
+
+test("historical tags keep their own host contract and the current source declares its full matrix", () => {
+	assert.deepEqual(hostsFor("0.4.2"), ["1.2.0", "1.1.0"]);
+	for (const version of ["0.3.3", "0.4.0", "0.4.1"]) assert.deepEqual(hostsFor(version), ["1.1.0"]);
+	assert.deepEqual(releasePiVersions({ supportedPi: PRIMARY_PI_VERSION, supportedPiVersions: SUPPORTED_PI_VERSIONS }), SUPPORTED_PI_VERSIONS);
+	for (const build of [
+		undefined, {}, { supportedPiVersions: [] }, { supportedPi: "1.2.0", supportedPiVersions: ["1.1.0", "1.2.0"] },
+		{ supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.2.0"] }, { supportedPi: "1.4.0" }, { supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.0.4"] },
+	]) assert.throws(() => releasePiVersions(build));
+});
+
+test("versions order numerically, previews precede their release, and later releases are strict", () => {
+	assert.equal(compareReleaseVersions("0.4.10", "0.4.9"), 1);
+	assert.equal(compareReleaseVersions("0.4.0-preview.1", "0.4.0"), -1);
+	assert.equal(compareReleaseVersions("0.4.0-preview.2", "0.4.0-preview.10"), -1);
+	assert.equal(compareReleaseVersions("0.4.2", "0.4.2"), 0);
+	for (const version of STRICT_RELEASES) {
+		assert.equal(isStrictRelease(version), true, version);
+		assert.equal(scenarioProfile(version), "strict", version);
+	}
+	assert.equal(scenarioProfile(VERSION), PROFILE);
+	for (const version of ["0.3.1", "0.3.3"]) assert.equal(scenarioProfile(version), null, version);
+});
+
+test("acceptance floors grow with each cross-version host and cross-version names stay exact", () => {
+	assert.equal(minimumAcceptanceChecks("0.4.1"), 26);
+	assert.equal(minimumAcceptanceChecks("0.4.2", 1), 30);
+	assert.equal(minimumAcceptanceChecks("0.4.2"), 28);
+	assert.equal(minimumAcceptanceChecks("0.4.3", 2), 32);
+	assert.deepEqual(crossVersionChecks(["1.2.0", "1.1.0"]).map((check) => [check.older, check.primary]), [[
+		"compatible official Pi 1.1.0 reopens and compacts the primary host checkpoint",
+		["primary host reopens the Pi 1.1.0 checkpoint", "primary host reopens the compatible host checkpoint"],
+	]]);
+	assert.deepEqual(crossVersionChecks(["1.3.0", "1.2.0", "1.1.0"]).map((check) => check.primary), [["primary host reopens the Pi 1.2.0 checkpoint"], ["primary host reopens the Pi 1.1.0 checkpoint"]]);
+	assert.deepEqual([["1.1.0"], ["1.2.0", "1.1.0"], ["1.3.0", "1.2.0", "1.1.0"]].map(hostList), ["1.1.0", "1.2.0 and 1.1.0", "1.3.0, 1.2.0 and 1.1.0"]);
 });
 
 test("local preparation can use Unreleased without authorizing publication from it", () => {
@@ -99,10 +166,11 @@ test("main CI requires strict scenarios without removing other gates", () => {
 	const document = parseDocument(readFileSync(new URL("../.github/workflows/context-memory.yml", import.meta.url), "utf8"));
 	assert.deepEqual(document.errors, []);
 	const runs = document.toJS().jobs.verify.steps.flatMap((step) => step.run ? [step.run] : []);
-	assert(runs.some((run) => run.includes("--version 1.2.0")));
-	assert(runs.some((run) => run.includes("--version 1.1.0")));
+	assert(runs.some((run) => run.includes("context-memory-preview-release-checks.mjs --plan")));
+	assert(runs.some((run) => run.includes("for host in $PLAN_HOSTS") && run.includes("context-memory-preview-stock-install.mjs")));
 	assert(runs.some((run) => run.includes("--compatible-stock-root")));
-	assert(runs.some((run) => run.includes("context-memory-preview-acceptance-1.1.0")));
+	assert(runs.some((run) => run.includes("context-memory-preview-acceptance-$host")));
+	assert(!runs.some((run) => /--version 1\.|acceptance-1\.\d/.test(run)), "Main CI must read its hosts from the candidate");
 	assert(runs.some((run) => run.includes("context-memory-preview-scenarios.mjs") && run.includes("--acceptance-profile strict")));
 	assert(!runs.some((run) => run.includes(`--acceptance-profile ${PROFILE}`)));
 	for (const required of ["context-memory-check.mjs", "security-regression-check.mjs", "context-memory-preview-acceptance.mjs", "context-memory-preview-release.mjs --prepare", "eval/check.mjs"]) {
@@ -150,7 +218,7 @@ test("manual verification cannot replace the final main push verification", () =
 });
 
 const repository = "youxi-huang/pi-context-compaction";
-const noteOptions = { repository, packageTag: "extension-v0.3.3", branch: "extension-preview" };
+const noteOptions = { repository, packageTag: "extension-v0.3.3", branch: "extension-preview", hosts: hostsFor("0.3.3") };
 const scenarioAcceptance = { profile: PROFILE, version: VERSION, accepted: true, rawPassed: false, exceptions: [
 	{ id: "long-session-overhead/per-request-budget", status: "known-gap", criterion: "per-request-budget", pi: "1.1.0" },
 	{ id: "long-session-overhead/bounded-growth", status: "fail", criterion: "checkpoint-overhead-growth-required", pi: "1.1.0" },
@@ -196,7 +264,7 @@ test("functional-preview notes require the authorized profile and every raw-exce
 
 for (const version of STRICT_RELEASES) test(`v${version} notes describe both opt-in arms, threshold compaction and strict exact-package evidence`, () => {
 	const acceptance = { profile: "strict", version, accepted: true, rawPassed: true, exceptions: [] };
-	const options = { ...noteOptions, tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic.", scenarioAcceptance: acceptance };
+	const options = { ...noteOptions, hosts: hostsFor(version), tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic.", scenarioAcceptance: acceptance };
 	const generated = releaseNotes(options);
 	assert.doesNotThrow(() => assertReleaseNotes(generated, options));
 	assert.match(generated, /two arms, both \*\*disabled by default\*\*/);
@@ -205,7 +273,10 @@ for (const version of STRICT_RELEASES) test(`v${version} notes describe both opt
 	assert.match(generated, /Pi's threshold compaction after completed text turns/);
 	assert.match(generated, /overflow recovery still requires explicit \/compact/);
 	assert.match(generated, /strict acceptance and no performance exceptions or known gaps/);
-	if (version === "0.4.2") assert.match(generated, /unmodified official Pi 1\.2\.0 and 1\.1\.0/);
+	if (version === "0.4.2") assert.match(generated, /unmodified official Pi 1\.2\.0 and 1\.1\.0\*\*/);
+	assert(generated.includes(`unmodified official Pi ${hostList(hostsFor(version))}**`));
+	assert(generated.includes(`scenario suite on Pi ${hostsFor(version)[0]} with`));
+	assert.throws(() => assertReleaseNotes(generated, { ...options, hosts: ["1.4.0"] }), /every accepted official host/);
 	assert.doesNotMatch(generated, /A-stage|B.*incomplete and deferred|automatic compaction is cancelled/);
 	if (version === "0.4.1") assert.match(generated, /its build fingerprint changes with the one-line note fold/);
 	else assert.match(generated, /Resident runtime keeps its v0\.3\.0 fingerprint/);
@@ -216,7 +287,7 @@ for (const version of STRICT_RELEASES) test(`v${version} notes describe both opt
 
 for (const version of STRICT_RELEASES) test(`v${version} cannot reuse preview waivers, another package's acceptance or failed raw gates`, () => {
 	const accepted = { profile: "strict", version, accepted: true, rawPassed: true, exceptions: [] };
-	const options = { ...noteOptions, tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic." };
+	const options = { ...noteOptions, hosts: hostsFor(version), tag: `v${version}`, packageTag: `extension-v${version}`, sourceCommit, build: "stock-preview+src.0000000000000000", acceptanceChecks: 27, changes: "Synthetic." };
 	const other = STRICT_RELEASES.find((entry) => entry !== version);
 	for (const invalid of [undefined, scenarioAcceptance, { ...accepted, version: "0.3.3" }, { ...accepted, version: other }, { ...accepted, profile: PROFILE }, { ...accepted, accepted: false }, { ...accepted, rawPassed: false }, { ...accepted, exceptions: scenarioAcceptance.exceptions }]) {
 		assert.throws(() => releaseNotes({ ...options, scenarioAcceptance: invalid }));

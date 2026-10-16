@@ -78,9 +78,9 @@ function rawCheck(report, id) {
 	throw new Error(`Missing synthetic assertion ${id}`);
 }
 
-function publication(report, profile = PROFILE, expected = candidate) {
+function publication(report, profile = PROFILE, expected = candidate, host) {
 	report.acceptance = gradeScenarioAcceptance(report, profile);
-	return assertScenarioAcceptance(report, { profile, candidate: expected });
+	return assertScenarioAcceptance(report, { profile, candidate: expected, ...(host === undefined ? {} : { host }) });
 }
 
 test("reviewed full case matrix matches the current scenario runner", () => {
@@ -122,7 +122,7 @@ test("strict grading retains the existing probe behavior and never adopts the ex
 	assert.equal(gradeScenarioAcceptance({ passed: true }).accepted, true);
 	assert.equal(gradeScenarioAcceptance({ passed: false }).accepted, false);
 	assert.equal(gradeScenarioAcceptance(fixture()).accepted, false);
-	assert.throws(() => publication(fixture(), "strict"), /strict scenario checks failed/);
+	assert.throws(() => publication(fixture(), "strict", candidate, "1.1.0"), /strict scenario checks failed/);
 	const partial = fixture();
 	partial.scope.only = "long-session-overhead";
 	partial.cases = partial.cases.filter((result) => result.case === "long-session-overhead");
@@ -150,7 +150,7 @@ test("unknown profiles are denied before workers and during grading/publication"
 test("both profiles accept genuinely required all-pass reports without stale known gaps", () => {
 	for (const profile of ["strict", PROFILE]) {
 		const report = fixture({ allPass: true });
-		const grade = publication(report, profile);
+		const grade = publication(report, profile, candidate, "1.1.0");
 		assert.equal(grade.accepted, true);
 		assert.equal(grade.rawPassed, true);
 		assert.deepEqual(grade.exceptions, []);
@@ -241,7 +241,7 @@ test("strict publication validates full raw evidence even when the probe passed 
 		corruptions.find(([name]) => name === label)[1](strict);
 		strict.passed = true;
 		assert.equal(gradeScenarioAcceptance(strict).accepted, true);
-		assert.throws(() => publication(strict, "strict"), label);
+		assert.throws(() => publication(strict, "strict", candidate, "1.1.0"), label);
 	}
 });
 
@@ -280,17 +280,27 @@ test("candidate hash syntax and build/source consistency cannot be bypassed", ()
 	}
 });
 
-test("v0.4.2 publication requires the full Pi 1.2.0 scenario evidence", () => {
-	const report = fixture({ allPass: true });
-	report.candidate.version = "0.4.2";
-	const expected = { ...report.candidate };
-	assert.throws(() => publication(report, "strict", expected), /reviewed official Pi version/);
-	for (const result of report.cases) if (result.case !== "other-pi-version") result.pi = "1.2.0";
-	regradeRaw(report);
-	assert.doesNotThrow(() => publication(report, "strict", expected));
-	report.cases[0].pi = "1.2.1";
-	regradeRaw(report);
-	assert.throws(() => publication(report, "strict", expected), /reviewed official Pi version/);
+test("strict publication requires the full scenario evidence on the candidate's primary host", () => {
+	for (const [version, host] of [["0.4.2", "1.2.0"], ["0.4.3", "1.3.0"]]) {
+		const report = fixture({ allPass: true });
+		report.candidate.version = version;
+		const expected = { ...report.candidate };
+		assert.throws(() => publication(report, "strict", expected, host), /reviewed official Pi version/);
+		for (const result of report.cases) if (result.case !== "other-pi-version") result.pi = host;
+		regradeRaw(report);
+		assert.doesNotThrow(() => publication(report, "strict", expected, host));
+		assert.throws(() => publication(report, "strict", expected), /primary official Pi version/);
+		assert.throws(() => publication(report, "strict", expected, "1.0.4"), /primary official Pi version/);
+		report.cases[0].pi = `${host}1`;
+		regradeRaw(report);
+		assert.throws(() => publication(report, "strict", expected, host), /reviewed official Pi version/);
+	}
+});
+
+test("the functional profile cannot be re-pointed at another host", () => {
+	const report = fixture();
+	report.acceptance = gradeScenarioAcceptance(report, PROFILE);
+	assert.throws(() => assertScenarioAcceptance(report, { profile: PROFILE, candidate, host: "1.2.0" }), /authorized only on official Pi 1\.1\.0/);
 });
 
 test("publication recomputes acceptance rather than trusting a recorded approval", () => {

@@ -8,7 +8,9 @@ Pi Context Compaction explores a more traceable handover for [Pi](https://github
 
 The goal is **continuity with a route back to the source**, not perfect memory.
 
-**Current release:** [v0.4.2](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.2) is an **independent extension preview** for unmodified official **Pi 1.2.0 and 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
+**Current release:** [v0.4.3](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.3) is an **independent extension preview** for unmodified official **Pi 1.3.0, 1.2.0 and 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
+
+**Before updating Pi:** check that the preview lists the new version. On an unlisted Pi, a session the preview already protects stays blocked until it is reopened with a listed version; see [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
 
 Two optional experiments are **off by default**: A prepares with the configured writer, and B uses data-only work notes from the session model. Both retain the checkpoint commit checks; B carries covered user messages in full or falls back to the writer. Sources are validated in full at trust boundaries, with incremental request checks between them. Synthetic A/B results show the paths and their costs; real-provider pause, cost and recovery benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the [v0.4.0 scope and evidence](docs/context-memory/v0.4.0-release.md) and the [v0.4.1 changes](CHANGELOG.md).
 
@@ -23,21 +25,21 @@ Two optional experiments are **off by default**: A prepares with the configured 
 
 You need:
 
-- Official [Pi](https://github.com/earendil-works/pi) **1.2.0 or 1.1.0**, already installed and working with your chosen model.
+- Official [Pi](https://github.com/earendil-works/pi) **1.3.0, 1.2.0 or 1.1.0**, already installed and working with your chosen model.
 - **Node.js 22.19 or newer**.
 - macOS or Linux. Windows has not been validated.
 
 Install the pinned package from your terminal:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.3
 ```
 
 Preparation and work notes remain off until explicitly configured. The [extension guide](docs/context-memory/extension-preview.md) describes their limits and configuration.
 
 That is the whole installation. You don't need to clone this repository, rebuild Pi or configure a second model. Restart Pi afterwards.
 
-**Why `extension-v0.4.2` and not `v0.4.2`?** They are different Git tags. `extension-v0.4.2` holds the small installable package. `v0.4.2` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
+**Why `extension-v0.4.3` and not `v0.4.3`?** They are different Git tags. `extension-v0.4.3` holds the small installable package. `v0.4.3` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
 
 The extension does not replace Pi's executable or copy its credentials. Authentication stays in Pi's own configuration.
 
@@ -106,9 +108,9 @@ The [architecture](docs/context-memory/architecture.md) covers the note format, 
 
 The scope is deliberately narrow, so that its behavior can be tested and explained.
 
-**Supported in v0.4.2**
+**Supported in v0.4.3**
 
-- Official Pi **1.2.0 or 1.1.0**, with the extension installed independently of Pi.
+- Official Pi **1.3.0, 1.2.0 or 1.1.0**, with the extension installed independently of Pi.
 - Persistent, text-only sessions, either new or already handled by this preview, with one Pi process writing each session.
 - Manual `/compact` and Pi's threshold compaction after a completed text turn, followed by source-linked history retrieval on the same branch.
 - Optional same-writer preparation (A) and data-only session-model work notes (B), both off by default, with a journal of writer calls and validated prefix commits.
@@ -120,7 +122,7 @@ The scope is deliberately narrow, so that its behavior can be tested and explain
 
 - Compaction during unfinished turns and automatic overflow recovery; sessions with images or other attachments; in-memory sessions (`--no-session`); unfinished tool rounds.
 - Migration of native Pi or resident-build checkpoints; parent-history grants; memory across sessions.
-- Concurrent writers, competing compactors, other context-rewriting extensions, or any Pi version outside 1.2.0 and 1.1.0.
+- Concurrent writers, competing compactors, other context-rewriting extensions, or any Pi version outside 1.3.0, 1.2.0 and 1.1.0.
 - Windows, long-running real-provider reliability, and recovery quality with real models.
 
 What happens in an unsupported session depends on whether the preview already protects it. A session becomes **protected** once the preview has written a checkpoint for it or recorded a pending or failed attempt. A session it never protected and cannot check is left to Pi, as described above. A protected session that later gains an image or a checkpoint from another compactor, or is opened on an unsupported Pi version, keeps its **requests blocked** rather than fall back to Pi's native compactor; continue that work in a new text session and keep the old file.
@@ -144,7 +146,7 @@ A protected session that gained old checkpoints from another compactor, image co
 
 Pi records one source per package repository. Installing the same repository with a different tag or branch **replaces** the recorded source; it never adds a second copy. Restart Pi after any install or update.
 
-The installation above is **pinned** to `extension-v0.4.2` and stays there until you install a different package tag.
+The installation above is **pinned** to `extension-v0.4.3` and stays there until you install a different package tag.
 
 To follow later previews automatically instead, install the **moving `extension-preview` branch**, which replaces the pinned tag:
 
@@ -158,7 +160,7 @@ To update only this package when you follow the branch:
 pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
 ```
 
-A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.4.2 targets Pi 1.2.0 and 1.1.0, so check the supported version before updating Pi.
+A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.4.3 targets Pi 1.3.0, 1.2.0 and 1.1.0, so check the supported version [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
 
 To remove the package, whichever tag or branch you installed:
 
@@ -168,21 +170,21 @@ pi remove git:github.com/youxi-huang/pi-context-compaction
 
 Updating or removing the package does not migrate, rewrite or delete sessions, and it leaves other packages and Pi's credentials alone.
 
-The [v0.4.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.2) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
+The [v0.4.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.3) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
 
 ## What has been tested
 
-The project publishes failures and limits next to the passing checks. v0.4.2 requires these gates on the final source and package:
+The project publishes failures and limits next to the passing checks. v0.4.3 requires these gates on the final source and package:
 
 | Evidence | Scope |
 | --- | --- |
 | Focused script, resident and preview regressions | `context-memory-check.mjs`, including preparation, call accounting, persistence and user-message retention |
 | Host security and compatibility checks | `security-regression-check.mjs`, with synthetic inputs and mocked providers |
 | Frozen offline evaluator | `eval/check.mjs`, scripted evaluation separate from the preview |
-| Stock-Pi package and lifecycle acceptance | Install, update, removal, the read-only self-check, checkpoint validation, failure and recovery on isolated official Pi 1.2.0 and 1.1.0, including cross-version checkpoints |
-| Full default-settings scenarios, strict profile | Pi 1.2.0 stock controls, Pi 1.0.4 refusal, A and B paths, and both long-session overhead checks; no performance waiver or known gap |
+| Stock-Pi package and lifecycle acceptance | Install, update, removal, the read-only self-check, checkpoint validation, failure and recovery on isolated official Pi 1.3.0, 1.2.0 and 1.1.0, including cross-version checkpoints |
+| Full default-settings scenarios, strict profile | Pi 1.3.0 stock controls, Pi 1.0.4 refusal, A and B paths, and both long-session overhead checks; no performance waiver or known gap |
 
-None of this shows better recovery than native Pi. The preview's acceptance and scenario runs use isolated synthetic and loopback services; they say nothing about real-provider latency, interactive TUI behavior or everyday robustness. Earlier live results belong to the resident build and are not preview results.
+None of this shows better recovery than native Pi. The preview's acceptance and scenario runs use isolated synthetic and loopback services; they say nothing about real-provider latency, interactive TUI behavior or everyday robustness. Earlier live results belong to the resident build. One bounded provider run of the v0.4.3 candidate is recorded separately: one task on Pi 1.3.0 with DeepSeek V4.1 Flash, where the first checkpoint was refused for a misquoted source, its retry and the second checkpoint committed, and both continuation checks passed. One run measures neither a failure rate nor a benefit over native Pi.
 
 The [validation record](docs/context-memory/validation.md) has the scenarios, methods, failed attempts and measured costs. The [roadmap](docs/context-memory/roadmap.md) says what remains open, and the [changelog](CHANGELOG.md) lists each release.
 

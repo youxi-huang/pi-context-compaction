@@ -1,10 +1,10 @@
-# Independent extension preview — v0.4.2
+# Independent extension preview — v0.4.3
 
-This extension runs on unmodified official Pi **1.2.0 and 1.1.0** as an ordinary Pi package. v0.4.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.4.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.4.2 supports manual and completed-turn threshold compaction.** Optional
+**v0.4.3 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -18,10 +18,10 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 
 ## Install, update and remove
 
-Official Pi 1.2.0 and 1.1.0 users can install the pinned package:
+Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.4.3
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,8 +41,18 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.4.2
-preview supports Pi 1.2.0 and 1.1.0.
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.4.3
+preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
+
+### Before updating Pi
+
+Check that the installed preview lists the new Pi version first; v0.4.3 lists
+1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
+Pi's own compaction, but a session it protects stays blocked: requests stop and
+a failure record is written, because the preview cannot check its checkpoints
+on that host. To continue such a session, reopen it with a listed Pi version
+and run `/compact` there, or keep the file and continue in a new session.
+`/compaction-doctor` shows which case applies.
 
 Remove the package, whichever tag or branch is installed:
 
@@ -54,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.4.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.2)
+The [v0.4.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.3)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -73,7 +83,12 @@ extensions, the preview shows one short line saying it is active. Then run:
 
 It prints a short checklist: extension loaded, host version, session support,
 writer, manual `/compact` eligibility and any durable block. It calls no model,
-writes no failure record and does not change the session. Because Pi's own
+writes no failure record and does not change the session. After a failed
+attempt, the manual `/compact` line says which way out applies: `retry` when a
+new `/compact` replaces the failed attempt, with `/compaction-recover` named
+first when Pi already saved the staged checkpoint; `blocked` only when
+`/compact` cannot help in this session, as with an unsupported host or content,
+an unreadable configuration or an unavailable writer. Because Pi's own
 compaction settings are not visible to extensions, it reports Pi's side of
 `/compact` eligibility as `unknown` instead of guessing; `Result: ready` means
 nothing is blocking requests, not that Pi will accept `/compact` yet.
@@ -81,7 +96,10 @@ nothing is blocking requests, not that Pi will accept `/compact` yet.
 `/compaction-status` prints the same findings as JSON. It keeps the fields of
 earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
 `reason` and `manualCompaction`; a pending attempt reads `pending` rather than
-`blocked`.
+`blocked`. `manualCompaction.preview` is `ready`, `retry`, `waiting-for-turn`,
+`blocked` or `not-active`, and `manualCompaction.recover` says whether
+`/compaction-recover` has a saved checkpoint to confirm. `lastWriter` and
+`lastCompaction` describe the current session only.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -97,13 +115,13 @@ The preview distinguishes three kinds of session:
 - **Protected:** the session has a checkpoint written by this preview, or a
   pending or failed attempt recorded by it. Every check below is strict, and a
   failure is recorded durably.
-- **Eligible:** a persistent, text-only session on Pi 1.2.0 or 1.1.0 with no
+- **Eligible:** a persistent, text-only session on Pi 1.3.0, 1.2.0 or 1.1.0 with no
   checkpoint from another compactor. The preview handles its compaction: Pi's
   threshold compaction after a completed turn and `/compact` both write a
   checked checkpoint, and overflow recovery is cancelled until `/compact`. The
   first attempt, or a cancelled overflow recovery, makes it protected.
 - **Not protected:** a session the preview has never protected and cannot
-  check: Pi outside 1.2.0 and 1.1.0, an in-memory session, a native or other
+  check: Pi outside 1.3.0, 1.2.0 and 1.1.0, an in-memory session, a native or other
   compactor's checkpoint, an image or other non-text content, or an
   unsupported context edit. The preview stands aside. It writes no failure
   record, does not stop requests, leaves manual and automatic compaction and
@@ -377,43 +395,58 @@ that official Pi first:
 
 ```sh
 node scripts/context-memory-preview-stock-install.mjs \
-  --stock-root ./.artifacts/context-memory-preview-stock --version 1.2.0
+  --stock-root ./.artifacts/context-memory-preview-stock --version 1.3.0
 ```
 
-The installer pins all seven official runtime packages for Pi 1.2.0, or all eight
-for older hosts that require `chord`, to the same release. npm verifies download
+The installer pins all seven official runtime packages for Pi 1.3.0 and 1.2.0,
+or all eight for 1.1.0 and 1.0.4, which still require `chord`, to the same
+release. A newer host that still depended on `chord` would fail the installer's
+dependency review rather than receive it silently. npm verifies download
 integrity; the installer checks registry provenance, exact versions and isolated
 resolution, then starts the SDK with networking blocked. Unused manifest and
 lockfile SHA-256 report fields are omitted.
-Installing only `pi-coding-agent@1.2.0` lets its caret dependencies select a newer
-Pi cohort and can fail at SDK startup. No official package source is patched.
+Installing only `pi-coding-agent` at 1.2.0 or earlier lets its caret
+dependencies select a newer Pi cohort and can fail at SDK startup. No official package source is patched.
 An existing coherent installation skips npm; `--check` verifies it without
 installing. The JSON report lists each runtime package's version and integrity.
 
-Install the supported older host for the same-package and cross-version checks:
+Install each older supported host for the same-package and cross-version
+checks:
 
 ```sh
+node scripts/context-memory-preview-stock-install.mjs \
+  --stock-root ./.artifacts/context-memory-preview-stock-1.2.0 --version 1.2.0
 node scripts/context-memory-preview-stock-install.mjs \
   --stock-root ./.artifacts/context-memory-preview-stock-1.1.0 --version 1.1.0
 ```
 
-Then run acceptance on both hosts. The first command also writes a checkpoint,
-reopens and compacts it on 1.1.0, then reopens it on 1.2.0:
+Then run acceptance on every host. The first command also writes a checkpoint,
+compacts it on each older host in turn and reopens it on 1.3.0 after each:
 
 ```sh
 node scripts/context-memory-preview-acceptance.mjs \
   --package-dir ./.artifacts/context-memory-preview-package \
   --stock-root ./.artifacts/context-memory-preview-stock \
+  --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.2.0 \
   --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.1.0 \
   --output-dir ./.artifacts/context-memory-preview-acceptance
 ```
 
 ```sh
-node scripts/context-memory-preview-acceptance.mjs \
-  --package-dir ./.artifacts/context-memory-preview-package \
-  --stock-root ./.artifacts/context-memory-preview-stock-1.1.0 \
-  --output-dir ./.artifacts/context-memory-preview-acceptance-1.1.0
+for host in 1.2.0 1.1.0; do
+  node scripts/context-memory-preview-acceptance.mjs \
+    --package-dir ./.artifacts/context-memory-preview-package \
+    --stock-root ./.artifacts/context-memory-preview-stock-$host \
+    --output-dir ./.artifacts/context-memory-preview-acceptance-$host
+done
 ```
+
+CI and publication take this host list from the candidate's own
+`preview-build.json`, printed by
+`node scripts/context-memory-preview-release-checks.mjs --plan ./.artifacts/context-memory-preview-package`,
+and `node scripts/context-memory-ops.mjs preview` runs the same sequence. Adding
+a host to `compatibility.ts` therefore adds it to every check, and a host
+without a reviewed installation cohort stops the plan.
 
 This is deterministic protocol and lifecycle verification. It does not measure
 real-provider compatibility, semantic recovery quality, compaction latency or
@@ -461,8 +494,8 @@ CodeQL checks on the final main commit. Push a new immutable `v<version>`
 source tag to that commit. The **Publish extension preview** workflow verifies
 those checks, rebuilds and tests the package on official Pi, creates the matching
 `extension-v<version>` package tag, updates `extension-preview` without a force
-push, and publishes a pre-release after all assets are uploaded. v0.4.0,
-v0.4.1 and v0.4.2 also rerun the complete strict scenario suite and bind its content-free evidence
+push, and publishes a pre-release after all assets are uploaded. Every release
+since v0.4.0 also reruns the complete strict scenario suite and binds its content-free evidence
 to the final artifact; the earlier A-preview exception applies only to
 v0.4.0-preview.1. Existing public
 assets and tags are never overwritten. The resident runtime keeps release

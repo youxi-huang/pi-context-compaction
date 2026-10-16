@@ -6,8 +6,23 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.4.3] — 2026-10-16
+
+v0.4.3 adds official Pi 1.3.0 to the independent extension as its primary host, while retaining Pi 1.2.0, Pi 1.1.0 and existing checkpoints. `/compaction-doctor` now tells a failure that a new `/compact` can clear from one it cannot, and publication reads its host list from the candidate itself. Both optional preparation paths remain disabled by default. One bounded real-provider run on Pi 1.3.0 with DeepSeek V4.1 Flash is in the validation record: two checkpoints, the first after one refused note, and both continuation checks passed. It covers one task and is not a quality or cost comparison.
+
+### Added
+
+- The independent preview supports official Pi 1.3.0 alongside 1.2.0 and 1.1.0, with 1.3.0 as the primary host in `supportedHost`. The extension API declarations Pi 1.3.0 exposes to extensions are unchanged from 1.2.0; stock-Pi acceptance runs on all three hosts, and a checkpoint written on 1.3.0 is compacted on each older host and reopened on 1.3.0. On an unlisted Pi version a protected session still stays blocked, which the preview guide now explains before an update.
+
+### Fixed
+
+- `/compaction-doctor` no longer reports manual `/compact` as blocked when a new `/compact` is the way out. After a retryable failure it reports `retry`, names `/compaction-recover` first when Pi already saved the staged checkpoint, and keeps `blocked` for what `/compact` cannot clear in the session: an unsupported host or content, an unreadable configuration or an unavailable writer. With an unavailable writer the result line no longer suggests running `/compact` later. `/compaction-status` adds `manualCompaction.recover`, and `manualCompaction.preview` can read `retry`.
+- `/compaction-status` keeps `lastWriter` and `lastCompaction` per session, like every other state in the controller. Pi's CLI starts a new extension instance for each session, so only an SDK host that reuses one loaded extension across sessions could see another session's metrics.
+- The configuration guide described the preview as compacting only on request, and the roadmap still named v0.4.0 as the current preview.
+
 ### Maintenance
 
+- Publication, CI and `context-memory-ops.mjs preview` read the supported hosts from the candidate's own `preview-build.json` through `context-memory-preview-release-checks.mjs --plan`, and run acceptance on every host with cross-version checkpoints for each older one. The publication workflow previously selected the compatible host, the scenario suite and the acceptance floor by comparing the version with `0.4.2`; a new version would have published without the strict scenario suite and with a floor of 26 checks unless every literal was updated. Every release after v0.4.0-preview.1 now requires strict scenarios without a list entry, the floor grows by two checks per older host, and a retried historical tag keeps the host contract recorded in its own metadata. The official installer adds Pi 1.3.0 and installs `chord` only for 1.1.0 and 1.0.4, which still depend on it.
 - Tighten the agent instructions shared by Claude Code and Codex. `AGENTS.md` sends builds through the operations script, now states the publication triggers and the two maintainer gates, keeps one copy of each repository-wide rule, and says when to open the documents agents most often need. Two superseded design records move to `docs/context-memory/archive/`.
 
 ## [v0.4.2] — 2026-10-15

@@ -1,5 +1,128 @@
 # Validation record
 
+## v0.4.3: bounded provider run on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It
+used the preview candidate `stock-preview+src.6d21d37d4e59aefe`, built from
+`06f1f0e` (preview sources identical to `11bdae6`), loaded as an ordinary package
+into official Pi 1.3.0 from `context-memory-preview-stock-install.mjs` (exit 0).
+The package was copied outside any Node project and Pi ran with its own isolated
+agent directory. The session model and default writer was `deepseek/deepseek-flash`
+(DeepSeek V4.1 Flash in Pi's catalog), at Pi's default thinking level `high`.
+Pi's settings stayed at their defaults; compaction was manual, since the
+threshold for a 1M window lies far beyond a bounded trial. A local script drove Pi through
+its RPC mode with the model's `bash` tool excluded. The API key stayed in the
+environment's network proxy; Pi received only a placeholder. The user confirmed
+a budget of 60 model requests and 45 minutes before the first request.
+
+The planned model, `opencode/deepseek-v4.1-flash-free`, was refused first. One
+request through Pi and two plain `curl` requests, to `/inference/v1` and
+`/inference/openai/v1`, each returned HTTP 403 `FreeTierError`: OpenCode's free
+tier serves only its own client. No other client identity was tried.
+
+The task was a synthetic stock-report workspace. The first half set ground rules
+(leave `vendor/` unchanged, write generated files under `out/`, add no
+dependencies, low-stock threshold 10), a decision with its reason, a later
+correction of the threshold to 15, three long reads of 35 to 73 KB paged in full
+and a stated next step. The second half added an output-format decision, a due
+date corrected from Friday to Thursday, an implementation step, two more long
+reads and a new next step. Both checks forbade reading workspace files and
+allowed `context_history`.
+
+| Step | Result |
+| --- | --- |
+| First half, five user turns | 22 requests; about 107,669 estimated context tokens |
+| First `/compact` | Failed with `CONTEXT_NOTE_QUOTE` after one writer call (19.0 s, 101,284 input and 3,746 output tokens, 1,690 of them reasoning). No checkpoint; the session became protected and blocked. The next prompt was aborted before any provider request, with one notice per input |
+| `/compaction-doctor` after restarting Pi | `retry`; durable block `CONTEXT_NOTE_QUOTE`, kept across the restart |
+| Retried `/compact` | Committed, one writer call; stage 15.2 s, disk confirmed, pause 15.2 s. Pi reported 107,669 to about 4,385 estimated tokens; 97,152 of the writer's 101,928 input tokens were cache reads |
+| Check 1, five questions | 5 of 5 correct: ground rules, decision and reason, threshold 15, the log's error code, timestamp and SKU, next step. 2 requests, 5 `context_history` calls, 4.3 s |
+| Second half after restarting Pi, five user turns | 20 requests; about 64,916 estimated context tokens |
+| Second `/compact` | Committed on the first attempt, one writer call; stage 20.2 s, disk confirmed, pause 20.2 s; about 4,499 estimated tokens after |
+| Check 2 after restarting Pi, nine questions | 9 of 9 correct across both halves, including Thursday, the JSONL decision and its reason, and both log findings. 3 requests, 11 `context_history` calls, 10.0 s |
+
+The run made 51 provider requests: 48 main-model requests, including a one-word
+probe, and 3 writer calls. It took 6 minutes 15 seconds from the probe to the
+last answer. Main-model requests used 171,056 uncached input, 2,147,712 cache-read
+and 22,827 output tokens; writer calls used 172,520 uncached input, 98,176
+cache-read and 11,031 output tokens. At Pi's catalog prices that is about $0.16;
+the account balance reported by DeepSeek fell by ¥0.56 during the run, at
+peak-hour rates. Neither figure is an invoice.
+
+The model wrote `context_note` entries on its own in most turns. Four were
+rejected at the tool, two by schema validation and two with
+`CONTEXT_NOTE_QUOTE`, and it continued after each. Compared with a freshly
+generated copy, the workspace changed only by `out/plan.md` and the requested
+edit to `src/report.js`; `vendor/` was untouched.
+
+This is one task, one model and one run. It shows that the documented failure
+and retry path works on a real provider and that two checkpoints carried this
+task's facts. It does not measure a failure rate, compare against native Pi
+compaction or separate what the checkpoint carried from what `context_history`
+retrieved. The first writer's failure is the same class as the second writer's
+in the [0.3 bounded live validation](#03-measurement-bounded-live-validation-2026-09-22-utc),
+on a different model and runtime. Shell tools, threshold compaction and
+preparation were not exercised. Session files, notes and logs stayed on the
+local machine.
+
+## v0.4.3: Pi 1.3.0, doctor recovery states and host-driven release tooling, 2026-10-16 UTC
+
+The independent extension lists official Pi 1.3.0, 1.2.0 and 1.1.0, with 1.3.0
+as the primary host. The tested candidate is `stock-preview+src.6d21d37d4e59aefe`
+at clean commit `11bdae6`; the package version stays 0.4.2 until the maintainer
+releases, so the locally prepared notes still name v0.4.2. The resident source,
+build fingerprint, model-data pin, frozen evaluator pin, checkpoint schema and
+source-hash format are unchanged.
+
+The release commit `86f24f6` sets the package version to 0.4.3 and leaves the
+candidate's build ID unchanged. `context-memory-ops.mjs preview` on that clean
+commit exited 0: fingerprint unchanged, acceptance 32/32, 28/28 and 28/28 on Pi
+1.3.0, 1.2.0 and 1.1.0, strict scenarios 145 passed with no gaps, release checks
+31 passed, and `--prepare` produced 0.4.3 archives. `verify` and the full
+offline evaluation were not rerun locally for this commit; CI runs them.
+
+Pi 1.3.0 was published on 2026-10-15. Its `core/extensions/types.d.ts` and
+`core/session-manager.d.ts` are byte-identical to 1.2.0, and the public index
+adds only `formatReadLineRange`. Its runtime dependencies drop `chord`, as 1.2.0
+did, and pin internal packages exactly. Publication, CI and the ops pipeline now
+read the host list from the candidate's `preview-build.json` through
+`context-memory-preview-release-checks.mjs --plan`.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 0; resident fingerprint unchanged; 120 script and 334 runtime checks; security regression suites 107, 240, 3 and 111 checks |
+| `context-memory-ops.mjs preview`, clean commit `11bdae6` | Exit 0; every step below |
+| `context-memory-preview-stock-install.mjs` for 1.3.0, 1.2.0, 1.1.0 and 1.0.4 | Exit 0 each; seven exact packages on 1.3.0 and 1.2.0, eight with `chord` on 1.1.0 and 1.0.4; network-blocked SDK import passed |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.3.0 with 1.2.0 and 1.1.0 as compatible hosts | Exit 0; 32/32, including a 1.3.0 checkpoint compacted on each older host and reopened on 1.3.0 after each |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.2.0, then 1.1.0 | Exit 0; 28/28 each on the identical package |
+| `context-memory-preview-scenarios.mjs --acceptance-profile strict`, official Pi 1.3.0 with 1.0.4 control | Exit 0; 145 passed, no gaps, failures, skips or exceptions; at 10 and 20 checkpoints (3 and 6 MB) the request overhead over the disabled control was 0 ms |
+| `node --test` release checks, stock install and acceptance profile | 31, 17 and 66 passed |
+| `context-memory-preview-release.mjs --prepare` | Exit 0; provenance lists 1.3.0, 1.2.0 and 1.1.0 with 88 stock-Pi checks (32, 28, 28) |
+| Focused preview regressions, five vitest files | 205 passed, including the doctor's retry, recover and blocked states and per-session status metrics |
+| `eval/check.mjs`, network blocked and zero model budget | Exit 0; 89 frozen offline evaluation checks |
+
+The scenario suite measures large entries rather than many entries: 20
+checkpoints are about 116 branch entries. A separate local measurement loaded
+the packaged extension into official Pi 1.3.0 and timed the four hooks one
+model request reaches (`cache_warming_decision`, `context`,
+`context_with_system`, `before_provider_request`) on eligible synthetic text
+sessions, 200 samples after warm-up:
+
+| Entries | Session | Hooks p50 / p95 | Pi projection p50 |
+| --- | --- | --- | --- |
+| 1,000 | 0.5 MB | 0.6 / 0.8 ms | 0.2 ms |
+| 5,000 | 2.5 MB | 2.3 / 3.8 ms | 0.8 ms |
+| 10,000 | 5 MB | 4.7 / 7.2 ms | 1.8 ms |
+| 20,000 | 10 MB | 14.6 / 20.3 ms | 5.9 ms |
+
+The repeated branch scans in the request classification grow with entry count
+and steepen past 10,000 entries, but stay well inside the 50 ms target, so they
+are left as they are. The figures come from one machine and in-process timing;
+protected sessions and end-to-end request latency were not measured.
+
+All provider traffic was synthetic and loopback-only. No real-provider call,
+interactive TUI or Windows check was run. GitHub CI and CodeQL have not run on
+this branch.
+
 ## v0.4.2: Pi 1.2.0 compatibility, 2026-10-15 UTC
 
 The independent extension supports exactly official Pi 1.2.0 and 1.1.0. The

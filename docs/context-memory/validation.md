@@ -102,6 +102,39 @@ One P2 probe run on the corrected candidate passed 17 of 17 in both conditions, 
 through the full writer bench or P1's probes: 702 of the 741 confirmed requests had
 been used.
 
+### Prompt cache: the bench measured a cold prefix
+
+The writer's prompt cache barely hit. Each build's writer bench sent about 1.41
+million uncached input tokens and read about 13,000 from cache. Of the 80 attempts,
+12 read nothing and 66 read exactly 384 tokens; the two that read 640 and 768
+included a repair call. In the v0.4.3 session run, 97,152 of the retried writer's
+101,928 input tokens were cache reads.
+
+The cause is the bench. Pi's system prompt ends with the working directory, and the
+bench gave every unit its own directory to keep units apart. The session writer
+reuses the session's system prompt, tools and messages so that it continues the main
+model's cached prefix; here every request diverged at the end of the system prompt,
+and the history behind it was never reused. Attempts 7 and 8 at a cut, started after
+the first six had finished on the same history, also read only 384 tokens. The zeros
+are each run's first wave, sent together before anything was cached. A session also
+warms its prefix with every main-model turn before it compacts; the generated
+sessions had none.
+
+The writer's cost and pause above are therefore those of a cold prefix and overstate
+a session's. The comparison between builds stands: both ran equally cold, and the
+cache does not change what the model writes. The quotable block sits in the closing
+handover message, after the history, so it leaves the cached prefix unchanged; that a
+session keeps its hit rate under the candidate follows from the request's layout and
+was not measured. Probes read 37% of their input from cache: 11 to 12% on questions
+answered in one round, 49% on questions with tool rounds, which reuse the previous
+round's prefix in the same process.
+
+The bench now takes `--cache warm`: one shared working directory and, before each
+cut's compactions, one request over the same history with the session's own tools,
+as a session's last turn would be. Offline, the warm-up and the writer requests
+carried the same system prompt, tools and history messages; the hit rate needs a
+provider run.
+
 ### Spend and limits
 
 The bench counted 702 provider requests in twelve runs and $2.44 at catalog prices;
@@ -113,7 +146,7 @@ figure is an invoice.
 ### What this shows
 
 On these fixtures and this model, the candidate commits more notes (39 of 40 against
-32 of 40) at about 4% more writer cost, with notes the same size and the same share
+32 of 40) at about 4% more writer cost on a cold prefix, with notes the same size and the same share
 of gold answers cited; in probe chains its accumulated notes ran 10 to 15% larger.
 Quotations found nowhere and quotations differing only in format disappeared from
 first passes; the three that remained were rebound by one repair each. The typed

@@ -25,6 +25,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
 // --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
+// --cache cold, the default, gives each unit its own working directory, which Pi's system prompt ends with, so only
+// the prompt's opening can be cached: writer cost and pause are those of a cold prefix. --cache warm shares one
+// directory and sends one request over the same history before each cut's compactions, as a session's last turn
+// would; warm-up requests count against the limits and are reported apart.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");
@@ -34,7 +38,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--cache cold|warm] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -252,7 +256,8 @@ async function worker() {
 			if (note) result.note = noteShape(note, contextBytes);
 		}
 	} else {
-		session.setActiveToolsByName(action.condition === "history" ? ["context_history"] : []);
+		// "session" keeps the session's own tools, so a warm-up request carries the writer's exact prefix.
+		if (action.condition !== "session") session.setActiveToolsByName(action.condition === "history" ? ["context_history"] : []);
 		const activeTools = session.agent.state.tools.map((tool) => tool.name);
 		const before = sessionManager.getBranch().length;
 		let rounds = 0;
@@ -320,9 +325,11 @@ async function parent() {
 	const thinking = argument("--thinking", "high");
 	const concurrency = Number(argument("--concurrency", "1"));
 	const chainAttempts = Number(argument("--chain-attempts", "4"));
+	const cache = argument("--cache", "cold");
 	const label = argument("--label", "run");
 	if (!["writer", "probes", "smoke"].includes(mode)) throw new Error("--mode must be writer, probes or smoke");
 	if (!["loopback", "deepseek"].includes(provider)) throw new Error("--provider must be loopback or deepseek");
+	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
 	const limits =
 		provider === "loopback"
 			? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
@@ -335,7 +342,7 @@ async function parent() {
 	rmSync(runDir, { recursive: true, force: true });
 	mkdirSync(runDir, { recursive: true });
 	const started = Date.now();
-	const used = { requests: 0, costUsd: 0, units: 0, unstarted: 0 };
+	const used = { requests: 0, costUsd: 0, units: 0, unstarted: 0, warmups: 0, warmupCostUsd: 0 };
 	const exhausted = () =>
 		used.requests >= limits.requests || used.costUsd >= limits.costUsd || (Date.now() - started) / 60_000 >= limits.minutes;
 	const record = (file, row) => appendFileSync(join(runDir, file), `${JSON.stringify(row)}\n`);
@@ -365,7 +372,10 @@ async function parent() {
 	async function run(action) {
 		const id = String(++sequence).padStart(4, "0");
 		const agentDir = join(runDir, "agents", id);
-		const encoded = Buffer.from(JSON.stringify({ ...action, cwd: join(runDir, "cwd", id) })).toString("base64url");
+		// Pi's system prompt ends with the working directory, so a directory per unit gives every request its own
+		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
+		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
+		const encoded = Buffer.from(JSON.stringify({ ...action, cwd })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
@@ -384,6 +394,19 @@ async function parent() {
 		if (!measured) return;
 		used.requests += result.writerCalls ?? result.rounds ?? 0;
 		used.costUsd += result.usage?.cost?.total ?? result.usage?.cost ?? 0;
+	}
+
+	/**
+	 * In a warm run, one request over a copy of `file` with the session's own tools, as the main model's last turn
+	 * would be, so that the writer's attempts at this cut find the history's prefix cached.
+	 */
+	async function warm(fixture, cut, file) {
+		if (cache !== "warm" || exhausted()) return;
+		const result = await run({ type: "probe", provider, fixture: fixture.gold.id, sessionFile: copy(file, `${fixture.gold.id}-cut${cut + 1}-warm`), condition: "session", prompt: "Reply with the single word OK.", thinking });
+		spend(result, provider !== "loopback");
+		used.warmups++;
+		used.warmupCostUsd += result.usage?.cost ?? 0;
+		record("warmups.jsonl", { fixture: fixture.gold.id, cut: cut + 1, reached: result.reached ?? false, rounds: result.rounds ?? 0, crashed: result.crashed ?? false, usage: result.usage ?? null });
 	}
 
 	async function pool(units, work) {
@@ -484,7 +507,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.
@@ -507,6 +530,7 @@ async function parent() {
 					continue;
 				}
 				const baseFile = await base(fixture, k);
+				await warm(fixture, k, baseFile);
 				await pool(
 					Array.from({ length: attempts }, (_, attempt) => attempt),
 					async (attempt) => {
@@ -568,6 +592,7 @@ async function parent() {
 					continue;
 				}
 				writeLines(file, lines);
+				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
 					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
@@ -616,7 +641,7 @@ async function parent() {
 		};
 	}
 
-	report.used = { ...used, costUsd: Number(used.costUsd.toFixed(4)), minutes: Number(((Date.now() - started) / 60_000).toFixed(1)) };
+	report.used = { ...used, costUsd: Number(used.costUsd.toFixed(4)), warmupCostUsd: Number(used.warmupCostUsd.toFixed(4)), minutes: Number(((Date.now() - started) / 60_000).toFixed(1)) };
 	writeFileSync(join(runDir, "summary.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (!args.includes("--keep-sessions")) rmSync(join(runDir, "copies"), { recursive: true, force: true });
 	rmSync(join(runDir, "cwd"), { recursive: true, force: true });

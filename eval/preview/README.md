@@ -51,6 +51,10 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | `probes` | The measured writer compacts each fixture cut after cut; a refused cut is retried, as a user retries `/compact`, up to `--chain-attempts` attempts in all (default 4), so that recall is measured on committed notes while `writer` mode measures refusals. A cut still refused blocks its probes and every later one. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites |
 
 `--provider loopback`, the default, answers locally and never contacts a model service; it checks the harness.
+`--cache cold`, the default, gives each unit its own working directory. Pi's system prompt ends with it, so only
+the prompt's opening is shared and writer cost and pause are those of a cold prefix. `--cache warm` shares one
+directory and sends one request over the same history before each cut's compactions, as a session's last turn
+would, so the writer finds its prefix cached; warm-up requests count against the limits and are reported apart.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
 `--max-cost-usd` and starts no unit once any limit is reached; with `--concurrency N`, up to N units already running

@@ -23,7 +23,7 @@ These changes are in the independent preview only. The resident runtime, its bui
 
 - `eval/preview` adds an evaluation set for the preview, separate from the frozen fixtures: two invented sessions with revisions, withdrawn work, forbidden retries and quotation traps, 47 typed probes and their scorer. `scripts/context-memory-preview-bench.mjs` runs a writer bench and the probes on official Pi, offline by default.
 - The stock-Pi scenarios check quotation repair and the typed list end to end.
-- The bench reaches a provider through Pi's proxy-aware dispatcher, retries a refused probe cut up to four attempts, and reports each committed note's size against the history it condenses and the gold answers it cites. A bounded DeepSeek run of the baseline and the candidate is in the validation record.
+- The bench reaches a provider through Pi's proxy-aware dispatcher, retries a refused probe cut up to four attempts, and reports each committed note's size against the history it condenses and the gold answers it cites. `--cache warm` measures the writer on a cached prefix, as in a session; the default measures a cold one. A bounded DeepSeek run of the baseline and the candidate is in the validation record.
 
 ## [v0.4.3] — 2026-10-16
 

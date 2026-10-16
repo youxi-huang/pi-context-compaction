@@ -26,7 +26,20 @@ import {
 	validateNote,
 	validateNoteContent,
 } from "../notes.ts";
-import { diagnoseQuotes, type QuoteCounts, quoteCounts, quoteFailureMessage } from "./quote-diagnostics.ts";
+import {
+	diagnoseQuotes,
+	type QuoteCounts,
+	type QuoteDiagnosis,
+	quoteCounts,
+	quoteFailureMessage,
+} from "./quote-diagnostics.ts";
+import {
+	applyQuoteRepair,
+	QUOTE_REPAIR_RULES,
+	type QuoteRepairOutcome,
+	quoteRepairEligible,
+	quoteRepairPrompt,
+} from "./quote-repair.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -167,6 +180,10 @@ export interface WriterProgress {
 	writerCallDetails: WriterCallRecord[];
 	/** Quotation failures of the first refused candidate, by class; counts only. */
 	quotations?: QuoteCounts;
+	/** The compaction's one repair, when it ran: for note size or for quotations. */
+	repairKind?: "size" | "quotation";
+	/** What a quotation repair changed, as counts. */
+	quotationRepair?: QuoteRepairOutcome;
 }
 
 export interface WriteMemoryResult {
@@ -304,7 +321,22 @@ function assertRepairPreserved(before: MemoryNote, after: MemoryNote): void {
 		);
 }
 
-/** Sequential chunks when fixed; one optional size-only repair across the whole operation. No model fallback. */
+/** A refused candidate whose failure includes quotations, kept for the one repair that may follow. */
+class QuotationRefusal extends Error {
+	readonly note: MemoryNote;
+	readonly diagnosis: QuoteDiagnosis;
+
+	constructor(message: string, note: MemoryNote, diagnosis: QuoteDiagnosis) {
+		super(message);
+		this.note = note;
+		this.diagnosis = diagnosis;
+	}
+}
+
+/**
+ * Sequential chunks when fixed; at most one repair across the whole operation, for quotations or for size.
+ * No model fallback.
+ */
 export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMemoryResult> {
 	if (
 		!Number.isSafeInteger(options.noteTokens) ||
@@ -328,6 +360,8 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let phase: WriterCallRecord["phase"] = "generate";
 	const calls: WriterCallRecord[] = [];
 	let quotations: QuoteCounts | undefined;
+	let repairKind: WriterProgress["repairKind"];
+	let quotationRepair: QuoteRepairOutcome | undefined;
 	const report = () =>
 		options.onProgress?.({
 			writerModel,
@@ -338,6 +372,8 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			writerCallDetails: structuredClone(calls),
 			...(usages.length ? { usage: sumMemoryUsage(usages) } : {}),
 			...(quotations ? { quotations: { ...quotations } } : {}),
+			...(repairKind ? { repairKind } : {}),
+			...(quotationRepair ? { quotationRepair: { ...quotationRepair } } : {}),
 		});
 	const complete: PreviewComplete = async (selected, context, request) => {
 		options.signal.throwIfAborted();
@@ -438,32 +474,89 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		return response!;
 	};
 	/** The validator decides; a quotation failure is classified for status and the message, never accepted. */
-	const validateCandidate = (value: unknown): MemoryNote => {
+	const validateCandidate = (value: unknown, repaired: boolean): MemoryNote => {
 		try {
 			return validateNoteContent(value, options.branch);
 		} catch (error) {
 			if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
 			// The schema check precedes every quotation check, so the value is a complete note here.
-			const counts = quoteCounts(diagnoseQuotes(value as MemoryNote, options.branch).failures);
+			const note = value as MemoryNote;
+			const diagnosis = diagnoseQuotes(note, options.branch);
+			const counts = quoteCounts(diagnosis.failures);
 			quotations ??= counts;
 			report();
-			throw new Error(quoteFailureMessage(counts));
+			throw new QuotationRefusal(quoteFailureMessage(counts, repaired), note, diagnosis);
 		}
 	};
-	const readCandidate = (response: NoteResponse): MemoryNote => {
+	const parseCandidate = (response: NoteResponse): unknown => {
 		options.signal.throwIfAborted();
 		const value = parseNote(response);
 		calls[calls.length - 1].noteBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
 		report();
-		const note = oneLineNote(validateCandidate(value));
+		return value;
+	};
+	const checkCandidate = (value: unknown, repaired = false): MemoryNote => {
+		const note = oneLineNote(validateCandidate(value, repaired));
 		if (options.activeRequests?.length && !note.nextSteps.some((step) => step.text.trim()))
 			throw new Error(
 				"CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step",
 			);
 		return note;
 	};
+	const readCandidate = (response: NoteResponse): MemoryNote => checkCandidate(parseCandidate(response));
+	/**
+	 * The compaction's one repair, spent on quotations: only the failing facts are asked about, the rest of the
+	 * candidate is spliced back unchanged and the whole note is validated again. A second failure blocks.
+	 */
+	const repairQuotations = async (failure: QuotationRefusal): Promise<MemoryNote> => {
+		const { diagnosis } = failure;
+		if (!options.config.noteRepair || repairUsed || !quoteRepairEligible(diagnosis)) throw failure;
+		const maxTokens = outputBudget(model, options.noteTokens);
+		const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, options.branch);
+		// A request that cannot fit leaves the refusal as it was; no other evidence is substituted.
+		if (textTokens(QUOTE_REPAIR_RULES) + textTokens(prompt) + maxTokens > Math.min(model.contextWindow, 64_000))
+			throw failure;
+		options.signal.throwIfAborted();
+		repairUsed = true;
+		repairKind = "quotation";
+		phase = "repair";
+		try {
+			const value = parseCandidate(
+				await complete(
+					model,
+					{
+						systemPrompt: QUOTE_REPAIR_RULES,
+						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+						tools: [],
+					},
+					{
+						...(writerEffort === "off" ? {} : { reasoning: writerEffort }),
+						maxTokens,
+						signal: options.signal,
+						maxRetries: 0,
+						toolChoice: "none",
+						transport: "sse",
+						cacheRetention: "none",
+					},
+				),
+			);
+			const repaired = applyQuoteRepair(failure.note, diagnosis.failures, value);
+			quotationRepair = repaired.outcome;
+			report();
+			return checkCandidate(repaired.note, true);
+		} finally {
+			phase = "generate";
+		}
+	};
 	const accept: AcceptNote = async (response) => {
-		const candidate = readCandidate(response);
+		const value = parseCandidate(response);
+		let candidate: MemoryNote;
+		try {
+			candidate = checkCandidate(value);
+		} catch (error) {
+			if (!(error instanceof QuotationRefusal)) throw error;
+			candidate = await repairQuotations(error);
+		}
 		const bytes = noteBytes(candidate);
 		if (bytes <= options.noteTokens * 3) return candidate;
 		if (!options.config.noteRepair || repairUsed) throw new NoteBudgetError(bytes, options.noteTokens);
@@ -496,6 +589,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			);
 		options.signal.throwIfAborted();
 		repairUsed = true;
+		repairKind = "size";
 		phase = "repair";
 		try {
 			const repaired = readCandidate(
@@ -617,8 +711,15 @@ async function writeWithSession(
 		textTokens(JSON.stringify(prefix.tools ?? [])) +
 		maxTokens;
 	let instruction: string | undefined;
-	for (const head of [80, 40, 0]) {
-		const candidate = handoverInstruction(options, sources, head);
+	// The quotable block goes first when the window is tight; the manifest then shrinks to bare IDs.
+	const quotable = quotableOriginals(sources, options.activeRequests, noteTokens);
+	for (const [block, head] of [
+		[quotable, 80],
+		[[], 80],
+		[[], 40],
+		[[], 0],
+	] as const) {
+		const candidate = handoverInstruction(options, sources, head, block);
 		if (fixedTokens + textTokens(candidate) <= model.contextWindow) {
 			instruction = candidate;
 			break;
@@ -648,7 +749,43 @@ async function writeWithSession(
 	return { note, chunkCount: 1 };
 }
 
-function handoverInstruction(options: WriteMemoryOptions, sources: readonly SessionEntry[], head: number): string {
+interface QuotableOriginal {
+	entryId: string;
+	text: string;
+}
+
+/**
+ * User messages among the uncovered entries, whole, each beside its entry ID: the session writer reads them in its
+ * prefix without IDs, and a quotation it then binds from memory to an opening in the manifest can land on the wrong
+ * entry. A message is included complete or not at all, newest first within the bound, then listed in conversation
+ * order. Active requests already appear with their IDs in the continuation instruction.
+ */
+export function quotableOriginals(
+	sources: readonly SessionEntry[],
+	active: readonly SessionEntry[] | undefined,
+	budgetTokens: number,
+): QuotableOriginal[] {
+	const activeIds = new Set(active?.map((entry) => entry.id));
+	const kept: QuotableOriginal[] = [];
+	let used = 0;
+	for (let index = sources.length - 1; index >= 0; index--) {
+		const entry = sources[index];
+		if (sourceRole(entry) !== "user" || activeIds.has(entry.id)) continue;
+		const item = { entryId: entry.id, text: sourceText(entry) };
+		const tokens = textTokens(JSON.stringify(item));
+		if (!item.text || used + tokens > budgetTokens) continue;
+		kept.push(item);
+		used += tokens;
+	}
+	return kept.reverse();
+}
+
+function handoverInstruction(
+	options: WriteMemoryOptions,
+	sources: readonly SessionEntry[],
+	head: number,
+	quotable: readonly QuotableOriginal[],
+): string {
 	const manifest = sources.map((entry) => {
 		const text = sourceText(entry).replace(/\s+/g, " ");
 		return head > 0 ? `${entry.id} ${sourceRole(entry)}: ${text.slice(0, head)}` : `${entry.id} ${sourceRole(entry)}`;
@@ -665,7 +802,12 @@ function handoverInstruction(options: WriteMemoryOptions, sources: readonly Sess
 		NOTE_RULES,
 		continuationInstruction(options),
 		noteBudgetInstruction(options.noteTokens, options.baseNoteTokens),
-		`Entry IDs for citations, in conversation order (ID role: opening words). Cite these IDs or the host-selected active request IDs above; quote text verbatim from the corresponding original.\n${manifest.join("\n")}`,
+		quotable.length
+			? `Quotable user messages, complete and verbatim, each with its entry ID. Copy a quote from one of these texts and cite that same entry ID; to quote any other entry, copy its exact text from the conversation above and cite its ID.\n${quotable.map((item) => JSON.stringify(item)).join("\n")}`
+			: "",
+		`Entry IDs for citations, in conversation order (ID role: opening words, whitespace collapsed). The openings only locate entries; never copy a quotation from them. Cite these IDs or the host-selected active request IDs above; quote text verbatim from the corresponding original.\n${manifest.join("\n")}`,
 		`Attachments:\n${JSON.stringify(attachments)}`,
-	].join("\n\n");
+	]
+		.filter(Boolean)
+		.join("\n\n");
 }

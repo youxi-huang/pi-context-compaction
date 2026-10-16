@@ -7,8 +7,8 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
-import type { MemoryNote, NoteFact } from "../src/extensions/context-memory/notes.ts";
+import { DEFAULT_MEMORY_CONFIG, SESSION_WRITER, textTokens } from "../src/extensions/context-memory/config.ts";
+import { type MemoryNote, type NoteFact, noteSchema, validateNote } from "../src/extensions/context-memory/notes.ts";
 import {
 	diagnoseQuotes,
 	normalizeQuote,
@@ -16,8 +16,11 @@ import {
 	quoteFailureMessage,
 	quoteFeedback,
 } from "../src/extensions/context-memory/preview/quote-diagnostics.ts";
+import { applyQuoteRepair } from "../src/extensions/context-memory/preview/quote-repair.ts";
+import { validateWorkNote } from "../src/extensions/context-memory/preview/work-notes.ts";
 import {
 	type PreviewWriterRegistry,
+	quotableOriginals,
 	type WriteMemoryOptions,
 	type WriterProgress,
 	writeMemory,
@@ -217,7 +220,8 @@ function response(value: unknown): AssistantMessage {
 
 function stream(message: AssistantMessage) {
 	const result = createAssistantMessageEventStream();
-	result.push({ type: "done", reason: "stop", message });
+	if (message.stopReason === "aborted") result.push({ type: "error", reason: "aborted", error: message });
+	else result.push({ type: "done", reason: "stop", message });
 	result.end(message);
 	return result;
 }
@@ -231,7 +235,7 @@ function quoteHarness(answers: unknown[], changes: Partial<WriteMemoryOptions> =
 		);
 		const answer = answers.shift();
 		if (answer === undefined) throw new Error("unexpected writer call");
-		return stream(response(answer));
+		return stream(typeof answer === "function" ? answer() : response(answer));
 	});
 	const progress: WriterProgress[] = [];
 	const options: WriteMemoryOptions = {
@@ -269,5 +273,279 @@ describe("preview writer quotation failures", () => {
 		const test = quoteHarness([note({ state: [{ text: "x", sources: ["missing"] }] })]);
 		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_SCOPE");
 		expect(test.progress.at(-1)?.quotations).toBeUndefined();
+	});
+});
+
+const misattributed = (): MemoryNote =>
+	note({
+		instructions: [{ text: "Port rule.", sources: ["u3"], quote: "Keep the service on port 4317." }],
+		state: [
+			{ text: "The threshold is 15.", sources: ["u3"], quote: "The threshold is 15." },
+			{ text: "Line one.\nLine two.", sources: ["u2"] },
+		],
+	});
+
+function repairOf(fact: NoteFact | null, section = "instructions", index = 0) {
+	return { repairs: [{ section, index, fact }] };
+}
+
+describe("preview writer quotation repair", () => {
+	it("re-cites a quotation found in another entry with one request about that fact only", async () => {
+		const test = quoteHarness([
+			misattributed(),
+			repairOf({ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." }),
+		]);
+		const result = await writeMemory(test.options);
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(result.note.instructions).toEqual([
+			{ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." },
+		]);
+		// Untouched facts come back unchanged, folded onto one line like any committed note.
+		expect(result.note.state).toEqual([
+			{ text: "The threshold is 15.", sources: ["u3"], quote: "The threshold is 15." },
+			{ text: "Line one. Line two.", sources: ["u2"] },
+		]);
+		expect(() => validateNote(result.note, branch, 2000)).not.toThrow();
+		const repairPrompt = test.prompts[1];
+		expect(repairPrompt).toContain("Correct the quotations of a memory candidate");
+		expect(repairPrompt).toContain('\\"problem\\":\\"elsewhere\\"');
+		expect(repairPrompt).toContain('\\"entryId\\":\\"u1\\",\\"role\\":\\"user\\"');
+		// Only the failing fact is asked about.
+		expect(repairPrompt).not.toContain("Line two");
+		const last = test.progress.at(-1);
+		expect(last).toMatchObject({
+			writerCalls: 2,
+			repairUsed: true,
+			repairKind: "quotation",
+			quotations: { failed: 1, elsewhere: 1, format: 0, absent: 0 },
+			quotationRepair: { requoted: 1, unquoted: 0, dropped: 0 },
+		});
+		expect(last?.writerCallDetails.map((call) => call.phase)).toEqual(["generate", "repair"]);
+	});
+
+	it("copies a format-only difference exactly, or drops the quote, or withdraws the fact", async () => {
+		const format = note({
+			instructions: [
+				{ text: "Vendor.", sources: ["u1"], quote: "Keep the service on port 4317. Do not touch vendor/." },
+			],
+		});
+		const exact = quoteHarness([
+			format,
+			repairOf({ text: "Vendor.", sources: ["u1"], quote: "Keep the service on port 4317.\nDo not touch vendor/." }),
+		]);
+		expect((await writeMemory(exact.options)).note.instructions[0].quote).toBe(
+			"Keep the service on port 4317.\nDo not touch vendor/.",
+		);
+		const absent = note({
+			reasons: [{ text: "Threshold raised.", sources: ["u3"], quote: "The threshold was raised to 15." }],
+		});
+		const unquoted = quoteHarness([absent, repairOf({ text: "Threshold raised.", sources: ["u3"] }, "reasons")]);
+		const kept = await writeMemory(unquoted.options);
+		expect(kept.note.reasons).toEqual([{ text: "Threshold raised.", sources: ["u3"] }]);
+		expect(unquoted.progress.at(-1)?.quotationRepair).toEqual({ requoted: 0, unquoted: 1, dropped: 0 });
+		const withdrawn = quoteHarness([absent, repairOf(null, "reasons")]);
+		const without = await writeMemory(withdrawn.options);
+		expect(without.note.reasons).toEqual([]);
+		expect(without.note.state).toEqual(absent.state);
+		expect(withdrawn.progress.at(-1)?.quotationRepair).toEqual({ requoted: 0, unquoted: 0, dropped: 1 });
+	});
+
+	it("blocks when the repaired note still fails, naming the repair in the message", async () => {
+		const test = quoteHarness([
+			misattributed(),
+			repairOf({ text: "Port rule.", sources: ["u2"], quote: "Keep the service on port 4317." }),
+		]);
+		await expect(writeMemory(test.options)).rejects.toThrow(
+			"CONTEXT_NOTE_QUOTE: 1 quotation does not match the entries cited (1 found verbatim in other entries) after one quotation repair.",
+		);
+		expect(test.requests).toHaveBeenCalledTimes(2);
+	});
+
+	it("refuses a repair that changes a fact's text or supersedes", async () => {
+		const text = quoteHarness([
+			misattributed(),
+			repairOf({ text: "Port rule, reworded.", sources: ["u1"], quote: "Keep the service on port 4317." }),
+		]);
+		await expect(writeMemory(text.options)).rejects.toThrow("CONTEXT_NOTE_REPAIR_LOSS");
+		const supersedes = quoteHarness([
+			misattributed(),
+			repairOf({ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317.", supersedes: ["u2"] }),
+		]);
+		await expect(writeMemory(supersedes.options)).rejects.toThrow("CONTEXT_NOTE_REPAIR_LOSS");
+	});
+
+	it("requires one answer for each failing fact and nothing else", () => {
+		const failures = diagnoseQuotes(misattributed(), branch).failures;
+		const fact = { text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." };
+		expect(() => applyQuoteRepair(misattributed(), failures, { repairs: [] })).toThrow("CONTEXT_NOTE_INVALID");
+		expect(() => applyQuoteRepair(misattributed(), failures, repairOf(fact, "state", 0))).toThrow(
+			"CONTEXT_NOTE_INVALID",
+		);
+		expect(() =>
+			applyQuoteRepair(misattributed(), failures, {
+				repairs: [repairOf(fact).repairs[0], repairOf(fact).repairs[0]],
+			}),
+		).toThrow("CONTEXT_NOTE_INVALID");
+		expect(() => applyQuoteRepair(misattributed(), failures, "not json")).toThrow("CONTEXT_NOTE_INVALID");
+	});
+
+	it("does not repair when a cited ID is unreadable, more than five quotations fail, or repair is off", async () => {
+		const unreadable = note({
+			instructions: [{ text: "Port rule.", sources: ["u3"], quote: "Keep the service on port 4317." }],
+			state: [{ text: "x", sources: ["missing"] }],
+		});
+		const first = quoteHarness([unreadable]);
+		await expect(writeMemory(first.options)).rejects.toThrow("CONTEXT_NOTE_QUOTE");
+		expect(first.requests).toHaveBeenCalledTimes(1);
+		const six = note({
+			state: Array.from({ length: 6 }, (_, index) => ({
+				text: `Fact ${index}.`,
+				sources: ["u3"],
+				quote: "Keep the service on port 4317.",
+			})),
+		});
+		const many = quoteHarness([six]);
+		await expect(writeMemory(many.options)).rejects.toThrow("6 quotations do not match");
+		expect(many.requests).toHaveBeenCalledTimes(1);
+		const off = quoteHarness([misattributed()], {
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-quote-test/quote-writer", noteRepair: false },
+		});
+		await expect(writeMemory(off.options)).rejects.toThrow("CONTEXT_NOTE_QUOTE");
+		expect(off.requests).toHaveBeenCalledTimes(1);
+	});
+
+	it("spends the compaction's one repair: a quotation-repaired note over the hard limit blocks", async () => {
+		const large = misattributed();
+		large.state.push({ text: "x".repeat(1600), sources: ["u3"] });
+		const test = quoteHarness(
+			[large, repairOf({ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." })],
+			{ noteTokens: 500 },
+		);
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_BUDGET");
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(test.progress.at(-1)).toMatchObject({ repairKind: "quotation", repairUsed: true });
+	});
+
+	it("repairs once across fixed-writer chunks", async () => {
+		const long = (id: string, parentId: string | null, words: string) =>
+			user(id, `${words} ${"filler text for chunking. ".repeat(3200)}`, parentId);
+		const chunked = [long("c1", null, "Keep the service on port 4317."), long("c2", "c1", "The threshold is 15.")];
+		const bad = (quoteSource: string): MemoryNote => ({
+			...note({ state: [{ text: "Port.", sources: [quoteSource], quote: "Keep the service on port 4317." }] }),
+		});
+		const test = quoteHarness(
+			[
+				bad("c2"),
+				repairOf({ text: "Port.", sources: ["c1"], quote: "Keep the service on port 4317." }, "state"),
+				bad("c2"),
+			],
+			{ uncovered: chunked, branch: chunked, noteTokens: 2000 },
+		);
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_QUOTE");
+		expect(test.progress.at(-1)?.writerCallDetails.map((call) => call.phase)).toEqual([
+			"generate",
+			"repair",
+			"generate",
+		]);
+	});
+
+	it("keeps both paid calls when the repair is cancelled", async () => {
+		const abort = new AbortController();
+		const test = quoteHarness(
+			[
+				misattributed(),
+				() => {
+					abort.abort(new Error("Synthetic repair cancellation"));
+					return { ...response(""), stopReason: "aborted" as const };
+				},
+			],
+			{ signal: abort.signal },
+		);
+		await expect(writeMemory(test.options)).rejects.toThrow("Synthetic repair cancellation");
+		expect(test.progress.at(-1)).toMatchObject({ writerCalls: 2, repairKind: "quotation" });
+	});
+
+	it("keeps the stored note shape: a repaired note is an ordinary schema-valid note", async () => {
+		const test = quoteHarness([
+			misattributed(),
+			repairOf({ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." }),
+		]);
+		const result = await writeMemory(test.options);
+		expect(Object.keys(result.note).sort()).toEqual(Object.keys(noteSchema.properties).sort());
+	});
+});
+
+describe("session writer quotable originals", () => {
+	const active = user("u4", "Now finish the report.", "u3");
+	it("keeps whole user messages beside their IDs, newest first within the bound, in conversation order", () => {
+		expect(quotableOriginals(branch, undefined, 1000)).toEqual([
+			{ entryId: "u1", text: "Keep the service on port 4317.\nDo not touch vendor/." },
+			{ entryId: "u2", text: "Use \u201cdeploy only on Thursday\u201d as the ruling." },
+			{ entryId: "u3", text: "The threshold is 15." },
+		]);
+		// u3 and u2 fit; u1 does not and is left out rather than cut.
+		const [, second, third] = quotableOriginals(branch, undefined, 1000);
+		const bound = textTokens(JSON.stringify(second)) + textTokens(JSON.stringify(third));
+		expect(quotableOriginals(branch, undefined, bound).map((item) => item.entryId)).toEqual(["u2", "u3"]);
+		expect(quotableOriginals([...branch, active], [active], 1000).map((item) => item.entryId)).toEqual([
+			"u1",
+			"u2",
+			"u3",
+		]);
+	});
+
+	const long = user("u5", `Long ruling. ${"Keep every report under out/. ".repeat(120)}`, "u3");
+	const sessionBranch = [...branch, long];
+
+	function sessionHarness(contextWindow: number) {
+		const session = { ...model, contextWindow };
+		const test = quoteHarness([note({})], {
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: SESSION_WRITER },
+			sessionModel: session,
+			prefix: { messages: [{ role: "user", content: "Earlier conversation.", timestamp: 1 }] },
+			uncovered: sessionBranch,
+			branch: sessionBranch,
+		});
+		const instructions: string[] = [];
+		const streamSimple = test.options.registry.streamSimple;
+		test.options.registry = {
+			...test.options.registry,
+			streamSimple: (selected, context, request) => {
+				const last = context.messages.at(-1);
+				if (last && typeof last.content === "string") instructions.push(last.content);
+				return streamSimple(selected, context, request);
+			},
+		};
+		return { ...test, instructions };
+	}
+
+	it("sends the block in the handover request and drops it before shrinking the manifest", async () => {
+		const roomy = sessionHarness(128_000);
+		await writeMemory(roomy.options);
+		const full = roomy.instructions[0];
+		expect(full).toContain("Quotable user messages, complete and verbatim");
+		expect(full).toContain('{"entryId":"u3","text":"The threshold is 15."}');
+		expect(full).toContain("The openings only locate entries; never copy a quotation from them.");
+		const start = full.indexOf("Quotable user messages");
+		const without = full.slice(0, start) + full.slice(full.indexOf("Entry IDs for citations"));
+		// Room for the request without the block, not with it: 4096 output tokens plus the prefix message.
+		expect(textTokens(full) - textTokens(without)).toBeGreaterThan(500);
+		const tight = sessionHarness(4096 + textTokens(without) + 100);
+		await writeMemory(tight.options);
+		expect(tight.instructions[0]).not.toContain("Quotable user messages");
+		expect(tight.instructions[0]).toContain("u1 user: Keep the service on port 4317. Do not touch vendor/.");
+	});
+});
+
+describe("work-note quotation feedback", () => {
+	it("names the field and where the quoted text actually is", () => {
+		expect(() =>
+			validateWorkNote(
+				{ state: [{ text: "Port rule.", sources: ["u3"], quote: "Keep the service on port 4317." }] },
+				branch,
+			),
+		).toThrow(
+			"CONTEXT_NOTE_QUOTE: a quoted source does not match the original text\nstate[0].quote is not in u3; the exact text is in u1 (user).",
+		);
 	});
 });

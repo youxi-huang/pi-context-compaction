@@ -12,6 +12,7 @@ import {
 	sourceText,
 	validateNote,
 } from "../notes.ts";
+import { diagnoseQuotes, quoteFeedback } from "./quote-diagnostics.ts";
 
 /** Each fact renders as one line, so model-written text cannot open a heading or a section of the checkpoint. */
 const ONE_LINE = `^[^${LINE_BREAKS}]+$`;
@@ -58,19 +59,23 @@ export function validateWorkNote(value: unknown, branch: readonly SessionEntry[]
 	if (!Check(workNoteSchema, value))
 		throw new Error("CONTEXT_NOTE_INVALID: a work note has state and optional data sections, one line per fact");
 	const note = structuredClone(value);
-	return validateNote(
-		{
-			instructions: [],
-			failedPaths: note.failedPaths ?? [],
-			reasons: note.reasons ?? [],
-			state: note.state,
-			nextSteps: note.nextSteps ?? [],
-			files: note.files ?? [],
-			gaps: note.gaps ?? [],
-		},
-		branch,
-		2000,
-	);
+	const memory: MemoryNote = {
+		instructions: [],
+		failedPaths: note.failedPaths ?? [],
+		reasons: note.reasons ?? [],
+		state: note.state,
+		nextSteps: note.nextSteps ?? [],
+		files: note.files ?? [],
+		gaps: note.gaps ?? [],
+	};
+	try {
+		return validateNote(memory, branch, 2000);
+	} catch (error) {
+		// The model retries a refused note on its own; tell it where the quoted text actually is.
+		if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
+		const feedback = quoteFeedback(diagnoseQuotes(memory, branch).failures);
+		throw new Error(feedback ? `${error.message}\n${feedback}` : error.message);
+	}
 }
 
 export interface WorkNoteEntry {

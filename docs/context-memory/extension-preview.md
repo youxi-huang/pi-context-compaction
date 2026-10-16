@@ -218,6 +218,14 @@ compaction spends at most one of them. A second failure blocks as before. The
 extension never moves a quotation to another entry on its own: text found
 only in an assistant message or a tool output is not a user ruling.
 
+The session writer's request is the session's own system prompt, tools and
+messages plus one closing message, and it sets no tool choice, just as the
+session's requests do. A provider that caches prompt prefixes therefore serves
+most of the request from the cache the session has already warmed: on DeepSeek,
+91 to 99.6% of the writer's input in a check. The closing message tells the
+model to call no tool. A tool call is never run; it refuses the note with
+`CONTEXT_WRITER_FAILED`.
+
 Configuration is latched for the process; restart Pi after changing it. The
 preview uses the writer, note-budget, repair and retained-text settings from
 that file. `compactAt` bounds the manual checkpoint budget but does not start

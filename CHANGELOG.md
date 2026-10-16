@@ -17,6 +17,7 @@ These changes are in the independent preview only. The resident runtime, its bui
 ### Changed
 
 - The session writer's handover request lists every uncovered user message in full beside its entry ID, and says that the manifest's openings are not to be copied as quotations. Both recorded live runs lost a checkpoint to a quotation cited to the wrong entry. The list is marked as serving quotation only: on DeepSeek, without that line, the writer read it as the whole task and recorded the assistant's announced next step as unrequested.
+- The session writer sets no tool choice, as the session's own requests do, so a provider that caches prompt prefixes serves its request from the session's cache. With `tool_choice: "none"`, DeepSeek left the tool definitions out of the prompt and every compaction paid for the whole history; in a check, 91 to 99.6% of the writer's input now came from cache and each call cost about a third. The request tells the model to call no tool, and a tool call still refuses the note.
 - A refused quotation's message counts the failures by class: text found in other entries, text that differs only in spacing or punctuation, and text found nowhere. A refused `context_note` names each failing field and the entries that contain its quoted text.
 
 ### Maintenance

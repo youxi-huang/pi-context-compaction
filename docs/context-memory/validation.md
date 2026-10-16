@@ -102,7 +102,7 @@ One P2 probe run on the corrected candidate passed 17 of 17 in both conditions, 
 through the full writer bench or P1's probes: 702 of the 741 confirmed requests had
 been used.
 
-### Prompt cache: the session writer misses the session's cache on DeepSeek
+### Prompt cache: the session writer missed the session's cache on DeepSeek
 
 The writer's prompt cache barely hit. Each build's writer bench sent about 1.41
 million uncached input tokens and read about 13,000 from cache. Of the 80 attempts,
@@ -130,9 +130,9 @@ session's own requests carry them. The second is decisive:
   compaction's writer read 1,024 cached tokens between them; the retry's 97,152
   came from the failed writer call before it, not from the main model.
 
-So on DeepSeek the writer pays for the whole history once per compaction, in a
+So on DeepSeek the writer paid for the whole history once per compaction, in a
 session as in the bench, and the writer cost and pause above are what a session
-pays today. The comparison between builds stands: both ran equally cold, and the
+paid with these builds. The comparison between builds stands: both ran equally cold, and the
 cache does not change what the model writes. The quotable block sits in the
 closing message and changes nothing here. Probes read 37% of their input from
 cache: 11 to 12% on questions answered in one round, 49% on questions with tool
@@ -141,14 +141,30 @@ rounds, which reuse the previous round's prefix in the same process.
 Since `739ac7b` the bench can reproduce a session's cache state, and it now does by
 default (`--cache warm`): one shared working directory and, before each cut's
 compactions, one request over the same history with the session's own tools, as a
-session's last turn would be. `--cache cold` reproduces this run. Whether the writer
-should keep the tools in its request, so that it can reuse the session's cache, is
-left to the maintainer: with `auto` the model could call a tool during the handover.
+session's last turn would be. `--cache cold` reproduces this run.
+
+The maintainer chose to keep the tools, for release as well as for measurement,
+since many sessions run on DeepSeek. Since `a2c62fa` the session writer sets no tool
+choice, as the session's own requests do, and its closing message says to call no
+tool; a tool call still refuses the note and is never run. In the same warm check on
+the corrected build (`stock-preview+src.22d03105e80b8adb`), two cuts of P2 with three
+attempts each:
+
+| | `tool_choice: "none"` | No tool choice |
+| --- | ---: | ---: |
+| Committed | 6 of 6 | 6 of 6, with no tool call |
+| Writer input read from cache | 384 tokens per call, 0.7 to 1.2% | 90.9 to 99.6% |
+| Catalog cost per writer call | $0.0122 to $0.0204 | $0.0039 to $0.0053 |
+| Pause | 9.5 to 17.4 s | 11.3 to 17.8 s |
+
+Each call now costs about a third as much. The pause hardly moved: it goes to
+writing the note, 2,500 to 3,700 output tokens with reasoning, not to reading the
+history. Two warm-up requests per run, about $0.025, are not in these figures.
 
 ### Spend and limits
 
-The bench counted 710 provider requests in thirteen runs and $2.56 at catalog prices,
-including the cache check's 8 requests and $0.12; the runs took 23 minutes in all.
+The bench counted 718 provider requests in fourteen runs and $2.61 at catalog prices,
+including the two cache checks' 16 requests and $0.17; the runs took 24 minutes in all.
 Outside the bench there were four synthetic cache requests of about 7,400 tokens each,
 one model listing and three balance reads. The DeepSeek balance fell by ¥6.86 between 22:23 and 22:47 UTC,
 a window that missed the smoke request and about eight baseline writer calls. Neither

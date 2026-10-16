@@ -29,9 +29,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // units of a run share one working directory, and one request over the same history precedes each cut's
 // compactions, as a session's last turn would. Each warm-up is itself a cold request; warm-ups count against the
 // limits and are reported apart. --cache cold gives each unit its own working directory, which Pi's system prompt
-// ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run. On DeepSeek the
-// writer's tool_choice "none" drops the tools from its prompt, so even a warm session's cache stops at the system
-// prompt for the writer; the probes and the warm-ups still use it.
+// ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");

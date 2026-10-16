@@ -68,10 +68,10 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 ### Prompt cache
 
 In daily use the session's prefix stays cached: every main-model turn sends the same system prompt, tools and
-history. The session writer reuses all three so that it can continue that cache, but on DeepSeek it currently
-cannot: it sends `tool_choice: "none"`, with which DeepSeek leaves the tools out of the prompt, so the writer's
-prefix ends after the system prompt (see the validation record). The bench reproduces a session's cache state by
-default with `--cache warm`, so a change to the writer's request shows up in its cost. The units of a run share one working directory, and before each cut's compactions one
+history. The session writer reuses all three and sets no tool choice, as the session does, so it continues that cache.
+Before `a2c62fa` it sent `tool_choice: "none"`, with which DeepSeek leaves the tools out of the prompt, and its
+prefix ended after the system prompt (see the validation record). The bench reproduces a session's cache state by
+default with `--cache warm`, so writer cost and pause are what a session pays. The units of a run share one working directory, and before each cut's compactions one
 request with the session's own tools goes over the same history, as the session's last turn would. Each warm-up is
 a cold request of its own, one per cut in both modes: budget five more requests for a run over P1 and P2.
 `summary.json` reports them apart under `used.warmups` and `used.warmupCostUsd`. Runs with different labels use

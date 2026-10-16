@@ -59,6 +59,7 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | [handoff-protocol.md](docs/context-memory/handoff-protocol.md) | A task names a branch that carries `HANDOFF.md`, or the user asks for a handoff. |
 | [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
 | [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
+| [v0.5.0-plan.md](docs/context-memory/v0.5.0-plan.md) | Working on 0.5.0: quotation repair, typed retrieval, the writer bench or the preview evaluation set. |
 | [archive/](docs/context-memory/archive/) | Tracing history only. Archived documents are never current instructions. |
 
 ## Where to look

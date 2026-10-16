@@ -1,5 +1,132 @@
 # Validation record
 
+## v0.5.0 candidate: writer bench and recovery probes on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. Three
+preview builds ran as ordinary packages in official Pi 1.3.0, each unit in its own
+process and agent directory, through `scripts/context-memory-preview-bench.mjs`:
+
+- the baseline, `stock-preview+src.a9181fccb70323cc` from `47069fe`: W0.1 alone, so
+  v0.4.3 writer behavior with quotation failures counted by class;
+- the candidate, `stock-preview+src.8824b07d16c22289` from `fe624d7`: W0.1, W1 and W2;
+- the corrected candidate, `stock-preview+src.7a2dcba26ea43272` from `f768030`, after
+  the finding below.
+
+The model was `deepseek/deepseek-flash` (DeepSeek V4.1 Flash in Pi's catalog) at
+Pi's default thinking level `high`, for both the writer and the probe answers. The
+sessions were the generated `eval/preview` fixtures, P1 and P2, with five cuts in
+all. The API key stayed in the environment's network proxy; Pi received only a
+placeholder. The maintainer confirmed an envelope of 741 requests, about two hours
+and $6.55 at catalog prices before the first request.
+
+Three harness faults surfaced before any token was spent on them. The bench looked
+the model up with a method Pi 1.3.0 does not have; it now uses
+`ModelRuntime.getModel`. An SDK caller does not get the proxy-aware HTTP dispatcher
+that Pi's CLI installs at startup, so two smoke attempts ended in `Connection error.`
+without reaching the provider; workers now install the same dispatcher. And the
+first probe protocol allowed one retry per cut: in the first baseline probe run,
+both chains were refused twice at their first cut (three `CONTEXT_NOTE_QUOTE`, one
+`CONTEXT_NOTE_INVALID`) and every probe was blocked. Probe chains now retry a cut
+up to four attempts, so probes measure what committed notes keep and the writer
+bench measures refusals.
+
+### Writer bench, five cuts with eight attempts each
+
+| | Baseline | Candidate |
+| --- | ---: | ---: |
+| Committed | 32 of 40 | 39 of 40 |
+| Refused | 6 `CONTEXT_NOTE_QUOTE`, 2 `CONTEXT_NOTE_INVALID` | 1 `CONTEXT_NOTE_SCOPE` |
+| First passes with a failed quotation | 6, holding 7 failed quotations: 2 found in other entries, 2 differing only in spacing or punctuation, 3 found nowhere | 3, each with one quotation found in another entry |
+| Quotation repairs | none | 3, all committed: 3 quotations rebound, none removed, no fact dropped |
+| Writer calls | 40 | 43 |
+| Input, cache-read and output tokens (reasoning) | 1,409,720, 13,056, 87,792 (42,013) | 1,420,765, 13,696, 102,322 (56,063) |
+| Catalog cost | $0.528 | $0.549 |
+| Median pause | 11.7 s | 12.5 s |
+| Note size, median (mean) | 3,861 bytes (3,882) | 3,859 bytes (3,974) |
+| Note size against the bytes it condenses, median | 4.5% | 4.5% |
+| Gold answers cited, first asked at the cut | 255 of 267 | 318 of 329 |
+| Gold answers cited, carried from earlier cuts | 170 of 185 | 221 of 240 |
+
+The condensed bytes are the previous note plus every message after it. A note cites
+a gold answer when one of its source IDs is among that answer's evidence entries;
+this counts citations, not content, and the finding below shows a note citing the
+right entry while demoting what it says. Repaired attempts took 14.4 to 23.0 s,
+against a median of 12.6 s for all candidate attempts.
+
+### Probes, two runs per build
+
+Each run compacted its own chain, then asked 47 probes twice: once with only
+`context_history` active and once with no tools. Every chain cut committed on its
+first attempt.
+
+| | Baseline 1 | Baseline 2 | Candidate 1 | Candidate 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Passed with `context_history`, strict scorer | 46 of 47 | 46 of 47 | 43 of 47 | 44 of 47 |
+| Passed with no tools, strict scorer | 45 of 47 | 46 of 47 | 45 of 47 | 44 of 47 |
+| Scored incorrect | 0 | 2 | 4 | 3 |
+| Abstained | 3 | 0 | 2 | 2 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 | 0 |
+| Invalid | 0 | 0 | 0 | 1, the round limit |
+| `context_history` calls per question | 1.49 | 1.32 | 1.26 | 1.47 |
+| Of which `list` | 0 | 0 | 7 | 4 |
+| Catalog cost | $0.194 | $0.183 | $0.201 | $0.190 |
+
+Every answer scored incorrect, nine in all, gave the right value in prose: "No. The
+bulk export endpoint must not be used again..." for a boolean `false`, or "JSON
+lines (JSONL), not CSV" for a format. The strict scores stand as recorded. Read for
+content, no run gave a wrong value: the baseline answered 93 of 94 with
+`context_history` and 92 of 94 without, the candidate 91 of 94 and 92 of 94. A
+question was answered from about 2,400 to 3,300 input tokens on average, the
+committed note and the question, where the condensed history ran from 39 to 110 KB.
+In these chains, where a note carries earlier cuts forward, the candidate's notes
+were larger: medians of 6,468 and 5,870 bytes against 5,619 and 5,330.
+
+### Finding: the quotable list read as the boundary of the task
+
+The candidate's four abstentions were all one P2 question: which action comes next.
+In P2 the user never asks for the import log; the assistant announces "Next I'll add
+the import log findings" and later does it. Given the complete list of user messages,
+the candidate writer checked the plan against it and recorded the step as a doubt
+("not a recorded user requirement and should be confirmed before acting"), once as a
+ban. The block now says it serves exact quotation only and that work the assistant
+announced within the task stays a next step unless a user message withdrew it.
+
+| P2, first cut | Notes keeping the announced step |
+| --- | --- |
+| Baseline | 5 of 7: 3 of 5 in a targeted bench, 2 of 2 in probe chains. One of the others recorded it as having no basis in user messages |
+| Candidate | 1 of 7: 1 of 5 and 0 of 2. The rest doubted it, one banned it |
+| Corrected candidate | 4 of 4: the fifth attempt was refused `CONTEXT_NOTE_INVALID` |
+
+One P2 probe run on the corrected candidate passed 17 of 17 in both conditions, with
+0.65 `context_history` calls per question. The corrected candidate was not put
+through the full writer bench or P1's probes: 702 of the 741 confirmed requests had
+been used.
+
+### Spend and limits
+
+The bench counted 702 provider requests in twelve runs and $2.44 at catalog prices;
+the runs took 22 minutes in all. Outside the bench there were one model listing and
+three balance reads. The DeepSeek balance fell by ¥6.86 between 22:23 and 22:47 UTC,
+a window that missed the smoke request and about eight baseline writer calls. Neither
+figure is an invoice.
+
+### What this shows
+
+On these fixtures and this model, the candidate commits more notes (39 of 40 against
+32 of 40) at about 4% more writer cost, with notes the same size and the same share
+of gold answers cited; in probe chains its accumulated notes ran 10 to 15% larger.
+Quotations found nowhere and quotations differing only in format disappeared from
+first passes; the three that remained were rebound by one repair each. The typed
+list was used but did not reduce calls per question: with no tools, the notes
+alone answered 184 of 188 probes by content, so these fixtures barely exercise
+retrieval. The candidate's notes changed in one way the citation counts could not
+see, and the correction was measured on P2 only.
+
+This is one model, two synthetic sessions and two probe runs per build. It does not
+establish a refusal rate, compare against native Pi compaction or measure
+retrieval on material that the note cannot hold. Session copies, notes and answers
+stayed on the local machine.
+
 ## v0.4.3: bounded provider run on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

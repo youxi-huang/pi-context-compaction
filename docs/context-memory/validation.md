@@ -1,5 +1,57 @@
 # Validation record
 
+## Unreleased: Pi 1.3.0, doctor recovery states and host-driven release tooling, 2026-10-16 UTC
+
+The independent extension lists official Pi 1.3.0, 1.2.0 and 1.1.0, with 1.3.0
+as the primary host. The tested candidate is `stock-preview+src.6d21d37d4e59aefe`
+at clean commit `11bdae6`; the package version stays 0.4.2 until the maintainer
+releases, so the locally prepared notes still name v0.4.2. The resident source,
+build fingerprint, model-data pin, frozen evaluator pin, checkpoint schema and
+source-hash format are unchanged.
+
+Pi 1.3.0 was published on 2026-10-15. Its `core/extensions/types.d.ts` and
+`core/session-manager.d.ts` are byte-identical to 1.2.0, and the public index
+adds only `formatReadLineRange`. Its runtime dependencies drop `chord`, as 1.2.0
+did, and pin internal packages exactly. Publication, CI and the ops pipeline now
+read the host list from the candidate's `preview-build.json` through
+`context-memory-preview-release-checks.mjs --plan`.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs verify` | Exit 0; resident fingerprint unchanged; 120 script and 334 runtime checks; security regression suites 107, 240, 3 and 111 checks |
+| `context-memory-ops.mjs preview`, clean commit `11bdae6` | Exit 0; every step below |
+| `context-memory-preview-stock-install.mjs` for 1.3.0, 1.2.0, 1.1.0 and 1.0.4 | Exit 0 each; seven exact packages on 1.3.0 and 1.2.0, eight with `chord` on 1.1.0 and 1.0.4; network-blocked SDK import passed |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.3.0 with 1.2.0 and 1.1.0 as compatible hosts | Exit 0; 32/32, including a 1.3.0 checkpoint compacted on each older host and reopened on 1.3.0 after each |
+| `context-memory-preview-acceptance.mjs`, official Pi 1.2.0, then 1.1.0 | Exit 0; 28/28 each on the identical package |
+| `context-memory-preview-scenarios.mjs --acceptance-profile strict`, official Pi 1.3.0 with 1.0.4 control | Exit 0; 145 passed, no gaps, failures, skips or exceptions; at 10 and 20 checkpoints (3 and 6 MB) the request overhead over the disabled control was 0 ms |
+| `node --test` release checks, stock install and acceptance profile | 31, 17 and 66 passed |
+| `context-memory-preview-release.mjs --prepare` | Exit 0; provenance lists 1.3.0, 1.2.0 and 1.1.0 with 88 stock-Pi checks (32, 28, 28) |
+| Focused preview regressions, five vitest files | 205 passed, including the doctor's retry, recover and blocked states and per-session status metrics |
+| `eval/check.mjs`, network blocked and zero model budget | Exit 0; 89 frozen offline evaluation checks |
+
+The scenario suite measures large entries rather than many entries: 20
+checkpoints are about 116 branch entries. A separate local measurement loaded
+the packaged extension into official Pi 1.3.0 and timed the four hooks one
+model request reaches (`cache_warming_decision`, `context`,
+`context_with_system`, `before_provider_request`) on eligible synthetic text
+sessions, 200 samples after warm-up:
+
+| Entries | Session | Hooks p50 / p95 | Pi projection p50 |
+| --- | --- | --- | --- |
+| 1,000 | 0.5 MB | 0.6 / 0.8 ms | 0.2 ms |
+| 5,000 | 2.5 MB | 2.3 / 3.8 ms | 0.8 ms |
+| 10,000 | 5 MB | 4.7 / 7.2 ms | 1.8 ms |
+| 20,000 | 10 MB | 14.6 / 20.3 ms | 5.9 ms |
+
+The repeated branch scans in the request classification grow with entry count
+and steepen past 10,000 entries, but stay well inside the 50 ms target, so they
+are left as they are. The figures come from one machine and in-process timing;
+protected sessions and end-to-end request latency were not measured.
+
+All provider traffic was synthetic and loopback-only. No real-provider call,
+interactive TUI or Windows check was run. GitHub CI and CodeQL have not run on
+this branch.
+
 ## v0.4.2: Pi 1.2.0 compatibility, 2026-10-15 UTC
 
 The independent extension supports exactly official Pi 1.2.0 and 1.1.0. The

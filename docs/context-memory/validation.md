@@ -73,6 +73,13 @@ releases, so the locally prepared notes still name v0.4.2. The resident source,
 build fingerprint, model-data pin, frozen evaluator pin, checkpoint schema and
 source-hash format are unchanged.
 
+The release commit `86f24f6` sets the package version to 0.4.3 and leaves the
+candidate's build ID unchanged. `context-memory-ops.mjs preview` on that clean
+commit exited 0: fingerprint unchanged, acceptance 32/32, 28/28 and 28/28 on Pi
+1.3.0, 1.2.0 and 1.1.0, strict scenarios 145 passed with no gaps, release checks
+31 passed, and `--prepare` produced 0.4.3 archives. `verify` and the full
+offline evaluation were not rerun locally for this commit; CI runs them.
+
 Pi 1.3.0 was published on 2026-10-15. Its `core/extensions/types.d.ts` and
 `core/session-manager.d.ts` are byte-identical to 1.2.0, and the public index
 adds only `formatReadLineRange`. Its runtime dependencies drop `chord`, as 1.2.0

@@ -17,7 +17,11 @@ function argument(name, optional = false) {
 	const index = args.indexOf(name);
 	if (index >= 0 && args[index + 1]) return args[index + 1];
 	if (optional) return undefined;
-	throw new Error(`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence>`);
+	throw new Error(`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence> [--compatible-stock-root <older official installation>]...`);
+}
+/** Every value of a repeatable flag, in order. */
+function argumentList(name) {
+	return args.flatMap((value, index) => value === name && args[index + 1] && !args[index + 1].startsWith("--") ? [args[index + 1]] : []);
 }
 function fileHash(path) { return createHash("sha256").update(readFileSync(path)).digest("hex"); }
 const packageDir = resolve(argument("--package-dir"));
@@ -493,21 +497,31 @@ async function parentAcceptance() {
 				return JSON.parse(readFileSync(join(workDir, "runtime", name, "result.json"), "utf8"));
 			});
 		}
-		const compatibleRoot = argument("--compatible-stock-root", true);
-		if (compatibleRoot) {
-			const compatible = inspectOfficialPi(resolve(compatibleRoot), "1.1.0");
-			report.compatibleHost = { version: compatible.version };
+		// Each older supported host compacts the same session in turn, and the primary host reopens its checkpoint.
+		const compatibleRoots = argumentList("--compatible-stock-root").map((value) => resolve(value));
+		if (compatibleRoots.length) {
+			const build = JSON.parse(readFileSync(join(candidate, "preview-build.json"), "utf8"));
+			const declared = build.supportedPiVersions ?? [build.supportedPi];
+			const compatibleHosts = compatibleRoots.map((root) => {
+				const version = JSON.parse(readFileSync(join(root, "node_modules", "@earendil-works", "pi-coding-agent", "package.json"), "utf8")).version;
+				return { root, version: inspectOfficialPi(root, version).version };
+			});
+			const versions = compatibleHosts.map((host) => host.version);
+			assert(versions.every((version) => version !== stockVersion && declared.includes(version)) && new Set(versions).size === versions.length, "Compatible hosts must be distinct older versions the candidate declares");
+			report.compatibleHosts = compatibleHosts.map((host) => ({ version: host.version }));
 			const fixture = results.get("success");
-			await check("compatible official Pi 1.1.0 reopens and compacts the primary host checkpoint", async () => {
-				assert(fixture, "Required primary-host checkpoint fixture did not pass");
-				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", resolve(compatibleRoot), "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "repeat-compaction", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
-				return { host: compatible.version, passed: true };
-			});
-			await check("primary host reopens the compatible host checkpoint", async () => {
-				assert(fixture, "Required primary-host checkpoint fixture did not pass");
-				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "reopen-success", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
-				return { host: stockVersion, passed: true };
-			});
+			for (const compatible of compatibleHosts) {
+				await check(`compatible official Pi ${compatible.version} reopens and compacts the primary host checkpoint`, async () => {
+					assert(fixture, "Required primary-host checkpoint fixture did not pass");
+					await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", compatible.root, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "repeat-compaction", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
+					return { host: compatible.version, passed: true };
+				});
+				await check(`primary host reopens the Pi ${compatible.version} checkpoint`, async () => {
+					assert(fixture, "Required primary-host checkpoint fixture did not pass");
+					await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", "reopen-success", "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });
+					return { host: stockVersion, compatibleHost: compatible.version, passed: true };
+				});
+			}
 		}
 		await check("stock CLI removes the package by repository, whichever ref is installed", async () => {
 			// The documented command names only the repository; a pinned tag is installed at this point.

@@ -40,42 +40,44 @@ jobs:
       - run: node scripts/security-regression-check.mjs
       - name: Build independent extension candidate
         run: node scripts/context-memory-preview-build.mjs
-      - name: Install isolated official Pi baseline
-        run: >-
-          node scripts/context-memory-preview-stock-install.mjs
-          --stock-root "${{ runner.temp }}/context-preview-stock"
-          --version 1.2.0
-      - name: Install the supported Pi 1.1.0 host
-        run: >-
-          node scripts/context-memory-preview-stock-install.mjs
-          --stock-root "${{ runner.temp }}/context-preview-compatible"
-          --version 1.1.0
-      - name: Verify candidate on official Pi with loopback provider and Git source
-        run: >-
-          node scripts/context-memory-preview-acceptance.mjs
-          --package-dir .artifacts/context-memory-preview-package
-          --stock-root "${{ runner.temp }}/context-preview-stock"
-          --compatible-stock-root "${{ runner.temp }}/context-preview-compatible"
-          --output-dir .artifacts/context-memory-preview-acceptance
-      - name: Verify the same package on supported Pi 1.1.0
-        run: >-
-          node scripts/context-memory-preview-acceptance.mjs
-          --package-dir .artifacts/context-memory-preview-package
-          --stock-root "${{ runner.temp }}/context-preview-compatible"
-          --output-dir .artifacts/context-memory-preview-acceptance-1.1.0
+      - name: Plan hosts from the candidate's own metadata
+        id: plan
+        run: node scripts/context-memory-preview-release-checks.mjs --plan .artifacts/context-memory-preview-package >> "$GITHUB_OUTPUT"
+      - name: Install every official Pi host the candidate declares
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
+        run: |
+          for host in $PLAN_HOSTS; do
+            node scripts/context-memory-preview-stock-install.mjs --stock-root "${{ runner.temp }}/context-preview-pi-$host" --version "$host"
+          done
+      - name: Verify candidate on the primary official Pi with cross-version checkpoints
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
+        run: |
+          read -r -a hosts <<< "$PLAN_HOSTS"
+          compatibility_args=()
+          for host in "${hosts[@]:1}"; do
+            compatibility_args+=(--compatible-stock-root "${{ runner.temp }}/context-preview-pi-$host")
+          done
+          node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "${{ runner.temp }}/context-preview-pi-${hosts[0]}" --output-dir .artifacts/context-memory-preview-acceptance "${compatibility_args[@]}"
+      - name: Verify the same package on each older supported Pi
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
+        run: |
+          read -r -a hosts <<< "$PLAN_HOSTS"
+          for host in "${hosts[@]:1}"; do
+            node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "${{ runner.temp }}/context-preview-pi-$host" --output-dir ".artifacts/context-memory-preview-acceptance-$host"
+          done
       - name: Install an unsupported official Pi for scenario checks
-        run: >-
-          node scripts/context-memory-preview-stock-install.mjs
-          --stock-root "${{ runner.temp }}/context-preview-other"
-          --version 1.0.4
+        env:
+          PLAN_OTHER: ${{ steps.plan.outputs.other }}
+        run: node scripts/context-memory-preview-stock-install.mjs --stock-root "${{ runner.temp }}/context-preview-other" --version "$PLAN_OTHER"
       - name: Run full default-settings scenarios with strict acceptance
-        run: >-
-          node scripts/context-memory-preview-scenarios.mjs
-          --package-dir .artifacts/context-memory-preview-package
-          --stock-root "${{ runner.temp }}/context-preview-stock"
-          --other-stock-root "${{ runner.temp }}/context-preview-other"
-          --output-dir .artifacts/context-memory-preview-scenarios
-          --acceptance-profile strict
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
+        run: |
+          read -r -a hosts <<< "$PLAN_HOSTS"
+          node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "${{ runner.temp }}/context-preview-pi-${hosts[0]}" --other-stock-root "${{ runner.temp }}/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile strict
       - name: Prepare release archives without publishing
         run: |
           node --test scripts/context-memory-preview-release-checks.test.mjs

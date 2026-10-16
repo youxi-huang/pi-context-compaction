@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 
 export const PROFILE = "v0.4.0-preview.1-a-functional";
 export const VERSION = "0.4.0-preview.1";
+/** The only host the functional profile was authorized on. */
+const PROFILE_HOST = "1.1.0";
+/** The unsupported official host every full scenario suite also exercises. */
+export const OTHER_PI_VERSION = "1.0.4";
 
 const BUDGET = "long-session-overhead/per-request-budget";
 const GROWTH = "long-session-overhead/bounded-growth";
@@ -73,13 +77,14 @@ export function assertProfileVersion(profile, version) {
 	if (profile === PROFILE) assert.equal(version, VERSION, `${PROFILE} is authorized only for ${VERSION}`);
 }
 
-function validateFullReport(report) {
+function validateFullReport(report, host) {
+	assert(typeof host === "string" && host !== OTHER_PI_VERSION, "Scenario acceptance requires the publication's primary official Pi version");
 	record(report, "Scenario report");
 	assertCandidate(report.candidate, "Scenario candidate");
 	exactKeys(report.scope, ["only", "checkpointTarget", "otherHostVersion"], "Scenario scope");
 	assert.equal(report.scope.only, null, "Acceptance requires the full scenario suite");
 	assert.equal(report.scope.checkpointTarget, 20, "Acceptance requires 20 checkpoints");
-	assert.equal(report.scope.otherHostVersion, "1.0.4", "Acceptance requires official Pi 1.0.4 coverage");
+	assert.equal(report.scope.otherHostVersion, OTHER_PI_VERSION, `Acceptance requires official Pi ${OTHER_PI_VERSION} coverage`);
 	assert(Array.isArray(report.knownGaps), "Scenario known gaps must be an array");
 	assert(report.knownGaps.length === 0 || (report.knownGaps.length === 1 && report.knownGaps[0] === BUDGET), "Only the existing per-request budget may be a known gap");
 	assert(Array.isArray(report.cases), "Scenario raw cases must be an array");
@@ -95,7 +100,7 @@ function validateFullReport(report) {
 		assert.equal(result.case, expected.case, "Scenario raw case matrix must match the full suite");
 		assert.equal(result.variant, expected.variant, "Scenario raw variant matrix must match the full suite");
 		assert(!("skipped" in result), "Acceptance cannot skip a scenario");
-		const pi = expected.case === "other-pi-version" ? "1.0.4" : report.candidate.version === "0.4.2" ? "1.2.0" : "1.1.0";
+		const pi = expected.case === "other-pi-version" ? OTHER_PI_VERSION : host;
 		assert.equal(result.pi, pi, "Scenario must use the reviewed official Pi version");
 		assert(Array.isArray(result.checks), "Scenario raw checks must be an array");
 		assert.deepEqual(result.checks.map((check) => check?.key), expected.keys, "Scenario raw assertions are incomplete, duplicated or unreviewed");
@@ -137,7 +142,7 @@ export function gradeScenarioAcceptance(report, profile = "strict") {
 		// Partial diagnostics keep the runner's pre-existing strict exit behavior. Publication always
 		// validates the complete report again in assertScenarioAcceptance below.
 		if (profile === "strict") return frozenGrade({ profile, version, accepted: rawPassed, rawPassed, exceptions, reasons: [] });
-		validateFullReport(report);
+		validateFullReport(report, PROFILE_HOST);
 		for (const check of report.checks) {
 			if (check.status === "pass") continue;
 			if (check.id === BUDGET && check.status === "known-gap") {
@@ -154,12 +159,16 @@ export function gradeScenarioAcceptance(report, profile = "strict") {
 	}
 }
 
-/** Verify recorded acceptance against the full raw evidence and the exact publication candidate. */
-export function assertScenarioAcceptance(report, { profile = "strict", candidate } = {}) {
+/**
+ * Verify recorded acceptance against the full raw evidence and the exact publication candidate. `host` is
+ * the primary official Pi the candidate declares; every scenario except the other-version case ran on it.
+ */
+export function assertScenarioAcceptance(report, { profile = "strict", candidate, host = profile === PROFILE ? PROFILE_HOST : undefined } = {}) {
 	assertCandidate(candidate, "Expected publication candidate");
 	assert(digest(candidate.sourceCommit, 40), "Publication requires a final source commit");
 	assertProfileVersion(profile, candidate.version);
-	validateFullReport(report);
+	if (profile === PROFILE) assert.equal(host, PROFILE_HOST, `${PROFILE} is authorized only on official Pi ${PROFILE_HOST}`);
+	validateFullReport(report, host);
 	for (const key of CANDIDATE_FIELDS) assert.equal(report.candidate[key], candidate[key], `Scenario candidate ${key} does not match publication`);
 	const grade = gradeScenarioAcceptance(report, profile);
 	assert.deepEqual(report.acceptance, grade, "Recorded scenario acceptance does not match recomputed raw evidence");

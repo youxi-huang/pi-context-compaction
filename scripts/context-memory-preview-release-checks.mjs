@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
-import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { OTHER_PI_VERSION, PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
+import { OFFICIAL_PI_VERSIONS } from "./context-memory-preview-stock-install.mjs";
 
-/** Releases published only with the full strict scenario suite: no waiver, performance exception or known gap. */
-export const STRICT_RELEASES = Object.freeze(["0.4.0", "0.4.1", "0.4.2"]);
-
-/** Historical source tags keep their original host contract when publication is retried. */
-export function releasePiVersions(version) {
-	return version === "0.4.2" ? ["1.2.0", "1.1.0"] : ["1.1.0"];
-}
+/** First release whose lifecycle suite has 28 checks per host, and two more per cross-version host. */
+const CROSS_VERSION_SUITE = "0.4.2";
 
 /** Local preparation can describe Unreleased; publication requires its versioned changelog. */
 export function releaseChanges(changelog, tag, prepare = false) {
@@ -31,6 +30,81 @@ export function parseReviewedVersion(version) {
 	});
 }
 
+/** Orders reviewed versions; a numbered preview precedes its stable release. */
+export function compareReleaseVersions(left, right) {
+	const [a, b] = [parseReviewedVersion(left), parseReviewedVersion(right)];
+	const [x, y] = [a, b].map((value) => value.version.split("-")[0].split(".").map(Number));
+	for (let index = 0; index < 3; index++) if (x[index] !== y[index]) return x[index] < y[index] ? -1 : 1;
+	if (a.preview !== b.preview) return a.preview ? -1 : 1;
+	return a.preview ? Math.sign(Number(a.previewNumber) - Number(b.previewNumber)) : 0;
+}
+
+/**
+ * Every release after the functional preview publishes only with the full strict scenario suite: no waiver,
+ * performance exception or known gap. A new version needs no list entry to be held to it.
+ */
+export function isStrictRelease(version) {
+	return compareReleaseVersions(version, VERSION) > 0;
+}
+
+/** The scenario profile publication requires, or null for releases that predate scenario acceptance. */
+export function scenarioProfile(version) {
+	if (parseReviewedVersion(version).version === VERSION) return PROFILE;
+	return isStrictRelease(version) ? "strict" : null;
+}
+
+/**
+ * The official hosts a candidate declares, primary first. Historical tags keep their original contract because
+ * it is read from their own build metadata; every declared host must pass acceptance in the publication run.
+ */
+export function releasePiVersions(build) {
+	const hosts = build?.supportedPiVersions ?? (typeof build?.supportedPi === "string" ? [build.supportedPi] : undefined);
+	assert(Array.isArray(hosts) && hosts.length > 0, "Candidate must declare its supported official Pi versions");
+	assert.equal(new Set(hosts).size, hosts.length, "Candidate declares a supported official Pi version twice");
+	assert.equal(hosts[0], build.supportedPi, "The primary official Pi must be the first supported version");
+	for (const host of hosts) {
+		assert(OFFICIAL_PI_VERSIONS.includes(host), `Official Pi ${host} has no reviewed installation cohort`);
+		assert.notEqual(host, OTHER_PI_VERSION, `Official Pi ${OTHER_PI_VERSION} is the unsupported scenario host`);
+	}
+	return Object.freeze([...hosts]);
+}
+
+/** Lifecycle checks one host report must hold: 26 before the cross-version suite, then 28 plus two per older host. */
+export function minimumAcceptanceChecks(version, crossVersionHosts = 0) {
+	return compareReleaseVersions(version, CROSS_VERSION_SUITE) < 0 ? 26 : 28 + 2 * crossVersionHosts;
+}
+
+/**
+ * The two checkpoint checks each older supported host adds to primary acceptance. A single older host may
+ * carry the name used before more than one was supported.
+ */
+export function crossVersionChecks(hosts) {
+	return hosts.slice(1).map((host) => Object.freeze({
+		host,
+		older: `compatible official Pi ${host} reopens and compacts the primary host checkpoint`,
+		primary: Object.freeze([`primary host reopens the Pi ${host} checkpoint`, ...(hosts.length === 2 ? ["primary host reopens the compatible host checkpoint"] : [])]),
+	}));
+}
+
+/** What the publication workflow runs, from the candidate's own package and build metadata. */
+export function releasePlan({ manifest, build }) {
+	const { version } = parseReviewedVersion(manifest?.version);
+	assert.equal(build?.version, version, "Build metadata must describe the packaged version");
+	return Object.freeze({ version, hosts: releasePiVersions(build), scenarioProfile: scenarioProfile(version), otherHost: OTHER_PI_VERSION });
+}
+
+/** The plan as GitHub step outputs: hosts primary first, the scenario profile or empty, and the other host. */
+export function releasePlanOutputs(packageDir) {
+	const read = (file) => JSON.parse(readFileSync(join(packageDir, file), "utf8"));
+	const plan = releasePlan({ manifest: read("package.json"), build: read("preview-build.json") });
+	return `hosts=${plan.hosts.join(" ")}\nprofile=${plan.scenarioProfile ?? ""}\nother=${plan.otherHost}\n`;
+}
+
+/** "1.1.0", "1.2.0 and 1.1.0", "1.3.0, 1.2.0 and 1.1.0". */
+export function hostList(hosts) {
+	return hosts.length < 2 ? hosts.join("") : `${hosts.slice(0, -1).join(", ")} and ${hosts.at(-1)}`;
+}
+
 export function selectReviewedSourceTag({ requestedTag, triggerRef }) {
 	assert(requestedTag === undefined || typeof requestedTag === "string", "Expected an existing source tag");
 	assert(triggerRef === undefined || typeof triggerRef === "string", "Expected an existing source ref");
@@ -50,13 +124,14 @@ export function assertFinalMainWorkflows(runs, sourceCommit) {
 }
 
 // The publication workflow copies only this module and the release script, so notes live here.
-export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit, build, acceptanceChecks, changes, scenarioAcceptance }) {
+export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit, build, hosts: hostVersions, acceptanceChecks, changes, scenarioAcceptance }) {
 	const reviewed = parseReviewedVersion(tag.slice(1));
 	assert.equal(tag, reviewed.tag, "Expected an existing reviewed source tag");
 	assert.equal(packageTag, reviewed.packageTag, "Package tag must match the source version");
+	assert(Array.isArray(hostVersions) && hostVersions.length > 0, "Release notes need the hosts accepted in this run");
 	const functionalPreview = reviewed.version === VERSION;
-	const latencyRelease = STRICT_RELEASES.includes(reviewed.version);
-	const hosts = releasePiVersions(reviewed.version).join(" and ");
+	const latencyRelease = isStrictRelease(reviewed.version);
+	const hosts = hostList(hostVersions);
 	if (functionalPreview) assertFunctionalProfile(scenarioAcceptance);
 	if (latencyRelease) assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 	const introduction = reviewed.preview
@@ -68,12 +143,12 @@ export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit
 		? `A adds opt-in preparation using the same configured writer; it is **disabled by default**. The existing commit and failure gates remain in force. B, the new instruction-authority protocol and the full A/B comparison are incomplete and deferred. Improvements in foreground pause, total cost or recovery have not been established.\n\n`
 		: "";
 	const validation = latencyRelease
-		? `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi ${hosts} and the full default-settings scenario suite on Pi ${releasePiVersions(reviewed.version)[0]} with **strict acceptance and no performance exceptions or known gaps**. Scenario evidence is bound to this exact package and source commit; the 50 ms request-overhead target and checkpoint-growth bound are required checks. Focused, security and frozen evaluator checks also remain required on final main. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
+		? `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi ${hosts} and the full default-settings scenario suite on Pi ${hostVersions[0]} with **strict acceptance and no performance exceptions or known gaps**. Scenario evidence is bound to this exact package and source commit; the 50 ms request-overhead target and checkpoint-growth bound are required checks. Focused, security and frozen evaluator checks also remain required on final main. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
 		: functionalPreview
-		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi 1.1.0. The maintainer-approved \`${PROFILE}\` profile applies **only to v${VERSION}**. Only true failures of \`per-request-budget\` (50 ms) and \`checkpoint-overhead-growth-required\` are accepted as functional A-preview scope exceptions; correctness, security, persistence, identity, package and source checks must pass. Raw scenario gate: ${scenarioAcceptance.rawPassed ? "passed" : "failed"}. Declared raw performance exceptions: ${scenarioAcceptance.exceptions.map((entry) => `\`${entry.id}\` (${entry.status})`).join(", ") || "none"}. These are scope exceptions, not performance passes; the full v0.4.0 gates are unchanged. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
+		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi ${hosts}. The maintainer-approved \`${PROFILE}\` profile applies **only to v${VERSION}**. Only true failures of \`per-request-budget\` (50 ms) and \`checkpoint-overhead-growth-required\` are accepted as functional A-preview scope exceptions; correctness, security, persistence, identity, package and source checks must pass. Raw scenario gate: ${scenarioAcceptance.rawPassed ? "passed" : "failed"}. Declared raw performance exceptions: ${scenarioAcceptance.exceptions.map((entry) => `\`${entry.id}\` (${entry.status})`).join(", ") || "none"}. These are scope exceptions, not performance passes; the full v0.4.0 gates are unchanged. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
 		: reviewed.preview
-		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi 1.1.0. These checks do not establish performance acceptance. The required growth check currently fails, and the 50 ms per-request target remains unmet. Neither check is waived. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
-		: `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi 1.1.0. Focused, security, evaluator and scenario results, with remaining known gaps, are in the validation record. Services are synthetic and loopback only. No real-provider quality, latency or interactive TUI claim is made.\n\n`;
+		? `Package/lifecycle validation: ${acceptanceChecks} stock-Pi checks passed on official Pi ${hosts}. These checks do not establish performance acceptance. The required growth check currently fails, and the 50 ms per-request target remains unmet. Neither check is waived. Focused, security, evaluator and scenario results are in the validation record. Services are synthetic and loopback only; no real-provider quality, latency or interactive TUI claim is made.\n\n`
+		: `Validation: this publication run passed ${acceptanceChecks} stock-Pi package and lifecycle checks on official Pi ${hosts}. Focused, security, evaluator and scenario results, with remaining known gaps, are in the validation record. Services are synthetic and loopback only. No real-provider quality, latency or interactive TUI claim is made.\n\n`;
 	const resident = reviewed.version === "0.4.1"
 		? "Resident release version remains v0.3.0; its build fingerprint changes with the one-line note fold, and the frozen evaluator is pinned to that source."
 		: reviewed.preview
@@ -111,10 +186,12 @@ function assertStrictReleaseProfile(value, version) {
 	assert.deepEqual(value.exceptions, [], `v${version} cannot accept performance exceptions`);
 }
 
-export function assertReleaseNotes(notes, { repository, packageTag, branch, scenarioAcceptance }) {
+export function assertReleaseNotes(notes, { repository, packageTag, branch, hosts, scenarioAcceptance }) {
 	assert(packageTag.startsWith("extension-v"), "Expected a reviewed fixed package tag");
 	const reviewed = parseReviewedVersion(packageTag.slice("extension-v".length));
-	if (STRICT_RELEASES.includes(reviewed.version)) {
+	assert(Array.isArray(hosts) && hosts.length > 0, "Release notes must be checked against the accepted hosts");
+	assert(notes.includes(`unmodified official Pi ${hostList(hosts)}**`), "Release notes must name every accepted official host");
+	if (isStrictRelease(reviewed.version)) {
 		assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 		assert(notes.includes("strict acceptance and no performance exceptions or known gaps"), "Release notes must retain strict scenario acceptance");
 		assert(notes.includes("Pi's threshold compaction after completed text turns"), "Release notes must describe threshold compaction");
@@ -138,4 +215,11 @@ export function assertReleaseNotes(notes, { repository, packageTag, branch, scen
 		assert(commands.length <= 1, "Each copyable block may hold one Pi command");
 		assert(!(block.includes(`@${packageTag}`) && block.includes(`@${branch}`)), "A fixed tag and the moving branch must not share a block");
 	}
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+	if (process.argv.length !== 4 || process.argv[2] !== "--plan") {
+		console.error("Usage: node scripts/context-memory-preview-release-checks.mjs --plan <package-dir>");
+		process.exitCode = 2;
+	} else process.stdout.write(releasePlanOutputs(resolve(process.argv[3])));
 }

@@ -58,31 +58,40 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: node scripts/context-memory-preview-build.mjs
-      - name: Install official Pi baseline
+      - name: Plan publication from the candidate's own metadata
+        id: plan
+        run: node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-release-checks.mjs" --plan .artifacts/context-memory-preview-package >> "$GITHUB_OUTPUT"
+      - name: Install every official Pi host the candidate declares
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
         run: |
-          host_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".artifacts/context-memory-preview-package/preview-build.json", "utf8")).supportedPi);')"
-          node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-stock" --version "$host_version"
+          for host in $PLAN_HOSTS; do
+            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-pi-$host" --version "$host"
+          done
       - name: Verify the release package on stock Pi
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
         run: |
-          candidate_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".artifacts/context-memory-preview-package/package.json", "utf8")).version);')"
+          read -r -a hosts <<< "$PLAN_HOSTS"
           compatibility_args=()
-          if [ "$candidate_version" = "0.4.2" ]; then
-            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-compatible" --version 1.1.0
-            compatibility_args=(--compatible-stock-root "$RUNNER_TEMP/context-preview-compatible")
-          fi
-          node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --output-dir .artifacts/context-memory-preview-acceptance "${compatibility_args[@]}"
-          if [ "$candidate_version" = "0.4.2" ]; then
-            node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-compatible" --output-dir .artifacts/context-memory-preview-acceptance-1.1.0
-          fi
+          for host in "${hosts[@]:1}"; do
+            compatibility_args+=(--compatible-stock-root "$RUNNER_TEMP/context-preview-pi-$host")
+          done
+          node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-pi-${hosts[0]}" --output-dir .artifacts/context-memory-preview-acceptance "${compatibility_args[@]}"
+          for host in "${hosts[@]:1}"; do
+            node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-pi-$host" --output-dir ".artifacts/context-memory-preview-acceptance-$host"
+          done
       - name: Verify final release scenarios
+        env:
+          PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
+          PLAN_PROFILE: ${{ steps.plan.outputs.profile }}
+          PLAN_OTHER: ${{ steps.plan.outputs.other }}
         run: |
-          candidate_version="$(node --input-type=module -e 'import { readFileSync } from "node:fs"; process.stdout.write(JSON.parse(readFileSync(".artifacts/context-memory-preview-package/package.json", "utf8")).version);')"
-          if [ "$candidate_version" = "0.4.0-preview.1" ]; then
-            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
-            node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile v0.4.0-preview.1-a-functional
-          elif [ "$candidate_version" = "0.4.0" ] || [ "$candidate_version" = "0.4.1" ] || [ "$candidate_version" = "0.4.2" ]; then
-            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version 1.0.4
-            node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-stock" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile strict
+          # Releases before scenario acceptance have no profile; every later version requires one.
+          if [ -n "$PLAN_PROFILE" ]; then
+            read -r -a hosts <<< "$PLAN_HOSTS"
+            node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-other" --version "$PLAN_OTHER"
+            node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-pi-${hosts[0]}" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile "$PLAN_PROFILE"
           fi
       - name: Publish checked package and source archives
         env:

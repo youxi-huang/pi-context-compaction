@@ -16,8 +16,10 @@ import {
 import { constants, tmpdir, userInfo } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
 import { officialPiReady as officialPiCohortReady } from "./context-memory-preview-stock-install.mjs";
 import { assertProfileVersion, VERSION as FUNCTIONAL_PREVIEW_VERSION } from "./context-memory-preview-acceptance-profile.mjs";
+import { releasePlan } from "./context-memory-preview-release-checks.mjs";
 
 // Command order comes from .github/workflows/context-memory.yml; do not add a second pipeline.
 const usage =
@@ -68,8 +70,11 @@ const root = realpathSync(rootResult.stdout.trim());
 const extension = "packages/coding-agent/src/extensions/context-memory";
 const fingerprintFile = `${extension}/build.ts`;
 const stockRoot = join(root, ".artifacts/context-memory-preview-stock");
-const compatibleStockRoot = join(root, ".artifacts/context-memory-preview-stock-1.1.0");
 const otherStockRoot = join(root, ".artifacts/context-memory-preview-stock-1.0.4");
+/** The primary host uses the documented root; each older supported host has its own. */
+function hostRoot(host, primary = PRIMARY_PI_VERSION) {
+	return host === primary ? stockRoot : join(root, `.artifacts/context-memory-preview-stock-${host}`);
+}
 const lockMarker = join(root, "node_modules/.context-memory-ops-lock");
 const identity = userInfo();
 const uid = process.getuid?.() ?? identity.username.replace(/[^\w-]/g, "_");
@@ -183,7 +188,7 @@ function dependencyState(hash) {
 	return { installed, marked };
 }
 
-function officialPiReady(directory = stockRoot, version = "1.2.0") {
+function officialPiReady(directory = stockRoot, version = PRIMARY_PI_VERSION) {
 	return officialPiCohortReady(directory, version);
 }
 
@@ -208,8 +213,10 @@ async function doctor() {
 		write(
 			`dependencies: ${installed ? "installed" : "missing/incomplete"}; lock marker: ${marked ? "current" : "missing/stale (deps will install)"}\n`,
 		);
-		write(`official Pi 1.2.0: ${officialPiReady() ? "ready" : "not ready (preview will install)"}\n`);
-		write(`supported Pi 1.1.0: ${officialPiReady(compatibleStockRoot, "1.1.0") ? "ready" : "not ready (preview will install)"}\n`);
+		for (const host of SUPPORTED_PI_VERSIONS) {
+			const role = host === PRIMARY_PI_VERSION ? "official" : "supported";
+			write(`${role} Pi ${host}: ${officialPiReady(hostRoot(host), host) ? "ready" : "not ready (preview will install)"}\n`);
+		}
 		write(
 			`official Pi 1.0.4 scenario control: ${officialPiReady(otherStockRoot, "1.0.4") ? "ready" : "not ready (preview will install)"}\n`,
 		);
@@ -287,31 +294,38 @@ async function installOfficialPi(name, directory, version) {
 
 async function preview() {
 	await nodeStep("preview-build", ["scripts/context-memory-preview-build.mjs"]);
-	assertProfileVersion(profile, JSON.parse(readFileSync(join(root, ".artifacts/context-memory-preview-package/package.json"), "utf8")).version);
-	await installOfficialPi("official-pi", stockRoot, "1.2.0");
-	await installOfficialPi("official-pi-1.1.0", compatibleStockRoot, "1.1.0");
+	const packageDir = join(root, ".artifacts/context-memory-preview-package");
+	const read = (file) => JSON.parse(readFileSync(join(packageDir, file), "utf8"));
+	// The same plan CI and publication read from the candidate's own metadata.
+	const plan = releasePlan({ manifest: read("package.json"), build: read("preview-build.json") });
+	assertProfileVersion(profile, plan.version);
+	const [primary, ...older] = plan.hosts;
+	for (const host of plan.hosts) {
+		await installOfficialPi(host === primary ? "official-pi" : `official-pi-${host}`, hostRoot(host, primary), host);
+	}
 	await nodeStep("preview-acceptance", [
 		"scripts/context-memory-preview-acceptance.mjs",
 		"--package-dir",
 		".artifacts/context-memory-preview-package",
 		"--stock-root",
-		".artifacts/context-memory-preview-stock",
-		"--compatible-stock-root",
-		compatibleStockRoot,
+		hostRoot(primary, primary),
+		...older.flatMap((host) => ["--compatible-stock-root", hostRoot(host, primary)]),
 		"--output-dir",
 		".artifacts/context-memory-preview-acceptance",
 	]);
-	await nodeStep("preview-acceptance-1.1.0", [
-		"scripts/context-memory-preview-acceptance.mjs", "--package-dir", ".artifacts/context-memory-preview-package",
-		"--stock-root", compatibleStockRoot, "--output-dir", ".artifacts/context-memory-preview-acceptance-1.1.0",
-	]);
-	await installOfficialPi("official-pi-1.0.4", otherStockRoot, "1.0.4");
+	for (const host of older) {
+		await nodeStep(`preview-acceptance-${host}`, [
+			"scripts/context-memory-preview-acceptance.mjs", "--package-dir", ".artifacts/context-memory-preview-package",
+			"--stock-root", hostRoot(host, primary), "--output-dir", `.artifacts/context-memory-preview-acceptance-${host}`,
+		]);
+	}
+	await installOfficialPi(`official-pi-${plan.otherHost}`, otherStockRoot, plan.otherHost);
 	await nodeStep("preview-scenarios", [
 		"scripts/context-memory-preview-scenarios.mjs",
 		"--package-dir",
 		".artifacts/context-memory-preview-package",
 		"--stock-root",
-		".artifacts/context-memory-preview-stock",
+		hostRoot(primary, primary),
 		"--other-stock-root",
 		".artifacts/context-memory-preview-stock-1.0.4",
 		"--output-dir",

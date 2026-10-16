@@ -351,20 +351,24 @@ export class PreviewMemoryController {
 	private readonly compactionStartedAt = new Map<string, number>();
 	readonly hostVersion: string;
 	private activeTools: () => Tool[] = () => [];
-	private lastProgress?: WriterProgress;
+	/** Per session, like every other state here, so status never mixes one session's calls with another's metrics. */
+	private readonly lastProgress = new Map<string, WriterProgress>();
 	private verified?: VerifiedBranch;
 	readonly notices = new NoticeGate();
 	private readonly preparation?: PreviewPreparation;
 	private readonly journal?: CallJournal;
 	private readonly workNotes: PreviewSwitch;
-	private lastCompaction?: {
-		path: "complete" | "prefix" | "notes" | "sync";
-		candidateId?: string;
-		foregroundCalls: number;
-		stageMs: number;
-		pauseMs?: number;
-		diskConfirmed: boolean;
-	};
+	private readonly lastCompaction = new Map<
+		string,
+		{
+			path: "complete" | "prefix" | "notes" | "sync";
+			candidateId?: string;
+			foregroundCalls: number;
+			stageMs: number;
+			pauseMs?: number;
+			diskConfirmed: boolean;
+		}
+	>();
 
 	constructor(options: PreviewControllerOptions) {
 		this.config = options.config;
@@ -542,15 +546,28 @@ export class PreviewMemoryController {
 		let checkpointId: string | undefined;
 		let state: PreviewDiagnosis["state"] = "inactive";
 		let code: string | undefined;
+		// compact() runs the same configuration and session checks first, so a failure here is not retryable.
+		let compactCannotClear = false;
+		let recover = false;
 		if (!inactive) {
 			const stored = this.store.inspect(session);
 			state = stored.state;
 			code = this.configError ?? this.stickyFailures.get(session.getSessionId()) ?? stored.code;
+			compactCannotClear = this.configError !== undefined || !this.config;
 			try {
 				assertPreviewSession(session, this.hostVersion);
-				checkpointId = latestMemory(session.getBranch())?.entry.id;
+				const latest = latestMemory(session.getBranch());
+				checkpointId = latest?.entry.id;
+				// The conditions recover() checks before its readback: a staged checkpoint at the leaf and a record.
+				const leaf = session.getLeafEntry();
+				recover =
+					state !== "ready" &&
+					leaf?.type === "compaction" &&
+					latest?.entry.id === leaf.id &&
+					this.store.markerPresent(session);
 			} catch (error) {
 				code = previewErrorCode(error);
+				compactCannotClear = true;
 			}
 			if (code && code !== stored.code) state = "blocked";
 		}
@@ -572,10 +589,17 @@ export class PreviewMemoryController {
 		const last = [...session.buildSessionProjection().messages]
 			.reverse()
 			.find((message) => message.role !== "system");
-		const turnComplete =
-			last?.role === "assistant" &&
-			(last.stopReason === "stop" || last.stopReason === "length") &&
-			!ctx.hasPendingMessages();
+		const idle = !ctx.hasPendingMessages();
+		const completed = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+		// compact() also accepts a turn that ended in an error, an abort or unanswered input when it retries.
+		const terminated =
+			last?.role === "user" ||
+			(last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted"));
+		let manual: PreviewDiagnosis["manualCompaction"]["preview"];
+		if (inactive) manual = "not-active";
+		else if (compactCannotClear || writerError) manual = "blocked";
+		else if (state === "ready") manual = completed && idle ? "ready" : "waiting-for-turn";
+		else manual = (completed || terminated) && idle ? "retry" : "waiting-for-turn";
 		return {
 			build: PREVIEW_BUILD_ID,
 			host: this.hostVersion,
@@ -589,13 +613,8 @@ export class PreviewMemoryController {
 			writerError,
 			checkpointId,
 			manualCompaction: {
-				preview: inactive
-					? "not-active"
-					: state !== "ready"
-						? "blocked"
-						: turnComplete
-							? "ready"
-							: "waiting-for-turn",
+				preview: manual,
+				recover,
 				pi: "unknown",
 				contextTokens,
 				piDefaultKeepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
@@ -614,9 +633,11 @@ export class PreviewMemoryController {
 				prepared = { ...this.preparation.status(), state: "paused", reason: "writer-or-source-unavailable" };
 			}
 		}
+		const sessionId = ctx.sessionManager.getSessionId();
+		const lastCompaction = this.lastCompaction.get(sessionId);
 		let calls: ReturnType<CallJournal["summary"]> | undefined;
 		try {
-			calls = this.journal?.summary(ctx.sessionManager.getSessionId());
+			calls = this.journal?.summary(sessionId);
 		} catch {
 			// The journal is advisory for status; its own gap state is reported when it can be read.
 		}
@@ -633,7 +654,7 @@ export class PreviewMemoryController {
 			noteRepair: this.config?.noteRepair,
 			// Threshold compaction after a completed turn is handled; overflow recovery still needs /compact.
 			manualOnly: false,
-			lastWriter: this.lastProgress,
+			lastWriter: this.lastProgress.get(sessionId),
 			host: diagnosis.host,
 			supportedHost: diagnosis.supportedHost,
 			supportedHosts: diagnosis.supportedHosts,
@@ -642,7 +663,7 @@ export class PreviewMemoryController {
 			manualCompaction: diagnosis.manualCompaction,
 			...(prepared ? { preparation: prepared } : {}),
 			...(calls ? { calls } : {}),
-			...(this.lastCompaction ? { lastCompaction: this.lastCompaction } : {}),
+			...(lastCompaction ? { lastCompaction } : {}),
 		};
 	}
 
@@ -916,7 +937,7 @@ export class PreviewMemoryController {
 			const prefix = getInitialSystemMessage(prefixMessages)
 				? { messages: prefixMessages }
 				: { systemPrompt: ctx.getSystemPrompt(), messages: prefixMessages, tools: this.activeTools() };
-			this.lastProgress = undefined;
+			this.lastProgress.delete(attempt.sessionId);
 			const submission = this.preparation?.enabled
 				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }
 				: undefined;
@@ -998,14 +1019,14 @@ export class PreviewMemoryController {
 			let written: WriteMemoryResult;
 			if (ready) {
 				written = { ...ready, usage: sumMemoryUsage([]), chunkCount: 0 };
-				this.lastProgress = {
+				this.lastProgress.set(attempt.sessionId, {
 					writerModel: written.writerModel,
 					writerEffort: written.writerEffort,
 					writerCalls: 0,
 					usageReports: 0,
 					repairUsed: false,
 					writerCallDetails: [],
-				};
+				});
 			} else {
 				written = await writeMemory({
 					config: this.config,
@@ -1023,7 +1044,7 @@ export class PreviewMemoryController {
 					customInstructions: event.customInstructions,
 					callHooks: this.journal?.hooks(attempt.sessionId, "compaction", attempt.lastCheckpointId ?? "none"),
 					onProgress: (progress) => {
-						this.lastProgress = progress;
+						this.lastProgress.set(attempt.sessionId, progress);
 					},
 				});
 			}
@@ -1084,13 +1105,13 @@ export class PreviewMemoryController {
 			this.store.stage(ctx.sessionManager, attempt, candidate);
 			this.preparation?.staged(reused?.candidate.input.candidateId);
 			this.stagedCompactions.add(attempt.sessionId);
-			this.lastCompaction = {
+			this.lastCompaction.set(attempt.sessionId, {
 				path,
 				...(reused ? { candidateId: reused.candidate.input.candidateId } : {}),
-				foregroundCalls: this.lastProgress?.writerCalls ?? 0,
+				foregroundCalls: this.lastProgress.get(attempt.sessionId)?.writerCalls ?? 0,
 				stageMs: Math.round(performance.now() - started),
 				diskConfirmed: false,
-			};
+			});
 			return candidate;
 		} catch (error) {
 			const code = previewErrorCode(error, event.signal.aborted);
@@ -1116,9 +1137,10 @@ export class PreviewMemoryController {
 			this.store.commit(ctx.sessionManager, event.compactionEntry);
 			const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
 			this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
-			if (this.lastCompaction) {
-				this.lastCompaction.diskConfirmed = true;
-				if (started !== undefined) this.lastCompaction.pauseMs = Math.round(performance.now() - started);
+			const last = this.lastCompaction.get(ctx.sessionManager.getSessionId());
+			if (last) {
+				last.diskConfirmed = true;
+				if (started !== undefined) last.pauseMs = Math.round(performance.now() - started);
 			}
 			this.preparation?.committed();
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());

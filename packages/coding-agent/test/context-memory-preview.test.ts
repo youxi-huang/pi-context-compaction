@@ -201,6 +201,25 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(controller.status(ctx).lastCompaction).toMatchObject({ foregroundCalls: 0, diskConfirmed: true });
 		expect(ctx.abort).not.toHaveBeenCalled();
 	});
+	it("keeps the last writer and compaction metrics with the session that produced them", async () => {
+		const value = await controller.compact(event(), ctx);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		expect(controller.status(ctx).lastWriter).toBeDefined();
+		expect(controller.status(ctx).lastCompaction).toMatchObject({ path: "sync", diskConfirmed: true });
+		const other = {
+			...ctx,
+			sessionManager: new SyntheticSession(root, "other-session"),
+		} as unknown as ExtensionContext;
+		const status = controller.status(other);
+		expect(status.lastWriter).toBeUndefined();
+		expect(status.lastCompaction).toBeUndefined();
+		expect(controller.status(ctx).lastCompaction).toMatchObject({ diskConfirmed: true });
+	});
 	it("handles Pi's threshold compaction after a completed turn like /compact, without an explicit retry", async () => {
 		expect(controller.thresholdReady(ctx)).toBe(true);
 		const value = await controller.compact({ ...event(), reason: "threshold" } as SessionBeforeCompactEvent, ctx);
@@ -1481,7 +1500,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(unsupportedReason(session)).toBe("image");
 		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
 	});
-	it.each(["1.2.0", "1.1.0"])(
+	it.each(["1.3.0", "1.2.0", "1.1.0"])(
 		"continues protected checkpoints on reviewed Pi %s and reports that host as supported",
 		(version) => {
 			protect();
@@ -1494,13 +1513,13 @@ describe("independent extension preview: sessions it does not protect", () => {
 				state: "ready",
 				protection: "protected",
 				host: version,
-				supportedHost: "1.2.0",
-				supportedHosts: ["1.2.0", "1.1.0"],
+				supportedHost: "1.3.0",
+				supportedHosts: ["1.3.0", "1.2.0", "1.1.0"],
 			});
 			expect(doctorReport(preview.diagnose(ctx), { disabled: false })).toContain(`host: ok - Pi ${version}`);
 		},
 	);
-	it.each(["1.0.4", "1.2.1", "1.3.0", "1.2.0-custom"])(
+	it.each(["1.0.4", "1.2.1", "1.3.1", "1.4.0", "1.2.0-custom"])(
 		"keeps protected sessions blocked on unreviewed Pi %s",
 		(version) => {
 			protect();
@@ -1670,6 +1689,57 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(report).toMatch(/manual \/compact: unknown/);
 		expect(report).toContain("Nothing to compact (session too small)");
 		expect(report).toContain("Result: ready");
+	});
+	it("the doctor offers a manual retry after a retryable failure instead of calling /compact blocked", () => {
+		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_WRITER_FAILED");
+		const preview = controller();
+		const diagnosis = preview.diagnose(context());
+		expect(diagnosis).toMatchObject({ state: "blocked", code: "CONTEXT_WRITER_FAILED", protection: "protected" });
+		expect(diagnosis.manualCompaction).toMatchObject({ preview: "retry", recover: false });
+		const report = doctorReport(diagnosis, { disabled: false, writerModel: "session" });
+		expect(report).toContain("manual /compact: retry - a new /compact retries");
+		expect(report).not.toContain("has to be resolved first");
+		expect(report).toContain("Result: blocked. Run /compact to try again.");
+		const queued = { ...context(), hasPendingMessages: () => true } as unknown as ExtensionContext;
+		expect(preview.diagnose(queued).manualCompaction.preview).toBe("waiting-for-turn");
+	});
+	it("the doctor points to /compaction-recover when Pi already saved the staged checkpoint", () => {
+		new PreviewFailureStore(agentDir).begin(session);
+		protect();
+		const diagnosis = controller().diagnose(context());
+		expect(diagnosis).toMatchObject({ state: "pending", code: "CONTEXT_PREVIEW_PENDING" });
+		expect(diagnosis.manualCompaction).toMatchObject({ preview: "retry", recover: true });
+		const report = doctorReport(diagnosis, { disabled: false, writerModel: "session" });
+		expect(report).toContain(
+			"manual /compact: retry - /compaction-recover can confirm the checkpoint Pi already saved",
+		);
+		expect(report).toContain("Result: blocked. Run /compaction-recover to confirm the saved checkpoint");
+	});
+	it("the doctor calls /compact blocked only when it cannot clear the block in this session", () => {
+		protect();
+		addImage();
+		const unsupported = controller().diagnose(context());
+		expect(unsupported.manualCompaction).toMatchObject({ preview: "blocked", recover: false });
+		expect(doctorReport(unsupported, { disabled: false })).toContain(
+			"manual /compact: blocked - /compact cannot clear CONTEXT_PREVIEW_UNSUPPORTED here: keep this session file and continue in a new text-only session.",
+		);
+		session.entries = session.entries.filter((entry) => entry.id !== "image-input");
+		session.leafId = session.entries.at(-1)!.id;
+		session.persist();
+		const config = controller({ configError: "CONTEXT_CONFIG" }).diagnose(context());
+		expect(config.manualCompaction.preview).toBe("blocked");
+		expect(doctorReport(config, { disabled: false, configError: "CONTEXT_CONFIG" })).toContain(
+			"manual /compact: blocked - /compact cannot clear CONTEXT_CONFIG here: fix or remove that file, then restart Pi.",
+		);
+		const fixed = new PreviewMemoryController({
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "missing/writer" },
+			failureStore: new PreviewFailureStore(agentDir),
+		}).diagnose(context());
+		expect(fixed).toMatchObject({ state: "ready", manualCompaction: { preview: "blocked" } });
+		const writerReport = doctorReport(fixed, { disabled: false, writerModel: "missing/writer" });
+		expect(writerReport).toMatch(/manual \/compact: blocked - \/compact cannot clear CONTEXT_WRITER_\w+ here/);
+		expect(writerReport).toContain("Result: ready, but /compact cannot write a checkpoint yet.");
+		expect(writerReport).not.toContain("run /compact once the conversation has grown");
 	});
 	it("does not latch a damaged session file into the process when only inspected", () => {
 		fs.writeFileSync(session.file!, `${JSON.stringify(session.header)}\n{truncated original`);

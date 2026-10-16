@@ -1,14 +1,15 @@
 {
-  "build": "stock-preview+src.e647172b8fa33f9c",
-  "version": "0.4.2",
-  "sourceCommit": "dc5c2950416cfc2eb0499e73f31c42b6ca69c34d",
-  "supportedPi": "1.2.0",
+  "build": "stock-preview+src.6d21d37d4e59aefe",
+  "version": "0.4.3",
+  "sourceCommit": "23d10a09b06152a8d4be783c4bca4ff6c9151864",
+  "supportedPi": "1.3.0",
   "supportedPiVersions": [
+    "1.3.0",
     "1.2.0",
     "1.1.0"
   ],
   "checkpointSchema": 1,
-  "sourceHash": "e647172b8fa33f9cc8f41cc6691ba6d08f07ae617d8af3a1cc47edad8412c789",
+  "sourceHash": "6d21d37d4e59aefef91b91bb492894943b6cd88feffcab08afc1fb59856239df",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -40,11 +41,11 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts",
-      "sha256": "3827bd6699b84538a707277a419f503c6d11c97f6f6cfda0c60460ea0c270eb6"
+      "sha256": "28a1dccfa217e6f4a2b807a710a32e4eee0c980a6ec4babbb9742eaf0982c2d5"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/controller.ts",
-      "sha256": "bfbe6894ec9b8d0b5e19de262c539b43d92a870063756fc2548339bc898f189d"
+      "sha256": "818b459b631b7b823a5f5c8f59ac6ffe35249a5ba626f36fcf0ea2daed609600"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
@@ -60,7 +61,7 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/notices.ts",
-      "sha256": "b7b964a4baae1a4019ac8071034e6cea0f97e2ca5932a5b537ab648674f3f906"
+      "sha256": "8ad494ff704372856352ee49660aa8c2fbf7659f25b52979a0721d44bdd8058e"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/preparation-candidate.ts",

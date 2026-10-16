@@ -1011,12 +1011,12 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.e647172b8fa33f9c";
+var PREVIEW_BUILD_ID = "stock-preview+src.6d21d37d4e59aefe";
 
 // packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
-var SUPPORTED_PI_VERSIONS = Object.freeze(["1.2.0", "1.1.0"]);
+var SUPPORTED_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0"]);
 var PRIMARY_PI_VERSION = SUPPORTED_PI_VERSIONS[0];
-var SUPPORTED_PI_LABEL = SUPPORTED_PI_VERSIONS.join(" or ");
+var SUPPORTED_PI_LABEL = SUPPORTED_PI_VERSIONS.length < 2 ? PRIMARY_PI_VERSION : `${SUPPORTED_PI_VERSIONS.slice(0, -1).join(", ")} or ${SUPPORTED_PI_VERSIONS.at(-1)}`;
 function supportsPi(version) {
   return SUPPORTED_PI_VERSIONS.includes(version);
 }
@@ -1253,12 +1253,28 @@ function doctorReport(diagnosis, settings) {
   const manual = diagnosis.manualCompaction;
   const tokens = manual.contextTokens === null || manual.contextTokens === 0 ? "" : ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`;
   const gate = `Pi decides whether there is enough older history. It keeps the most recent ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} estimated tokens by default (compaction.keepRecentTokens) and answers "Nothing to compact (session too small)" until there is more, which is not a failure.${tokens}`;
+  const recover = "/compaction-recover can confirm the checkpoint Pi already saved, without a model call";
   if (manual.preview === "not-active")
     line("manual /compact", "inactive", "handled by Pi's own compaction in this session");
-  else if (manual.preview === "blocked")
-    line("manual /compact", "blocked", `${diagnosis.code ?? "the block below"} has to be resolved first`);
+  else if (manual.preview === "blocked") {
+    const blocking = diagnosis.code ?? diagnosis.writerError;
+    line(
+      "manual /compact",
+      "blocked",
+      blocking ? `/compact cannot clear ${blocking} here: ${adviceFor(blocking, reason, diagnosis.host).next}` : "/compact cannot run here yet"
+    );
+  } else if (manual.preview === "retry")
+    line(
+      "manual /compact",
+      "retry",
+      manual.recover ? `${recover}; otherwise a new /compact retries. ${gate}` : `a new /compact retries, and requests resume once its checkpoint is confirmed on disk. ${gate}`
+    );
   else if (manual.preview === "waiting-for-turn")
-    line("manual /compact", "unknown", `the preview needs a finished turn with no queued input first; ${gate}`);
+    line(
+      "manual /compact",
+      "unknown",
+      `the preview needs a finished turn with no queued input first${manual.recover ? `; ${recover} now` : ""}. ${gate}`
+    );
   else line("manual /compact", "unknown", `the preview is ready; ${gate}`);
   const durable = diagnosis.state === "pending" || diagnosis.state === "blocked" && diagnosis.protection === "protected";
   if (durable && diagnosis.code) {
@@ -1270,8 +1286,16 @@ function doctorReport(diagnosis, settings) {
     line("durable block", "ok", "none");
   }
   if (inactive) lines.push("Result: inactive. Nothing was changed in this session; Pi's own compaction applies.");
+  else if (diagnosis.code && manual.recover)
+    lines.push(
+      "Result: blocked. Run /compaction-recover to confirm the saved checkpoint; if it is refused, run /compact."
+    );
   else if (diagnosis.code)
     lines.push(`Result: blocked. ${sentence(adviceFor(diagnosis.code, reason, diagnosis.host).next)}`);
+  else if (diagnosis.writerError)
+    lines.push(
+      `Result: ready, but /compact cannot write a checkpoint yet. ${sentence(adviceFor(diagnosis.writerError, reason, diagnosis.host).next)}`
+    );
   else lines.push("Result: ready. Keep working, and run /compact once the conversation has grown.");
   return lines.join("\n");
 }
@@ -2221,13 +2245,14 @@ var PreviewMemoryController = class {
   compactionStartedAt = /* @__PURE__ */ new Map();
   hostVersion;
   activeTools = () => [];
-  lastProgress;
+  /** Per session, like every other state here, so status never mixes one session's calls with another's metrics. */
+  lastProgress = /* @__PURE__ */ new Map();
   verified;
   notices = new NoticeGate();
   preparation;
   journal;
   workNotes;
-  lastCompaction;
+  lastCompaction = /* @__PURE__ */ new Map();
   constructor(options) {
     this.config = options.config;
     this.store = options.failureStore;
@@ -2380,15 +2405,22 @@ var PreviewMemoryController = class {
     let checkpointId;
     let state = "inactive";
     let code;
+    let compactCannotClear = false;
+    let recover = false;
     if (!inactive) {
       const stored = this.store.inspect(session);
       state = stored.state;
       code = this.configError ?? this.stickyFailures.get(session.getSessionId()) ?? stored.code;
+      compactCannotClear = this.configError !== void 0 || !this.config;
       try {
         assertPreviewSession(session, this.hostVersion);
-        checkpointId = latestMemory(session.getBranch())?.entry.id;
+        const latest = latestMemory(session.getBranch());
+        checkpointId = latest?.entry.id;
+        const leaf = session.getLeafEntry();
+        recover = state !== "ready" && leaf?.type === "compaction" && latest?.entry.id === leaf.id && this.store.markerPresent(session);
       } catch (error) {
         code = previewErrorCode(error);
+        compactCannotClear = true;
       }
       if (code && code !== stored.code) state = "blocked";
     }
@@ -2407,7 +2439,14 @@ var PreviewMemoryController = class {
     } catch {
     }
     const last = [...session.buildSessionProjection().messages].reverse().find((message) => message.role !== "system");
-    const turnComplete = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length") && !ctx.hasPendingMessages();
+    const idle = !ctx.hasPendingMessages();
+    const completed = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+    const terminated = last?.role === "user" || last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted");
+    let manual;
+    if (inactive) manual = "not-active";
+    else if (compactCannotClear || writerError) manual = "blocked";
+    else if (state === "ready") manual = completed && idle ? "ready" : "waiting-for-turn";
+    else manual = (completed || terminated) && idle ? "retry" : "waiting-for-turn";
     return {
       build: PREVIEW_BUILD_ID,
       host: this.hostVersion,
@@ -2421,7 +2460,8 @@ var PreviewMemoryController = class {
       writerError,
       checkpointId,
       manualCompaction: {
-        preview: inactive ? "not-active" : state !== "ready" ? "blocked" : turnComplete ? "ready" : "waiting-for-turn",
+        preview: manual,
+        recover,
         pi: "unknown",
         contextTokens,
         piDefaultKeepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens
@@ -2439,9 +2479,11 @@ var PreviewMemoryController = class {
         prepared = { ...this.preparation.status(), state: "paused", reason: "writer-or-source-unavailable" };
       }
     }
+    const sessionId = ctx.sessionManager.getSessionId();
+    const lastCompaction = this.lastCompaction.get(sessionId);
     let calls;
     try {
-      calls = this.journal?.summary(ctx.sessionManager.getSessionId());
+      calls = this.journal?.summary(sessionId);
     } catch {
     }
     return {
@@ -2457,7 +2499,7 @@ var PreviewMemoryController = class {
       noteRepair: this.config?.noteRepair,
       // Threshold compaction after a completed turn is handled; overflow recovery still needs /compact.
       manualOnly: false,
-      lastWriter: this.lastProgress,
+      lastWriter: this.lastProgress.get(sessionId),
       host: diagnosis.host,
       supportedHost: diagnosis.supportedHost,
       supportedHosts: diagnosis.supportedHosts,
@@ -2466,7 +2508,7 @@ var PreviewMemoryController = class {
       manualCompaction: diagnosis.manualCompaction,
       ...prepared ? { preparation: prepared } : {},
       ...calls ? { calls } : {},
-      ...this.lastCompaction ? { lastCompaction: this.lastCompaction } : {}
+      ...lastCompaction ? { lastCompaction } : {}
     };
   }
   /**
@@ -2702,7 +2744,7 @@ var PreviewMemoryController = class {
       assertToolPairs(prefixMessages);
       const sessionWriter = this.config.writerModel === SESSION_WRITER;
       const prefix = getInitialSystemMessage(prefixMessages) ? { messages: prefixMessages } : { systemPrompt: ctx.getSystemPrompt(), messages: prefixMessages, tools: this.activeTools() };
-      this.lastProgress = void 0;
+      this.lastProgress.delete(attempt.sessionId);
       const submission = this.preparation?.enabled ? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy } : void 0;
       const available = submission ? this.preparation?.take(submission) : void 0;
       let path = available?.classification.status === "current-full" ? "complete" : "sync";
@@ -2760,14 +2802,14 @@ var PreviewMemoryController = class {
       let written;
       if (ready) {
         written = { ...ready, usage: sumMemoryUsage([]), chunkCount: 0 };
-        this.lastProgress = {
+        this.lastProgress.set(attempt.sessionId, {
           writerModel: written.writerModel,
           writerEffort: written.writerEffort,
           writerCalls: 0,
           usageReports: 0,
           repairUsed: false,
           writerCallDetails: []
-        };
+        });
       } else {
         written = await writeMemory({
           config: this.config,
@@ -2785,7 +2827,7 @@ var PreviewMemoryController = class {
           customInstructions: event.customInstructions,
           callHooks: this.journal?.hooks(attempt.sessionId, "compaction", attempt.lastCheckpointId ?? "none"),
           onProgress: (progress) => {
-            this.lastProgress = progress;
+            this.lastProgress.set(attempt.sessionId, progress);
           }
         });
       }
@@ -2835,13 +2877,13 @@ var PreviewMemoryController = class {
       this.store.stage(ctx.sessionManager, attempt, candidate);
       this.preparation?.staged(reused?.candidate.input.candidateId);
       this.stagedCompactions.add(attempt.sessionId);
-      this.lastCompaction = {
+      this.lastCompaction.set(attempt.sessionId, {
         path,
         ...reused ? { candidateId: reused.candidate.input.candidateId } : {},
-        foregroundCalls: this.lastProgress?.writerCalls ?? 0,
+        foregroundCalls: this.lastProgress.get(attempt.sessionId)?.writerCalls ?? 0,
         stageMs: Math.round(performance.now() - started),
         diskConfirmed: false
-      };
+      });
       return candidate;
     } catch (error) {
       const code = previewErrorCode(error, event.signal.aborted);
@@ -2864,9 +2906,10 @@ var PreviewMemoryController = class {
       this.store.commit(ctx.sessionManager, event.compactionEntry);
       const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
       this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
-      if (this.lastCompaction) {
-        this.lastCompaction.diskConfirmed = true;
-        if (started !== void 0) this.lastCompaction.pauseMs = Math.round(performance.now() - started);
+      const last = this.lastCompaction.get(ctx.sessionManager.getSessionId());
+      if (last) {
+        last.diskConfirmed = true;
+        if (started !== void 0) last.pauseMs = Math.round(performance.now() - started);
       }
       this.preparation?.committed();
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());

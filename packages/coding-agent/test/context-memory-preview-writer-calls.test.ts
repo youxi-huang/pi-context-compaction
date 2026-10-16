@@ -469,6 +469,37 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(test.progress.at(-1)?.usage).toEqual(usage);
 	});
 
+	it("refuses a session writer response that calls a tool, without running it or repairing", async () => {
+		const prefix = {
+			systemPrompt: "Synthetic session control",
+			messages: [{ role: "user" as const, content: "Keep port 4317.", timestamp: 1 }],
+			tools: [{ name: "synthetic_tool", description: "Synthetic schema", parameters: { type: "object" } }],
+		};
+		const called: AssistantMessage = {
+			...response(),
+			content: [{ type: "toolCall", id: "call-1", name: "synthetic_tool", arguments: {} }],
+			stopReason: "toolUse",
+		};
+		const test = harness(
+			() => {
+				const stream = createAssistantMessageEventStream();
+				stream.push({ type: "done", reason: "toolUse", message: called });
+				stream.end(called);
+				return stream;
+			},
+			{
+				config: { ...DEFAULT_MEMORY_CONFIG, writerEffort: "low" },
+				sessionModel: { ...model, id: "session-model" },
+				sessionThinkingLevel: "high",
+				prefix,
+			},
+		);
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
+		expect(test.requests).toHaveBeenCalledTimes(1);
+		const instruction = test.requests.mock.calls[0][1].messages.at(-1)?.content;
+		expect(instruction).toContain("call no tool");
+	});
+
 	it("preserves session prefix values and cache defaults with the current session model and effort", async () => {
 		const prefix = {
 			systemPrompt: "Synthetic session control",
@@ -490,7 +521,9 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(actualContext.messages[0]).toBe(prefix.messages[0]);
 		expect(actualContext.tools).toEqual(prefix.tools);
 		expect(actualContext.tools?.[0]).toBe(prefix.tools[0]);
-		expect(actualRequest).toMatchObject({ reasoning: "high", maxRetries: 0, toolChoice: "none" });
+		expect(actualRequest).toMatchObject({ reasoning: "high", maxRetries: 0 });
+		// Like the session's own requests, so the provider can reuse the cached prefix tools included.
+		expect(actualRequest).not.toHaveProperty("toolChoice");
 		expect(actualRequest).not.toHaveProperty("cacheRetention");
 		expect(test.before[0].model).toBe(`${model.provider}/session-model`);
 		expect(test.before[0].writerEffort).toBe("high");

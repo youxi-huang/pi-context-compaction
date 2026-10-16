@@ -740,7 +740,9 @@ async function writeWithSession(
 			maxTokens,
 			signal,
 			maxRetries: 0,
-			toolChoice: "none",
+			// No tool choice, as in the session's own requests: the provider can then reuse the cached prefix. Under
+			// "none", DeepSeek leaves the tool definitions out of the prompt, so the prefix ends after the system prompt.
+			// A tool call is never run here; it refuses the note with CONTEXT_WRITER_FAILED.
 			transport: "sse",
 		},
 	);
@@ -797,7 +799,7 @@ function handoverInstruction(
 		focus: options.customInstructions,
 	};
 	return [
-		"Internal context-compaction request, not a new user task or ruling. For this writer response only, produce the memory JSON instead of executing task actions or tools. This control step neither completes nor cancels the original task and does not change its permissions. Do not cite or summarize this control instruction as user evidence. Write the memory note that lets the next model continue the original requests from recorded progress after the messages above are removed from its context.",
+		"Internal context-compaction request, not a new user task or ruling. For this writer response only, produce the memory JSON instead of executing task actions, and call no tool: the tools are listed only because this request shares the session's context, and a tool call refuses the note. This control step neither completes nor cancels the original task and does not change its permissions. Do not cite or summarize this control instruction as user evidence. Write the memory note that lets the next model continue the original requests from recorded progress after the messages above are removed from its context.",
 		`Return ONLY one JSON object matching this schema:\n${JSON.stringify(noteSchema)}`,
 		NOTE_RULES,
 		continuationInstruction(options),

@@ -27,11 +27,18 @@ describe("preview evaluation fixtures", () => {
 		const manifest = JSON.parse(read("manifest.json"));
 		for (const [path, hash] of Object.entries(manifest.files))
 			expect(createHash("sha256").update(read(path)).digest("hex"), path).toBe(hash);
-		expect(Object.keys(manifest.files).sort()).toEqual(["P1/gold.json", "P1/session.jsonl", "P2/gold.json", "P2/session.jsonl"]);
+		expect(Object.keys(manifest.files).sort()).toEqual([
+			"P1/gold.json",
+			"P1/session.jsonl",
+			"P2/gold.json",
+			"P2/session.jsonl",
+			"P3/gold.json",
+			"P3/session.jsonl",
+		]);
 	});
 
 	it("are linear Pi version-3 sessions whose cuts follow completed turns and whose gold precedes its cut", () => {
-		for (const id of ["P1", "P2"]) {
+		for (const id of ["P1", "P2", "P3"]) {
 			const { fixture, header, entries } = load(id);
 			expect(header).toMatchObject({ type: "session", version: 3 });
 			entries.forEach((entry, index) => expect(entry.parentId).toBe(entries[index - 1]?.id ?? null));
@@ -59,7 +66,7 @@ describe("preview evaluation fixtures", () => {
 	});
 
 	it("never name a probe's kind or any category in its prompt", () => {
-		for (const id of ["P1", "P2"]) {
+		for (const id of ["P1", "P2", "P3"]) {
 			for (const probe of load(id).fixture.probes) {
 				expect(probe.prompt, probe.id).not.toMatch(new RegExp(`\\b${probe.kind}\\b`, "i"));
 				expect(probe.prompt, probe.id).not.toMatch(/\b(kind|category|knowledge update|abstention|probe)\b/i);
@@ -79,6 +86,27 @@ describe("preview evaluation fixtures", () => {
 		for (const kind of ["current", "previous", "count", "forbidden", "withdrawn", "attribution", "authority", "absent"])
 			expect(kinds.has(kind as (typeof PROBE_KINDS)[number]), kind).toBe(true);
 		expect(fixture.probes.filter((probe) => probe.crossCheckpoint).length).toBeGreaterThanOrEqual(5);
+	});
+
+	it("hold in P3 more exact values, edits and failures than a note can carry", () => {
+		const { fixture, entries } = load("P3");
+		const calls = entries.flatMap((entry) =>
+			entry.message.role === "assistant"
+				? entry.message.content.filter((block: { type: string }) => block.type === "toolCall")
+				: [],
+		);
+		const failed = entries.filter((entry) => entry.message.role === "toolResult" && entry.message.isError);
+		expect(calls.filter((block: { name: string }) => ["edit", "write"].includes(block.name)).length).toBe(12);
+		expect(failed.length).toBe(4);
+		const counts = fixture.probes.filter((probe) => probe.kind === "count");
+		expect(counts.map((probe) => probe.expected)).toContainEqual({ type: "number", value: 12 });
+		expect(counts.map((probe) => probe.expected)).toContainEqual({ type: "number", value: 4 });
+		// The answers sit among hundreds of lines no note can list: 400 endpoints, 200 packages, 900 log lines.
+		const text = read("P3/session.jsonl");
+		expect(text.split(" p95_ms=").length - 1).toBe(400);
+		expect(text).toContain("POST /v1/refunds/batch p50_ms=61 p95_ms=437");
+		expect(text.split("POST /v1/refunds/batch").length - 1).toBe(1);
+		expect(fixture.probes.length).toBe(28);
 	});
 });
 

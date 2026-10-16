@@ -39,7 +39,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -321,7 +321,7 @@ async function parent() {
 	const outputDir = resolve(argument("--output-dir"));
 	const mode = argument("--mode");
 	const provider = argument("--provider", "loopback");
-	const fixtures = argument("--fixtures", "P1,P2").split(",");
+	const fixtures = argument("--fixtures", "P1,P2,P3").split(",");
 	const attempts = Number(argument("--attempts", "8"));
 	const thinking = argument("--thinking", "high");
 	const concurrency = Number(argument("--concurrency", "1"));

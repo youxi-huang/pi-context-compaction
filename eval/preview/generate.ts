@@ -601,11 +601,205 @@ function stockReport() {
 	);
 }
 
+/** A config migration whose answers outgrow a note: exact values in long reports, twelve edits and four failures. */
+function configMigration() {
+	const s = new Session("p3");
+	const services = ["payments", "refunds", "ledger", "gateway", "webhooks", "notify", "payouts", "disputes", "invoices", "accounts"];
+	const teams = ["amber", "birch", "cedar", "delta", "ember", "fjord", "grove", "heron"];
+	const latency = (() => {
+		const next = sequence(71);
+		const lines = Array.from({ length: 400 }, (_, i) => {
+			const p50 = Math.floor(next() * 80) + 5;
+			const p95 = p50 + Math.floor(next() * 300) + 20;
+			const p99 = p95 + Math.floor(next() * 400) + 10;
+			const calls = Math.floor(next() * 90000) + 1000;
+			const owner = teams[Math.floor(next() * teams.length)];
+			const op = `op${String(Math.floor(i / services.length)).padStart(2, "0")}`;
+			return `${["GET", "POST", "PUT"][i % 3]} /v1/${services[i % services.length]}/${op} p50_ms=${p50} p95_ms=${p95} p99_ms=${p99} calls=${calls} owner=team-${owner}`;
+		});
+		lines[137] = "POST /v1/refunds/batch p50_ms=61 p95_ms=437 p99_ms=912 calls=18204 owner=team-lumen";
+		lines[288] = "GET /v1/ledger/close p50_ms=12 p95_ms=96 p99_ms=240 calls=70411 owner=team-kestrel";
+		return `endpoint latency, last 7 days, 400 endpoints\n${lines.join("\n")}`;
+	})();
+	const deps = (() => {
+		const next = sequence(73);
+		const words = ["alpha", "beacon", "cobalt", "dune", "echo", "flint", "gale", "harbor", "iris", "jade"];
+		const licenses = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC"];
+		const lines = Array.from({ length: 200 }, (_, i) => {
+			const version = `${1 + Math.floor(next() * 9)}.${Math.floor(next() * 20)}.${Math.floor(next() * 30)}`;
+			const license = licenses[Math.floor(next() * licenses.length)];
+			return `${words[i % words.length]}-${String(Math.floor(i / words.length)).padStart(2, "0")}@${version} license=${license} used_by=${services[Math.floor(next() * services.length)]}`;
+		});
+		lines[64] = "yaml-tools@4.2.7 license=MIT used_by=gateway";
+		lines[151] = "pg-driver@8.11.3 license=BSD-3-Clause used_by=ledger";
+		return `dependency audit, 200 packages\n${lines.join("\n")}`;
+	})();
+	const testLog = (() => {
+		const next = sequence(79);
+		const lines = Array.from(
+			{ length: 520 },
+			(_, i) => `ok   ${services[i % services.length]}/case_${String(i).padStart(3, "0")}_test.go  ${(next() * 2).toFixed(3)}s`,
+		);
+		lines[311] = "FAIL webhooks/signature_test.go:88 expected status 200, got 401";
+		return `${lines.join("\n")}\nFAIL: 1 of 520 tests failed\nCommand exited with code 1`;
+	})();
+
+	const rules = s.user(
+		"Migrate the payments services from config v1 to v2. Rules: leave secrets/ untouched, every edited YAML file must pass make lint, and do not restart production. Start with the latency report and the dependency audit.",
+	);
+	const reports = s.tools("Reading the latency report and the dependency audit.", [
+		{ name: "read", args: { path: "reports/latency.txt" }, result: latency },
+		{ name: "read", args: { path: "reports/deps.txt" }, result: deps },
+	]);
+	s.assistant("Both reports are read: 400 endpoints and 200 packages. I'll start the migration with payments, refunds and ledger.");
+	const batch1 = s.tools("Migrating payments, refunds and ledger to v2.", [
+		{ name: "edit", args: { path: "config/payments.yaml", oldText: "timeout_s: 30", newText: "timeout_s: 45" }, result: "Edited config/payments.yaml: 1 replacement." },
+		{ name: "edit", args: { path: "config/refunds.yaml", oldText: "retries: 3", newText: "retries: 5\nretry_backoff: exponential" }, result: "Edited config/refunds.yaml: 1 replacement." },
+		{ name: "write", args: { path: "config/ledger.yaml", content: "version: 2\nservice: ledger\ntimeout_s: 45\npool_size: 8\n" }, result: "Wrote config/ledger.yaml." },
+		{ name: "edit", args: { path: "config/payments.yaml", oldText: "pool_size: 10", newText: "pool_size: 16" }, result: "Edited config/payments.yaml: 1 replacement." },
+	]);
+	const lint1 = s.tools("Running the linter.", [
+		{
+			name: "bash",
+			args: { command: "make lint" },
+			result: "yamllint config/\nconfig/refunds.yaml:14:1: unknown key 'retry_backoff' (schema v2)\nCommand exited with code 2",
+			error: true,
+		},
+	]);
+	s.assistant("The v2 schema has no such key at the top level; I'll move it under retry.policy.");
+	const fix1 = s.tools("Fixing the refunds config.", [
+		{ name: "edit", args: { path: "config/refunds.yaml", oldText: "retry_backoff: exponential", newText: "retry:\n  policy: exponential" }, result: "Edited config/refunds.yaml: 1 replacement." },
+		{ name: "bash", args: { command: "make lint" }, result: "yamllint config/\nAll files pass." },
+	]);
+	const cut1 = s.assistant("Lint passes for payments, refunds and ledger. Next I'll migrate the gateway and webhook configs.");
+
+	const timeout = s.user("Use a 45-second timeout for every service, not just payments.");
+	const batch2 = s.tools("Applying the 45-second timeout to gateway, webhooks and notify.", [
+		{ name: "edit", args: { path: "config/gateway.yaml", oldText: "timeout_s: 20", newText: "timeout_s: 45" }, result: "Edited config/gateway.yaml: 1 replacement." },
+		{ name: "edit", args: { path: "config/webhooks.yaml", oldText: "timeout_s: 25", newText: "timeout_s: 45" }, result: "Edited config/webhooks.yaml: 1 replacement." },
+		{ name: "edit", args: { path: "config/notify.yaml", oldText: "timeout_s: 15", newText: "timeout_s: 45" }, result: "Edited config/notify.yaml: 1 replacement." },
+	]);
+	const tests1 = s.tools("Running the test suite.", [{ name: "bash", args: { command: "make test" }, result: testLog, error: true }]);
+	s.assistant("One webhook test fails. I'll try staging to reproduce it.");
+	const deploy = s.tools("Deploying to staging.", [
+		{
+			name: "bash",
+			args: { command: "make deploy-staging" },
+			result: "deploying payments-v2 to staging\nerror: staging quota exceeded: 12 of 12 instances in use\nCommand exited with code 3",
+			error: true,
+		},
+	]);
+	const noStaging = s.user("Don't deploy to staging again today; I'll raise the quota tomorrow.");
+	s.assistant("Understood: no staging deploys today.");
+	const webhookLog = s.tools("Reading the webhook log.", [
+		{
+			name: "read",
+			args: { path: "logs/webhooks.log" },
+			result: logLines("webhooks", 900, 83, {
+				612: "2026-01-06T04:31:09Z webhooks WARN signature mismatch kid=wh-2024-07 endpoint=/v1/webhooks/deliver",
+			}),
+		},
+	]);
+	s.assistant("The log shows a signing key mismatch, so I'll update the webhook signing key id.");
+	const keyEdit = s.tools("Updating the webhook signing key id.", [
+		{ name: "edit", args: { path: "config/webhooks.yaml", oldText: "signing_kid: wh-2024-07", newText: "signing_kid: wh-2025-01" }, result: "Edited config/webhooks.yaml: 1 replacement." },
+		{ name: "bash", args: { command: "make test" }, result: "ok   all 520 tests passed in 61.4s" },
+	]);
+	const cut2 = s.assistant("Tests pass. Next I'll update the runbook in docs/migration.md.");
+
+	const gatewayFix = s.user("Correction: the gateway timeout stays at 20 seconds; it fronts a 25-second upstream.");
+	const gatewayEdit = s.tools("Restoring the gateway timeout.", [
+		{ name: "edit", args: { path: "config/gateway.yaml", oldText: "timeout_s: 45", newText: "timeout_s: 20" }, result: "Edited config/gateway.yaml: 1 replacement." },
+	]);
+	const runbook = s.tools("Writing the runbook.", [
+		{
+			name: "write",
+			args: {
+				path: "docs/migration.md",
+				content: "# Payments config v2\n\nEvery service uses timeout_s: 45 except the gateway, which keeps 20 because it fronts a 25-second upstream service.\n",
+			},
+			result: "Wrote docs/migration.md.",
+		},
+		{
+			name: "bash",
+			args: { command: "make lint" },
+			result: "markdownlint docs/\ndocs/migration.md:3: line too long (142 > 120)\nCommand exited with code 2",
+			error: true,
+		},
+	]);
+	const runbookFix = s.tools("Wrapping the long line.", [
+		{
+			name: "edit",
+			args: { path: "docs/migration.md", oldText: "except the gateway, which", newText: "except the gateway,\nwhich" },
+			result: "Edited docs/migration.md: 1 replacement.",
+		},
+		{ name: "bash", args: { command: "make lint" }, result: "All files pass." },
+	]);
+	const cut3 = s.assistant("The runbook is written and lint passes. Next I'll open the pull request.");
+	const edits = [batch1.call, fix1.call, batch2.call, keyEdit.call, gatewayEdit.call, runbook.call, runbookFix.call];
+	const failures = [lint1.results[0], tests1.results[0], deploy.results[0], runbook.results[1]];
+
+	return fixture(
+		"P3",
+		"Config migration: exact values in long reports and logs, twelve edits and four failed tool calls, and a reverted timeout.",
+		s,
+		[cut1, cut2, cut3],
+		[
+			[
+				{ kind: "fact", prompt: "What p95 latency, in milliseconds, did the latency report give for POST /v1/refunds/batch?", expected: number(437), evidence: [reports.results[0]] },
+				{ kind: "fact", prompt: "Which team owns GET /v1/ledger/close in the latency report?", expected: text("team-kestrel", "kestrel"), evidence: [reports.results[0]] },
+				{ kind: "fact", prompt: "Which version of yaml-tools did the dependency audit list?", expected: text("4.2.7", "yaml-tools@4.2.7"), evidence: [reports.results[1]] },
+				{ kind: "count", prompt: "How many edit or write calls had been made to files under config/ by this point?", expected: number(5), evidence: [batch1.call, fix1.call] },
+				{ kind: "fact", prompt: "Which config file was edited twice before the first lint run?", expected: text("config/payments.yaml", "payments.yaml"), evidence: [batch1.call] },
+				{ kind: "fact", prompt: "Which unknown key did the first lint failure name?", expected: text("retry_backoff"), evidence: [lint1.results[0]] },
+				{ kind: "constraint", prompt: "Which directory must stay untouched?", expected: text("secrets/", "secrets"), evidence: [rules] },
+				{ kind: "absent", prompt: "What is the on-call phone number for the payments team?", expected: unknown, evidence: [] },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["restart production", "migrate the gateway and webhook configs", "edit files under secrets/", "revert config/payments.yaml"], "B"),
+					evidence: [cut1],
+				},
+			],
+			[
+				{ kind: "fact", prompt: "Which exit code did the staging deploy return?", expected: number(3), evidence: [deploy.results[0]] },
+				{ kind: "count", prompt: "How many tool calls had failed by this point?", expected: number(3), evidence: failures.slice(0, 3), crossCheckpoint: true },
+				{ kind: "fact", prompt: "Which test failed in the first test run, as file and line?", expected: text("webhooks/signature_test.go:88", "signature_test.go:88"), evidence: [tests1.results[0]] },
+				{ kind: "fact", prompt: "For which signing key id did the webhook log report a mismatch?", expected: text("wh-2024-07", "kid=wh-2024-07"), evidence: [webhookLog.results[0], keyEdit.call] },
+				{ kind: "forbidden", prompt: "May you deploy to staging again today?", expected: bool(false), evidence: [noStaging] },
+				{ kind: "current", prompt: "What timeout, in seconds, applies to every service now?", expected: number(45), evidence: [timeout] },
+				{ kind: "fact", prompt: "What p95 latency, in milliseconds, did the latency report give for GET /v1/ledger/close?", expected: number(96), evidence: [reports.results[0]], crossCheckpoint: true },
+				{ kind: "fact", prompt: "Which version of pg-driver did the dependency audit list?", expected: text("8.11.3", "pg-driver@8.11.3"), evidence: [reports.results[1]], crossCheckpoint: true },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["deploy to staging", "update the runbook in docs/migration.md", "restart production", "rotate the secrets"], "B"),
+					evidence: [cut2],
+				},
+			],
+			[
+				{ kind: "current", prompt: "What timeout, in seconds, does the gateway use now?", expected: number(20), evidence: [gatewayFix] },
+				{ kind: "previous", prompt: "What gateway timeout, in seconds, was set before the correction?", expected: number(45), evidence: [timeout, batch2.call], crossCheckpoint: true },
+				{ kind: "count", prompt: "How many edit or write calls were made in the whole task?", expected: number(12), evidence: edits, crossCheckpoint: true },
+				{ kind: "count", prompt: "How many tool calls failed in the whole task?", expected: number(4), evidence: failures, crossCheckpoint: true },
+				{ kind: "fact", prompt: "Which file did the last write call create?", expected: text("docs/migration.md", "migration.md"), evidence: [runbook.call] },
+				{ kind: "fact", prompt: "What maximum line length did the last lint failure state?", expected: number(120), evidence: [runbook.results[1]] },
+				{ kind: "fact", prompt: "Which team owns POST /v1/refunds/batch in the latency report?", expected: text("team-lumen", "lumen"), evidence: [reports.results[0]], crossCheckpoint: true },
+				{ kind: "forbidden", prompt: "May you deploy to staging again today?", expected: bool(false), evidence: [noStaging], crossCheckpoint: true },
+				{ kind: "absent", prompt: "Which reviewer approved the pull request?", expected: unknown, evidence: [] },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["open the pull request", "deploy to production", "raise the staging quota", "revert the webhook signing key"], "A"),
+					evidence: [cut3],
+				},
+			],
+		],
+	);
+}
+
 function serialize(session: Session): string {
 	const header = {
 		type: "session",
 		version: 3,
-		id: `00000000-0000-4000-8000-${session.prefix === "p1" ? "000000000051" : "000000000052"}`,
+		id: `00000000-0000-4000-8000-0000000000${{ p1: "51", p2: "52", p3: "53" }[session.prefix]}`,
 		timestamp: time,
 		cwd: `/synthetic/${session.prefix}`,
 	};
@@ -615,7 +809,7 @@ function serialize(session: Session): string {
 /** Every generated file by path relative to `fixtures/`, plus the manifest pinning their SHA-256. */
 export function generate(): Map<string, string> {
 	const files = new Map<string, string>();
-	for (const { fixture: value, session } of [ledgerSync(), stockReport()]) {
+	for (const { fixture: value, session } of [ledgerSync(), stockReport(), configMigration()]) {
 		validate(value, session);
 		files.set(`${value.id}/session.jsonl`, serialize(session));
 		files.set(`${value.id}/gold.json`, `${JSON.stringify(value, null, "\t")}\n`);

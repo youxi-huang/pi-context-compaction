@@ -7,18 +7,23 @@ work packages W0 and W3.
 
 ## Fixtures
 
-`generate.ts` writes two invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
+`generate.ts` writes three invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
 and fails on any byte difference. `fixtures/manifest.json` pins every file by SHA-256.
 
 | Fixture | Source tokens | Checkpoints | What it stresses |
 | --- | ---: | ---: | --- |
 | P1 | about 70,000 | 3 | A timeout revised three times and reverted; a withdrawn subtask; a failed approach the user forbids retrying; a user ruling echoed verbatim by the assistant and inside a tool output; a deploy instruction that only a log line gives |
 | P2 | about 51,000 | 2 | Decisions and errors among long tool outputs; a corrected threshold and due date; a file the user forbids creating |
+| P3 | about 44,000 | 3 | Answers a note cannot hold: exact values among 400 endpoint latencies, 200 audited packages and 900 log lines; twelve edit and write calls and four failed tool calls to count and tell apart; a timeout raised for every service and then restored for one |
+
+P1 and P2 test what a note keeps; with no tools, the notes alone answered nearly all their probes in the first
+provider run. P3 tests retrieval: most of its answers are exact values or inventories that only `context_history`
+can recover, so the gap between the two probe conditions and the calls per question are its measures.
 
 Source tokens are `ceil(UTF-8 bytes / 3)` of the readable text, the preview's own size proxy. Each checkpoint
 follows a completed assistant turn. Every tool call has exactly one result.
 
-The 47 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
+The 75 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
 `{"status":"unknown"}`. Values are numbers, booleans, short text with listed accepted forms, or an option letter.
 Probe kinds (current and previous values, counts, constraints, forbidden retries, withdrawn work, attribution,
 authority, absent answers, continuation and facts) live only in the gold files. A test keeps them out of every
@@ -87,7 +92,7 @@ Before `a2c62fa` it sent `tool_choice: "none"`, with which DeepSeek leaves the t
 prefix ended after the system prompt (see the validation record). The bench reproduces a session's cache state by
 default with `--cache warm`, so writer cost and pause are what a session pays. The units of a run share one working directory, and before each cut's compactions one
 request with the session's own tools goes over the same history, as the session's last turn would. Each warm-up is
-a cold request of its own, one per cut in both modes: budget five more requests for a run over P1 and P2.
+a cold request of its own, one per cut in both modes: budget eight more requests for a run over P1, P2 and P3.
 `summary.json` reports them apart under `used.warmups` and `used.warmupCostUsd`. Runs with different labels use
 different directories, so one run never warms another and builds compare on equal terms.
 

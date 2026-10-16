@@ -134,11 +134,18 @@ async function worker() {
 					JSON.stringify(entry.message.content).includes("Do not deploy"),
 			)?.id;
 	}
+	function logUserId() {
+		return manager
+			?.getBranch()
+			.find((entry) => entry.type === "message" && entry.message.role === "user" && JSON.stringify(entry.message.content).includes("local check log"))?.id;
+	}
 	function note() {
 		const id = sourceId();
 		const quote = writerMode === "bad-quote" ? "Deployment is authorized." : "Do not deploy this synthetic service.";
+		// The misattributing writer quotes the source message correctly but cites the log message for it.
+		const cited = writerMode === "misattributed" ? logUserId() : id;
 		return {
-			instructions: [{ text: "Deployment remains unauthorized.", sources: [id], quote }],
+			instructions: [{ text: "Deployment remains unauthorized.", sources: [cited], quote }],
 			failedPaths: [],
 			reasons: [],
 			state: [{ text: "The synthetic service uses port 4317.", sources: [id] }],
@@ -163,6 +170,13 @@ async function worker() {
 		for await (const part of request) raw += part;
 		const payload = JSON.parse(raw);
 		const serialized = JSON.stringify(payload.messages ?? []);
+		// A quotation repair names only the failing facts; the misquoting writer keeps its quote, the other cites the source.
+		if (serialized.includes("Correct the quotations of a memory candidate")) {
+			requests.push({ kind: "writer-repair" });
+			const quote = writerMode === "bad-quote" ? "Deployment is authorized." : "Do not deploy this synthetic service.";
+			const fact = { text: "Deployment remains unauthorized.", sources: [sourceId()], quote };
+			return stream(response, payload.model, JSON.stringify({ repairs: [{ section: "instructions", index: 0, fact }] }));
+		}
 		// Both writer paths carry this instruction; checkpoint summaries in ordinary requests do not.
 		const writer = serialized.includes("Return ONLY one JSON object matching this schema");
 		const nativeSummary = serialized.includes("context summarization assistant");
@@ -685,6 +699,7 @@ async function worker() {
 				const blocked = await prompt("Continue.");
 				observe("turn 3", blocked);
 				check("rejected-and-blocked", "A misquoting writer is rejected and later requests are blocked", !failed.ok && failed.marker !== null && !blocked.reached, { failed, blocked });
+				check("quote-repair-refused", "A misquoting writer gets one quotation repair and is then refused with CONTEXT_NOTE_QUOTE", JSON.stringify(failed.sent) === JSON.stringify(["writer", "writer-repair"]) && failed.marker?.code === "CONTEXT_NOTE_QUOTE", failed);
 				check("one-notice-for-failure", "A failed compaction shows one notice", failed.notices.length === 1, failed.notices.length);
 				check("one-notice-per-blocked-input", "A blocked input shows at most one notice", blocked.notices.length <= 1, blocked.notices.length);
 				writerMode = "good";
@@ -692,6 +707,18 @@ async function worker() {
 				const next = await prompt("Continue after retry.");
 				observe("/compact retry and turn 4", { retried, next });
 				check("explicit-retry-recovers", "An explicit /compact retry clears the block", retried.ok && retried.marker === null && next.reached, { retried, next });
+				// Enough new history for Pi's keepRecentTokens gate before the next /compact.
+				await seed();
+				writerMode = "misattributed";
+				const repaired = await compact();
+				const status = JSON.parse((await command("/compaction-status")).output);
+				writerMode = "good";
+				check(
+					"quote-repair-commits",
+					"A quotation cited to the wrong entry is repaired by one request about that fact, and the checkpoint commits",
+					repaired.ok && JSON.stringify(repaired.sent) === JSON.stringify(["writer", "writer-repair"]) && repaired.marker === null && status.lastWriter?.repairKind === "quotation" && status.lastWriter?.quotations?.elsewhere === 1 && status.lastWriter?.quotationRepair?.requoted === 1,
+					{ repaired, lastWriter: status.lastWriter },
+				);
 				break;
 			}
 			case "work-notes": {

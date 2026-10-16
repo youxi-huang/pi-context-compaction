@@ -10,6 +10,8 @@ The goal is **continuity with a route back to the source**, not perfect memory.
 
 **Current release:** [v0.4.2](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.4.2) is an **independent extension preview** for unmodified official **Pi 1.2.0 and 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
 
+**Pi 1.3.0:** v0.4.2 does not list Pi 1.3.0, released on 2026-10-15. Stay on Pi 1.2.0 until a preview release lists it: on an unlisted Pi, a session the preview already protects stays blocked until it is reopened with a listed version. Support for 1.3.0 is on `main` and not yet released; see [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
+
 Two optional experiments are **off by default**: A prepares with the configured writer, and B uses data-only work notes from the session model. Both retain the checkpoint commit checks; B carries covered user messages in full or falls back to the writer. Sources are validated in full at trust boundaries, with incremental request checks between them. Synthetic A/B results show the paths and their costs; real-provider pause, cost and recovery benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the [v0.4.0 scope and evidence](docs/context-memory/v0.4.0-release.md) and the [v0.4.1 changes](CHANGELOG.md).
 
 [Install](#install-in-pi) · [First use](#your-first-session) · [How it works](#how-it-works) · [Scope](#what-this-preview-supports) · [Recovery](#when-something-goes-wrong) · [Evidence](#what-has-been-tested)
@@ -158,7 +160,7 @@ To update only this package when you follow the branch:
 pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
 ```
 
-A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.4.2 targets Pi 1.2.0 and 1.1.0, so check the supported version before updating Pi.
+A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.4.2 targets Pi 1.2.0 and 1.1.0, so check the supported version [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
 
 To remove the package, whichever tag or branch you installed:
 

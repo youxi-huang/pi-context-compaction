@@ -44,6 +44,17 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 updates Pi itself and `pi update --all` updates Pi and all packages; the v0.4.2
 preview supports Pi 1.2.0 and 1.1.0.
 
+### Before updating Pi
+
+Check that the installed preview lists the new Pi version first. v0.4.2 does
+not list Pi 1.3.0; support for it is on `main` and not yet released. On a Pi
+version the preview does not list, sessions it never protected are left to
+Pi's own compaction, but a session it protects stays blocked: requests stop and
+a failure record is written, because the preview cannot check its checkpoints
+on that host. To continue such a session, reopen it with a listed Pi version
+and run `/compact` there, or keep the file and continue in a new session.
+`/compaction-doctor` shows which case applies.
+
 Remove the package, whichever tag or branch is installed:
 
 ```sh
@@ -73,7 +84,12 @@ extensions, the preview shows one short line saying it is active. Then run:
 
 It prints a short checklist: extension loaded, host version, session support,
 writer, manual `/compact` eligibility and any durable block. It calls no model,
-writes no failure record and does not change the session. Because Pi's own
+writes no failure record and does not change the session. After a failed
+attempt, the manual `/compact` line says which way out applies: `retry` when a
+new `/compact` replaces the failed attempt, with `/compaction-recover` named
+first when Pi already saved the staged checkpoint; `blocked` only when
+`/compact` cannot help in this session, as with an unsupported host or content,
+an unreadable configuration or an unavailable writer. Because Pi's own
 compaction settings are not visible to extensions, it reports Pi's side of
 `/compact` eligibility as `unknown` instead of guessing; `Result: ready` means
 nothing is blocking requests, not that Pi will accept `/compact` yet.
@@ -81,7 +97,10 @@ nothing is blocking requests, not that Pi will accept `/compact` yet.
 `/compaction-status` prints the same findings as JSON. It keeps the fields of
 earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
 `reason` and `manualCompaction`; a pending attempt reads `pending` rather than
-`blocked`.
+`blocked`. `manualCompaction.preview` is `ready`, `retry`, `waiting-for-turn`,
+`blocked` or `not-active`, and `manualCompaction.recover` says whether
+`/compaction-recover` has a saved checkpoint to confirm. `lastWriter` and
+`lastCompaction` describe the current session only.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -377,43 +396,58 @@ that official Pi first:
 
 ```sh
 node scripts/context-memory-preview-stock-install.mjs \
-  --stock-root ./.artifacts/context-memory-preview-stock --version 1.2.0
+  --stock-root ./.artifacts/context-memory-preview-stock --version 1.3.0
 ```
 
-The installer pins all seven official runtime packages for Pi 1.2.0, or all eight
-for older hosts that require `chord`, to the same release. npm verifies download
+The installer pins all seven official runtime packages for Pi 1.3.0 and 1.2.0,
+or all eight for 1.1.0 and 1.0.4, which still require `chord`, to the same
+release. A newer host that still depended on `chord` would fail the installer's
+dependency review rather than receive it silently. npm verifies download
 integrity; the installer checks registry provenance, exact versions and isolated
 resolution, then starts the SDK with networking blocked. Unused manifest and
 lockfile SHA-256 report fields are omitted.
-Installing only `pi-coding-agent@1.2.0` lets its caret dependencies select a newer
-Pi cohort and can fail at SDK startup. No official package source is patched.
+Installing only `pi-coding-agent` at 1.2.0 or earlier lets its caret
+dependencies select a newer Pi cohort and can fail at SDK startup. No official package source is patched.
 An existing coherent installation skips npm; `--check` verifies it without
 installing. The JSON report lists each runtime package's version and integrity.
 
-Install the supported older host for the same-package and cross-version checks:
+Install each older supported host for the same-package and cross-version
+checks:
 
 ```sh
+node scripts/context-memory-preview-stock-install.mjs \
+  --stock-root ./.artifacts/context-memory-preview-stock-1.2.0 --version 1.2.0
 node scripts/context-memory-preview-stock-install.mjs \
   --stock-root ./.artifacts/context-memory-preview-stock-1.1.0 --version 1.1.0
 ```
 
-Then run acceptance on both hosts. The first command also writes a checkpoint,
-reopens and compacts it on 1.1.0, then reopens it on 1.2.0:
+Then run acceptance on every host. The first command also writes a checkpoint,
+compacts it on each older host in turn and reopens it on 1.3.0 after each:
 
 ```sh
 node scripts/context-memory-preview-acceptance.mjs \
   --package-dir ./.artifacts/context-memory-preview-package \
   --stock-root ./.artifacts/context-memory-preview-stock \
+  --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.2.0 \
   --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.1.0 \
   --output-dir ./.artifacts/context-memory-preview-acceptance
 ```
 
 ```sh
-node scripts/context-memory-preview-acceptance.mjs \
-  --package-dir ./.artifacts/context-memory-preview-package \
-  --stock-root ./.artifacts/context-memory-preview-stock-1.1.0 \
-  --output-dir ./.artifacts/context-memory-preview-acceptance-1.1.0
+for host in 1.2.0 1.1.0; do
+  node scripts/context-memory-preview-acceptance.mjs \
+    --package-dir ./.artifacts/context-memory-preview-package \
+    --stock-root ./.artifacts/context-memory-preview-stock-$host \
+    --output-dir ./.artifacts/context-memory-preview-acceptance-$host
+done
 ```
+
+CI and publication take this host list from the candidate's own
+`preview-build.json`, printed by
+`node scripts/context-memory-preview-release-checks.mjs --plan ./.artifacts/context-memory-preview-package`,
+and `node scripts/context-memory-ops.mjs preview` runs the same sequence. Adding
+a host to `compatibility.ts` therefore adds it to every check, and a host
+without a reviewed installation cohort stops the plan.
 
 This is deterministic protocol and lifecycle verification. It does not measure
 real-provider compatibility, semantic recovery quality, compaction latency or

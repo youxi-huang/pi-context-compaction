@@ -760,6 +760,19 @@ async function worker() {
 					/## state\n(?:- [^\n]*\n)*- The user has authorized deployment\./.test(checkpoint?.summary ?? "") && !section.includes("authorized deployment") && checkpoint.details.note.instructions.length === 0,
 					section.slice(0, 300),
 				);
+				toolCalls = [
+					{ name: "context_history", args: { operation: "list", kind: "reasons", query: "deploy" } },
+					{ name: "context_history", args: { operation: "search", kind: "reasons", query: "4317" } },
+				];
+				const listed = await prompt("List the decisions about deployment.");
+				const historyResults = manager.getBranch().filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "context_history").slice(-2);
+				const listText = JSON.stringify(historyResults[0]?.message.content ?? "");
+				check(
+					"typed-list",
+					"context_history lists the checkpoint's decisions with their original sources, and refuses a kind outside list",
+					listed.reached && historyResults.length === 2 && !historyResults[0].message.isError && listText.includes("Deployment stays off.") && listText.includes(sourceId()) && historyResults[1].message.isError && JSON.stringify(historyResults[1].message.content).includes("kind applies to list only"),
+					{ sent: listed.sent, results: historyResults.map((entry) => ({ error: entry.message.isError, text: JSON.stringify(entry.message.content).slice(0, 300) })) },
+				);
 				const next = await prompt("Which port should the service use?");
 				check("correction-in-context", "The next request carries the user's earlier messages and the later correction in their own words", next.reached && lastMainPayload.includes("Earlier user messages") && lastMainPayload.includes("Use port 4318 now."), next);
 				await open(stock.SessionManager.open(file));

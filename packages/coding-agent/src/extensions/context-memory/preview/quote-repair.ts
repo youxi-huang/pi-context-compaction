@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { type MemoryNote, type NoteFact, noteSchema, noteSections, sourceRole, sourceText } from "../notes.ts";
+import { type MemoryNote, type NoteFact, noteSchema, type noteSections, sourceRole, sourceText } from "../notes.ts";
 import type { QuoteDiagnosis, QuoteFailure } from "./quote-diagnostics.ts";
 
 /** More failing quotations than this point at the whole note, not at a few bindings; the note blocks instead. */
@@ -11,7 +11,15 @@ const EXCERPT_CHARS = 1600;
 /** Cited entries shown per failing fact; the remaining IDs are still listed. */
 const CITED_EXCERPTS = 3;
 
-const section = Type.Union(noteSections.map((name) => Type.Literal(name)));
+// Spelled out: a mapped array would lose the literal types.
+const section = Type.Union([
+	Type.Literal("instructions"),
+	Type.Literal("failedPaths"),
+	Type.Literal("reasons"),
+	Type.Literal("state"),
+	Type.Literal("nextSteps"),
+	Type.Literal("files"),
+]);
 export const quoteRepairSchema = Type.Object(
 	{
 		repairs: Type.Array(
@@ -136,7 +144,7 @@ export function applyQuoteRepair(
 	const outcome: QuoteRepairOutcome = { requoted: 0, unquoted: 0, dropped: 0 };
 	const dropped = new Map<(typeof noteSections)[number], Set<number>>();
 	for (const repair of repairs) {
-		const facts: NoteFact[] = note[repair.section];
+		const facts = note[repair.section];
 		const before = value[repair.section][repair.index];
 		if (repair.fact === null) {
 			outcome.dropped++;

@@ -14,7 +14,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 //           faithful notes from the gold files; the measured writer then compacts the cut on fresh copies,
 //           --attempts times. Reports refusals by error code and quotation class, repairs and their cost, and
 //           for each committed note its size against the bytes it condenses and the gold answers it still cites.
-//   probes  The measured writer compacts every cut in order, as a user would, retrying a refused /compact once.
+//   probes  The measured writer compacts every cut in order, retrying a refused /compact up to --chain-attempts
+//           times in all, so that recall is measured on committed notes; writer mode measures refusals.
 //           Each probe then runs on its own copy of the chain at its checkpoint, once with only context_history
 //           active and once with no tools. Reports typed-answer scores, retrieval calls and missed-entry probes.
 //
@@ -32,7 +33,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--thinking high] [--concurrency 1] [--label name] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--thinking high] [--concurrency 1] [--label name] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -317,6 +318,7 @@ async function parent() {
 	const attempts = Number(argument("--attempts", "8"));
 	const thinking = argument("--thinking", "high");
 	const concurrency = Number(argument("--concurrency", "1"));
+	const chainAttempts = Number(argument("--chain-attempts", "4"));
 	const label = argument("--label", "run");
 	if (!["writer", "probes", "smoke"].includes(mode)) throw new Error("--mode must be writer, probes or smoke");
 	if (!["loopback", "deepseek"].includes(provider)) throw new Error("--provider must be loopback or deepseek");
@@ -409,8 +411,8 @@ async function parent() {
 	}
 
 	/**
-	 * Compact `file` at checkpoint `cut`; a user would retry a refused /compact once, so the measured writer gets a
-	 * second attempt. Returns the last result and every attempt.
+	 * Compact `file` at checkpoint `cut`, retrying a refused measured writer up to `chainAttempts` attempts in all, as
+	 * a user retries /compact. Returns every attempt; the last one decides.
 	 */
 	async function compactAt(fixture, cut, writer, file) {
 		const results = [];
@@ -418,7 +420,7 @@ async function parent() {
 			const result = await run({ type: "compact", provider: writer, fixture: fixture.gold.id, cutIndex: cut, sessionFile: file, thinking });
 			spend(result, writer !== "loopback");
 			results.push(result);
-		} while (!results.at(-1).ok && writer !== "loopback" && results.length < 2 && !exhausted());
+		} while (!results.at(-1).ok && writer !== "loopback" && results.length < chainAttempts && !exhausted());
 		return results;
 	}
 
@@ -481,7 +483,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.

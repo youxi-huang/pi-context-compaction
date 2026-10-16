@@ -139,7 +139,7 @@ export function scoreProbe(
 	return { ...scored, outcome: match ? "correct" : "incorrect", pass: match !== undefined, prose: match === "prose" };
 }
 
-interface Tally {
+export interface Tally {
 	planned: number;
 	passed: number;
 	correct: number;

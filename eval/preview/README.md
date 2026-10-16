@@ -47,7 +47,7 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | Mode | What it does |
 | --- | --- |
 | `smoke` | One small request over P1's opening turn, to check that the provider accepts the generated history |
-| `writer` | For each checkpoint, earlier cuts are compacted by a loopback writer that builds faithful notes from the gold files; the measured writer then compacts the cut on `--attempts` fresh copies. Reports refusals by code and quotation class, repairs, writer calls, usage and pause |
+| `writer` | For each checkpoint, earlier cuts are compacted by a loopback writer that builds faithful notes from the gold files; the measured writer then compacts the cut on `--attempts` fresh copies. Reports refusals by code and quotation class, repairs, writer calls, usage and pause. For each committed note it also reports its size against the bytes it condenses (the previous note and every later message) and how many gold answers it cites, split into answers first asked at this cut and answers carried from earlier cuts |
 | `probes` | The measured writer compacts each fixture cut after cut and gets one retry after a refusal, as a user would. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites |
 
 `--provider loopback`, the default, answers locally and never contacts a model service; it checks the harness.

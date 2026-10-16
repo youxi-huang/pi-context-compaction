@@ -12,7 +12,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 //
 //   writer  For each checkpoint cut, earlier cuts are compacted by a deterministic loopback writer that builds
 //           faithful notes from the gold files; the measured writer then compacts the cut on fresh copies,
-//           --attempts times. Reports refusals by error code and quotation class, repairs and their cost.
+//           --attempts times. Reports refusals by error code and quotation class, repairs and their cost, and
+//           for each committed note its size against the bytes it condenses and the gold answers it still cites.
 //   probes  The measured writer compacts every cut in order, as a user would, retrying a refused /compact once.
 //           Each probe then runs on its own copy of the chain at its checkpoint, once with only context_history
 //           active and once with no tools. Reports typed-answer scores, retrieval calls and missed-entry probes.
@@ -70,6 +71,34 @@ function readLines(file) {
 
 function writeLines(file, lines) {
 	writeFileSync(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+}
+
+/** The note sections a checkpoint stores; each is an array of facts with sources and an optional quote. */
+const NOTE_SECTIONS = ["instructions", "failedPaths", "reasons", "state", "nextSteps", "files", "gaps"];
+
+/** UTF-8 bytes the next compaction condenses: the latest note, if any, and every message after it. */
+function condensedBytes(lines) {
+	const entries = lines.slice(1);
+	const last = entries.findLastIndex((entry) => entry.type === "compaction");
+	const previous = last >= 0 && entries[last].details?.note ? Buffer.byteLength(JSON.stringify(entries[last].details.note)) : 0;
+	return entries
+		.slice(last + 1)
+		.filter((entry) => entry.type === "message")
+		.reduce((total, entry) => total + Buffer.byteLength(JSON.stringify(entry.message)), previous);
+}
+
+/** Size, section counts and cited IDs of a committed note; never its text. */
+function noteShape(note, contextBytes) {
+	const items = NOTE_SECTIONS.flatMap((section) => (Array.isArray(note[section]) ? note[section] : []));
+	const bytes = Buffer.byteLength(JSON.stringify(note));
+	return {
+		bytes,
+		contextBytes,
+		ratio: contextBytes ? Number((bytes / contextBytes).toFixed(4)) : null,
+		facts: Object.fromEntries(NOTE_SECTIONS.map((section) => [section, Array.isArray(note[section]) ? note[section].length : 0])),
+		quoted: items.filter((item) => typeof item?.quote === "string").length,
+		sources: [...new Set(items.flatMap((item) => (Array.isArray(item?.sources) ? item.sources : [])))],
+	};
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -190,6 +219,7 @@ async function worker() {
 
 	let result;
 	if (action.type === "compact") {
+		const contextBytes = condensedBytes(readLines(action.sessionFile));
 		const started = performance.now();
 		let error;
 		try {
@@ -212,6 +242,10 @@ async function worker() {
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
 		};
+		if (result.ok) {
+			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;
+			if (note) result.note = noteShape(note, contextBytes);
+		}
 	} else {
 		session.setActiveToolsByName(action.condition === "history" ? ["context_history"] : []);
 		const activeTools = session.agent.state.tools.map((tool) => tool.name);
@@ -408,6 +442,40 @@ async function parent() {
 		return target;
 	}
 
+	/** Gold answers a note cites: those first asked at this cut, and those from earlier cuts carried forward. */
+	function noteRow(fixture, k, note) {
+		if (!note) return null;
+		const { sources, ...shape } = note;
+		const cited = new Set(sources);
+		const order = new Map(fixture.gold.checkpoints.map((checkpoint, index) => [checkpoint.id, index]));
+		const answerable = fixture.gold.probes.filter((probe) => probe.expected.type !== "unknown");
+		const count = (list) => ({ cited: list.filter((probe) => probe.evidence.some((id) => cited.has(id))).length, total: list.length });
+		return {
+			...shape,
+			cited: cited.size,
+			coverage: { current: count(answerable.filter((probe) => order.get(probe.checkpoint) === k)), carried: count(answerable.filter((probe) => order.get(probe.checkpoint) < k)) },
+		};
+	}
+
+	/** Medians of note size and ratio over committed notes, and gold coverage summed over them. */
+	function noteSummary(list) {
+		const notes = list.filter((row) => row.ok && row.note).map((row) => row.note);
+		const median = (values) => {
+			const sorted = [...values].sort((a, b) => a - b);
+			return sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
+		};
+		const total = (pick) => notes.reduce((sum, note) => ({ cited: sum.cited + pick(note).cited, total: sum.total + pick(note).total }), { cited: 0, total: 0 });
+		return {
+			measured: notes.length,
+			bytesMedian: median(notes.map((note) => note.bytes)),
+			contextBytesMedian: median(notes.map((note) => note.contextBytes)),
+			ratioMedian: median(notes.map((note) => note.ratio)),
+			factsMedian: median(notes.map((note) => Object.values(note.facts).reduce((sum, value) => sum + value, 0))),
+			quotedMedian: median(notes.map((note) => note.quoted)),
+			coverage: { current: total((note) => note.coverage.current), carried: total((note) => note.coverage.carried) },
+		};
+	}
+
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
 	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
@@ -438,7 +506,7 @@ async function parent() {
 						const file = copy(baseFile, `${id}-cut${k + 1}-attempt${attempt + 1}`);
 						const result = await run({ type: "compact", provider, fixture: id, cutIndex: k, sessionFile: file, thinking });
 						spend(result, provider !== "loopback");
-						const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...result };
+						const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...result, note: noteRow(fixture, k, result.note) };
 						delete row.diagnostics;
 						rows.push(row);
 						record("writer.jsonl", row);
@@ -463,6 +531,7 @@ async function parent() {
 				writerCalls: sum((row) => row.writerCalls),
 				usage: { input: sum((row) => row.usage?.input), output: sum((row) => row.usage?.output), cacheRead: sum((row) => row.usage?.cacheRead), costUsd: Number(sum((row) => row.usage?.cost?.total).toFixed(4)) },
 				pauseMsMedian: pauses.length ? pauses[Math.floor(pauses.length / 2)] : null,
+				notes: noteSummary(list),
 			};
 		};
 		report.writer = {
@@ -494,7 +563,7 @@ async function parent() {
 				writeLines(file, lines);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});
@@ -530,7 +599,7 @@ async function parent() {
 		}
 		const rate = (list) => ({ planned: list.length, passed: list.filter((row) => row.pass).length });
 		report.probes = {
-			compactions: { attempts: compactions.length, committed: compactions.filter((row) => row.ok).length, refusedByCode: compactions.filter((row) => !row.ok).reduce((codes, row) => ({ ...codes, [row.code ?? "UNKNOWN"]: (codes[row.code ?? "UNKNOWN"] ?? 0) + 1 }), {}) },
+			compactions: { attempts: compactions.length, committed: compactions.filter((row) => row.ok).length, refusedByCode: compactions.filter((row) => !row.ok).reduce((codes, row) => ({ ...codes, [row.code ?? "UNKNOWN"]: (codes[row.code ?? "UNKNOWN"] ?? 0) + 1 }), {}), notes: noteSummary(compactions) },
 			history: summarizePreview(scores.history),
 			none: summarizePreview(scores.none),
 			callsPerQuestion: Object.fromEntries(

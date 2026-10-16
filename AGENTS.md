@@ -73,3 +73,4 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | Compactor conflicts, handler ordering | `policy.ts` (`orderCompactionExtensions`, `assertCompactionResult`); host `core/extensions/runner.ts` |
 | Missing event lines, wrong error class, quotas, rotation | `events.ts`; `controller.ts` (`settle`, `guarded`, `compactionFailed`); `scripts/context-memory-report.mjs` |
 | Build identity, model baseline, release version | `scripts/stamp-context-memory.mjs`, `scripts/context-memory-model-data.mjs`, `.github/workflows/context-memory.yml` |
+| Preview writer cost, refusals, note size or recall on a real provider | `eval/preview/README.md`, `scripts/context-memory-preview-bench.mjs`. By default it reproduces a session's prompt cache; the request, time and cost limits go to the maintainer before the first request |

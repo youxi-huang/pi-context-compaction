@@ -51,14 +51,36 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | `probes` | The measured writer compacts each fixture cut after cut; a refused cut is retried, as a user retries `/compact`, up to `--chain-attempts` attempts in all (default 4), so that recall is measured on committed notes while `writer` mode measures refusals. A cut still refused blocks its probes and every later one. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites |
 
 `--provider loopback`, the default, answers locally and never contacts a model service; it checks the harness.
-`--cache cold`, the default, gives each unit its own working directory. Pi's system prompt ends with it, so only
-the prompt's opening is shared and writer cost and pause are those of a cold prefix. `--cache warm` shares one
-directory and sends one request over the same history before each cut's compactions, as a session's last turn
-would, so the writer finds its prefix cached; warm-up requests count against the limits and are reported apart.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
 `--max-cost-usd` and starts no unit once any limit is reached; with `--concurrency N`, up to N units already running
-may finish past it. Costs are Pi's catalog estimates, not invoices.
+may finish past it. Costs are Pi's catalog estimates, not invoices. The limits go to the maintainer before the first
+request:
+
+```sh
+node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
+  --package-dir .artifacts/context-memory-preview-package \
+  --stock-root .artifacts/context-memory-preview-stock \
+  --output-dir "$OUTPUT_DIR" --label candidate-writer --mode writer --provider deepseek \
+  --concurrency 6 --max-requests 50 --max-minutes 20 --max-cost-usd 0.5
+```
+
+### Prompt cache
+
+In daily use the session's prefix stays cached: every main-model turn sends the same system prompt, tools and
+history. The session writer reuses all three so that it can continue that cache, but on DeepSeek it currently
+cannot: it sends `tool_choice: "none"`, with which DeepSeek leaves the tools out of the prompt, so the writer's
+prefix ends after the system prompt (see the validation record). The bench reproduces a session's cache state by
+default with `--cache warm`, so a change to the writer's request shows up in its cost. The units of a run share one working directory, and before each cut's compactions one
+request with the session's own tools goes over the same history, as the session's last turn would. Each warm-up is
+a cold request of its own, one per cut in both modes: budget five more requests for a run over P1 and P2.
+`summary.json` reports them apart under `used.warmups` and `used.warmupCostUsd`. Runs with different labels use
+different directories, so one run never warms another and builds compare on equal terms.
+
+`--cache cold` gives every unit its own working directory. Pi's system prompt ends with it, so only the prompt's
+opening is shared and the writer pays for the whole history on every attempt. It reproduces the first 0.5.0
+provider run, whose writer cost and pause were measured this way. The cache does not change what the model writes,
+so refusals, note sizes and probe scores compare across both settings; cost and pause do not.
 
 The run directory holds `summary.json`, per-unit rows without note text (`writer.jsonl`, `compactions.jsonl`,
 `probes.jsonl`) and `answers.jsonl` with the synthetic probe replies. Keep it outside the repository.

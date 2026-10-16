@@ -25,10 +25,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
 // --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
-// --cache cold, the default, gives each unit its own working directory, which Pi's system prompt ends with, so only
-// the prompt's opening can be cached: writer cost and pause are those of a cold prefix. --cache warm shares one
-// directory and sends one request over the same history before each cut's compactions, as a session's last turn
-// would; warm-up requests count against the limits and are reported apart.
+// --cache warm, the default, matches daily use, where every main-model turn keeps the session's prefix cached: the
+// units of a run share one working directory, and one request over the same history precedes each cut's
+// compactions, as a session's last turn would. Each warm-up is itself a cold request; warm-ups count against the
+// limits and are reported apart. --cache cold gives each unit its own working directory, which Pi's system prompt
+// ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run. On DeepSeek the
+// writer's tool_choice "none" drops the tools from its prompt, so even a warm session's cache stops at the system
+// prompt for the writer; the probes and the warm-ups still use it.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");
@@ -38,7 +41,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--cache cold|warm] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -325,7 +328,7 @@ async function parent() {
 	const thinking = argument("--thinking", "high");
 	const concurrency = Number(argument("--concurrency", "1"));
 	const chainAttempts = Number(argument("--chain-attempts", "4"));
-	const cache = argument("--cache", "cold");
+	const cache = argument("--cache", "warm");
 	const label = argument("--label", "run");
 	if (!["writer", "probes", "smoke"].includes(mode)) throw new Error("--mode must be writer, probes or smoke");
 	if (!["loopback", "deepseek"].includes(provider)) throw new Error("--provider must be loopback or deepseek");

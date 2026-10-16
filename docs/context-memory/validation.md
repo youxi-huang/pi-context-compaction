@@ -102,51 +102,62 @@ One P2 probe run on the corrected candidate passed 17 of 17 in both conditions, 
 through the full writer bench or P1's probes: 702 of the 741 confirmed requests had
 been used.
 
-### Prompt cache: the bench measured a cold prefix
+### Prompt cache: the session writer misses the session's cache on DeepSeek
 
 The writer's prompt cache barely hit. Each build's writer bench sent about 1.41
 million uncached input tokens and read about 13,000 from cache. Of the 80 attempts,
 12 read nothing and 66 read exactly 384 tokens; the two that read 640 and 768
-included a repair call. In the v0.4.3 session run, 97,152 of the retried writer's
-101,928 input tokens were cache reads.
+included a repair call.
 
-The cause is the bench. Pi's system prompt ends with the working directory, and the
-bench gave every unit its own directory to keep units apart. The session writer
-reuses the session's system prompt, tools and messages so that it continues the main
-model's cached prefix; here every request diverged at the end of the system prompt,
-and the history behind it was never reused. Attempts 7 and 8 at a cut, started after
-the first six had finished on the same history, also read only 384 tokens. The zeros
-are each run's first wave, sent together before anything was cached. A session also
-warms its prefix with every main-model turn before it compacts; the generated
-sessions had none.
+Two things made every writer request leave the cached prefix at the same point,
+right after the system prompt. The bench gave every unit its own working directory,
+and Pi's system prompt ends with it. And the writer sends `tool_choice: "none"`,
+with which DeepSeek leaves the tool definitions out of the prompt, while the
+session's own requests carry them. The second is decisive:
 
-The writer's cost and pause above are therefore those of a cold prefix and overstate
-a session's. The comparison between builds stands: both ran equally cold, and the
-cache does not change what the model writes. The quotable block sits in the closing
-handover message, after the history, so it leaves the cached prefix unchanged; that a
-session keeps its hit rate under the candidate follows from the request's layout and
-was not measured. Probes read 37% of their input from cache: 11 to 12% on questions
-answered in one round, 49% on questions with tool rounds, which reuse the previous
-round's prefix in the same process.
+- In a check with one shared working directory and one main-model request over the
+  same history before each cut (two cuts of P2, three attempts each), every writer
+  call still read 384 tokens from cache. DeepSeek counted each writer prompt 156
+  tokens smaller than the warm-up's, although the writer's request body is about 9%
+  larger.
+- Captured offline in DeepSeek's request format, the two requests carry the same
+  system prompt, the same tools and the same 18 history messages. They differ in
+  `tool_choice`, the output limit and the closing message.
+- In four synthetic requests on about 7,400 tokens, `tool_choice: "none"` cut the
+  counted prompt from 7,385 to 5,512 tokens and read 5,248 from the earlier `auto`
+  request's cache: the system prompt matched and the tools were gone.
+- The v0.4.3 session run shows the same. Its first writer call and its second
+  compaction's writer read 1,024 cached tokens between them; the retry's 97,152
+  came from the failed writer call before it, not from the main model.
 
-The bench now takes `--cache warm`: one shared working directory and, before each
-cut's compactions, one request over the same history with the session's own tools,
-as a session's last turn would be. Offline, the warm-up and the writer requests
-carried the same system prompt, tools and history messages; the hit rate needs a
-provider run.
+So on DeepSeek the writer pays for the whole history once per compaction, in a
+session as in the bench, and the writer cost and pause above are what a session
+pays today. The comparison between builds stands: both ran equally cold, and the
+cache does not change what the model writes. The quotable block sits in the
+closing message and changes nothing here. Probes read 37% of their input from
+cache: 11 to 12% on questions answered in one round, 49% on questions with tool
+rounds, which reuse the previous round's prefix in the same process.
+
+Since `739ac7b` the bench can reproduce a session's cache state, and it now does by
+default (`--cache warm`): one shared working directory and, before each cut's
+compactions, one request over the same history with the session's own tools, as a
+session's last turn would be. `--cache cold` reproduces this run. Whether the writer
+should keep the tools in its request, so that it can reuse the session's cache, is
+left to the maintainer: with `auto` the model could call a tool during the handover.
 
 ### Spend and limits
 
-The bench counted 702 provider requests in twelve runs and $2.44 at catalog prices;
-the runs took 22 minutes in all. Outside the bench there were one model listing and
-three balance reads. The DeepSeek balance fell by ¥6.86 between 22:23 and 22:47 UTC,
+The bench counted 710 provider requests in thirteen runs and $2.56 at catalog prices,
+including the cache check's 8 requests and $0.12; the runs took 23 minutes in all.
+Outside the bench there were four synthetic cache requests of about 7,400 tokens each,
+one model listing and three balance reads. The DeepSeek balance fell by ¥6.86 between 22:23 and 22:47 UTC,
 a window that missed the smoke request and about eight baseline writer calls. Neither
 figure is an invoice.
 
 ### What this shows
 
 On these fixtures and this model, the candidate commits more notes (39 of 40 against
-32 of 40) at about 4% more writer cost on a cold prefix, with notes the same size and the same share
+32 of 40) at about 4% more writer cost, with notes the same size and the same share
 of gold answers cited; in probe chains its accumulated notes ran 10 to 15% larger.
 Quotations found nowhere and quotations differing only in format disappeared from
 first passes; the three that remained were rebound by one repair each. The typed

@@ -25,6 +25,8 @@ export interface ProbeScore {
 	crossCheckpoint: boolean;
 	outcome: Outcome;
 	pass: boolean;
+	/** A passing value that carries prose after the answer, such as "No. It was disabled." for `false`. */
+	prose: boolean;
 	/** The answer cites at least one entry the gold accepts as support. */
 	supported: boolean;
 	/** Cited IDs that are not entries of the fixture's session. */
@@ -61,28 +63,45 @@ const text = (value: unknown) =>
 		.replace(/\s+/g, " ")
 		.replace(/\.$/, "");
 
-function matches(probe: PreviewProbe, value: Answer["value"]): boolean {
+/** `strict`: the value is the answer alone. `prose`: the value leads with the answer and goes on in prose. */
+type Match = "strict" | "prose" | undefined;
+
+/** True when `value` starts with `form` followed by the end or by a character that cannot continue a word. */
+const leads = (value: string, form: string) =>
+	value.startsWith(form) && (value.length === form.length || !/[\p{L}\p{N}_]/u.test(value[form.length]));
+
+function matches(probe: PreviewProbe, value: Answer["value"]): Match {
 	const expected = probe.expected;
 	switch (expected.type) {
 		case "number": {
-			const found = typeof value === "number" ? value : typeof value === "string" ? Number(value.trim()) : Number.NaN;
-			return Number.isFinite(found) && found === expected.value;
+			if (typeof value === "number") return value === expected.value ? "strict" : undefined;
+			if (typeof value !== "string") return undefined;
+			if (Number(value.trim()) === expected.value) return "strict";
+			const lead = value.trim().match(/^-?\d+(?:\.\d+)?(?![\d.])/);
+			return lead && Number(lead[0]) === expected.value ? "prose" : undefined;
 		}
 		case "boolean": {
-			if (typeof value === "boolean") return value === expected.value;
+			if (typeof value === "boolean") return value === expected.value ? "strict" : undefined;
+			const words = expected.value ? ["yes", "true"] : ["no", "false"];
 			const word = text(value);
-			return expected.value ? ["yes", "true"].includes(word) : ["no", "false"].includes(word);
+			if (words.includes(word)) return "strict";
+			return words.some((form) => leads(word, form)) ? "prose" : undefined;
 		}
-		case "text":
-			return value !== undefined && expected.accept.map(text).includes(text(value));
+		case "text": {
+			if (value === undefined) return undefined;
+			const forms = expected.accept.map(text);
+			const given = text(value);
+			if (forms.includes(given)) return "strict";
+			return forms.some((form) => leads(given, form)) ? "prose" : undefined;
+		}
 		case "choice": {
 			const letter = String(value ?? "")
 				.trim()
 				.match(/^([A-Da-d])(?![A-Za-z])/);
-			return letter?.[1].toUpperCase() === expected.value;
+			return letter?.[1].toUpperCase() === expected.value ? "strict" : undefined;
 		}
 		case "unknown":
-			return false;
+			return undefined;
 	}
 }
 
@@ -100,6 +119,7 @@ export function scoreProbe(
 		crossCheckpoint: probe.crossCheckpoint,
 		supported: false,
 		unknownEvidence: 0,
+		prose: false,
 	};
 	if (reply === undefined) return { ...base, outcome: "blocked", pass: false };
 	const answer = parseAnswer(reply);
@@ -115,8 +135,8 @@ export function scoreProbe(
 			? { ...scored, outcome: "unknown-correct", pass: true }
 			: { ...scored, outcome: "fabricated", pass: false };
 	if (answer.status === "unknown") return { ...scored, outcome: "abstained", pass: false };
-	const pass = matches(probe, answer.value);
-	return { ...scored, outcome: pass ? "correct" : "incorrect", pass };
+	const match = matches(probe, answer.value);
+	return { ...scored, outcome: match ? "correct" : "incorrect", pass: match !== undefined, prose: match === "prose" };
 }
 
 interface Tally {
@@ -131,6 +151,7 @@ interface Tally {
 	blocked: number;
 	supported: number;
 	unknownEvidence: number;
+	prose: number;
 }
 
 function tally(scores: readonly ProbeScore[]): Tally {
@@ -147,6 +168,7 @@ function tally(scores: readonly ProbeScore[]): Tally {
 		blocked: count("blocked"),
 		supported: scores.filter((row) => row.supported).length,
 		unknownEvidence: scores.reduce((sum, row) => sum + row.unknownEvidence, 0),
+		prose: scores.filter((row) => row.prose).length,
 	};
 }
 

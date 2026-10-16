@@ -131,6 +131,32 @@ describe("preview evaluation scorer", () => {
 		).toBe(1);
 	});
 
+	it("passes a value that leads with the answer and counts it as prose", () => {
+		const forbidden = probe("forbidden", "boolean");
+		const answer = (value: unknown) => JSON.stringify({ status: "answer", value });
+		expect(scoreProbe(fixture, forbidden, answer(false), ids)).toMatchObject({ pass: true, prose: false });
+		expect(scoreProbe(fixture, forbidden, answer("No. The endpoint must not be used again."), ids)).toMatchObject({
+			outcome: "correct",
+			pass: true,
+			prose: true,
+		});
+		expect(scoreProbe(fixture, forbidden, answer("No \u2014 it was disabled."), ids).prose).toBe(true);
+		expect(scoreProbe(fixture, forbidden, answer("Nope"), ids).pass).toBe(false);
+		expect(scoreProbe(fixture, forbidden, answer("Yes, once more."), ids).pass).toBe(false);
+		const current = probe("current", "number");
+		expect(scoreProbe(fixture, current, answer("250 ms, after the revert"), ids)).toMatchObject({ pass: true, prose: true });
+		expect(scoreProbe(fixture, current, answer("2500 ms"), ids).pass).toBe(false);
+		expect(scoreProbe(fixture, current, answer("250.5"), ids).pass).toBe(false);
+		const constraint = probe("constraint", "text");
+		expect(scoreProbe(fixture, constraint, answer("out/, never vendor/"), ids)).toMatchObject({ pass: true, prose: true });
+		expect(scoreProbe(fixture, constraint, answer("outbox/"), ids).pass).toBe(false);
+		const summary = summarizePreview([
+			scoreProbe(fixture, forbidden, answer("No. Disabled."), ids),
+			scoreProbe(fixture, forbidden, answer(false), ids),
+		]);
+		expect(summary.overall).toMatchObject({ passed: 2, prose: 1 });
+	});
+
 	it("summarizes with denominators by kind and for answers that crossed a compaction", () => {
 		const scores = fixture.probes.map((item) =>
 			scoreProbe(fixture, item, item.expected.type === "unknown" ? '{"status":"unknown"}' : '{"status":"unknown"}', ids),

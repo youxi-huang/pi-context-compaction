@@ -31,6 +31,20 @@ where the records hold none), invalid (no answer object) and blocked (no reply, 
 checkpoint). It also counts answers whose evidence cites an accepted entry, and evidence IDs that do not exist. It
 reports by kind and separately for answers whose source crossed an earlier compaction.
 
+Scorer version 2 (`0.5-preview-scorer.2`) measures what the answer says, not how it is phrased. A value that leads
+with the expected answer and goes on in prose passes, such as "No. The endpoint was disabled." for `false` or "JSON
+lines (JSONL), not CSV" for a format; the answer must end at a character that cannot continue a word, so "Nope" or
+"2500" do not pass for "no" or 250. Such answers are counted under `prose`. Version 1 failed them: in the first
+provider run, nine answers with the right value were scored incorrect. The answer contract is unchanged, so runs on
+either side of the change ask the same questions.
+
+`rescore.ts` scores the replies a bench run saved with the current scorer, so a run made under an earlier version
+can be compared on equal terms:
+
+```sh
+node --experimental-strip-types eval/preview/rescore.ts "$OUTPUT_DIR/candidate-probes"
+```
+
 ## Runner
 
 `scripts/context-memory-preview-bench.mjs` loads a built preview package into an official Pi installation and runs

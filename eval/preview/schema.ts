@@ -3,7 +3,7 @@ import { Check } from "typebox/value";
 
 /** The preview evaluation set; independent of the frozen F1 to F3 fixtures and their scorer. */
 export const PREVIEW_FIXTURE_VERSION = "0.5-preview-fixtures.1";
-export const PREVIEW_SCORER_VERSION = "0.5-preview-scorer.1";
+export const PREVIEW_SCORER_VERSION = "0.5-preview-scorer.2";
 
 const id = Type.String({ minLength: 1 });
 

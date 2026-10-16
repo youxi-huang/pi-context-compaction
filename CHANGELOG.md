@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- `AGENTS.md` asks agents to check with the user before starting a subagent, and does not let a subagent start subagents of its own.
+
 ## [v0.4.3] — 2026-10-16
 
 v0.4.3 adds official Pi 1.3.0 to the independent extension as its primary host, while retaining Pi 1.2.0, Pi 1.1.0 and existing checkpoints. `/compaction-doctor` now tells a failure that a new `/compact` can clear from one it cannot, and publication reads its host list from the candidate itself. Both optional preparation paths remain disabled by default. One bounded real-provider run on Pi 1.3.0 with DeepSeek V4.1 Flash is in the validation record: two checkpoints, the first after one refused note, and both continuation checks passed. It covers one task and is not a quality or cost comparison.

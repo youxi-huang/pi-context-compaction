@@ -46,6 +46,7 @@ Do not run the full upstream vitest suite or `npm test`; they include end-to-end
 - Record user-visible changes under **Unreleased** in the root `CHANGELOG.md`, grouped as Added, Changed, Fixed, Security or Maintenance. The changelogs under `packages/` are upstream history and are not edited.
 - Do not change version strings, build fingerprints, tags or release assets, and never push `v*` tags or `release/publish-v*` branches: they trigger publication. Releases are made by the maintainer. The root `package.json` carries upstream workspace metadata and is not this project's version.
 - Do not commit, push, open pull requests or create releases unless asked. A request for a handoff includes committing and pushing `HANDOFF.md` on the work branch.
+- Ask the user before starting a subagent, and say what it will do. A subagent does its task itself and starts no subagents of its own.
 - Do not add credentials, session logs, note content or local file paths to the repository, to fixtures, or to issue and pull request text.
 - Do not add `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md`. Claude Code reads this file only when none of them exists, and Codex reads it natively.
 

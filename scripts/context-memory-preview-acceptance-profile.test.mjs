@@ -30,8 +30,8 @@ const CASES = [
 	["protected-then-native", "fixture-protected fixture-native-checkpoint stays-blocked one-notice-per-input notice-points-to-new-session"],
 	["in-memory-session", "prompt-sent", "prompt-sent"],
 	["other-pi-version", "fresh-session-usable no-marker", "prompt-sent"],
-	["failed-compaction-notices", "rejected-and-blocked one-notice-for-failure one-notice-per-blocked-input explicit-retry-recovers"],
-	["work-notes", "guideline forged-notes-refused note-saved notes-commit disk-confirmed user-words note-claim-stays-data correction-in-context restart section-tamper-blocks explicit-recovery same-id-edit-blocks"],
+	["failed-compaction-notices", "rejected-and-blocked quote-repair-refused one-notice-for-failure one-notice-per-blocked-input explicit-retry-recovers quote-repair-commits"],
+	["work-notes", "guideline forged-notes-refused note-saved notes-commit disk-confirmed user-words note-claim-stays-data typed-list correction-in-context restart section-tamper-blocks explicit-recovery same-id-edit-blocks"],
 	["prepared-candidate", "no-note-guideline prepared branch-switch-drops-candidate sync-on-new-branch unknown-usage cancelled-preparation journal-survives-restart"],
 	["long-session-overhead", "compactions-succeed per-request-budget bounded-growth"],
 ];

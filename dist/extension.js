@@ -226,8 +226,8 @@ function noteBytes(note) {
 function validateNoteSources(value, textById) {
   if (!Check(noteSchema, value)) throw new Error("CONTEXT_NOTE_INVALID: writer must return the complete note schema");
   const readable = (id) => Boolean(textById(id));
-  for (const section of noteSections) {
-    for (const item of value[section]) {
+  for (const section2 of noteSections) {
+    for (const item of value[section2]) {
       if (item.sources.some((id) => !readable(id)))
         throw new Error("CONTEXT_NOTE_SCOPE: a note cites unavailable evidence");
       if (item.quote && !item.sources.some((id) => textById(id).includes(item.quote)))
@@ -402,14 +402,14 @@ var LINE_BREAK_RUN = new RegExp(`[${LINE_BREAKS}]+`, "gu");
 function oneLineNote(note) {
   const fold = (text) => text.replace(LINE_BREAK_RUN, " ");
   const folded = structuredClone(note);
-  for (const section of noteSections) for (const item of folded[section]) item.text = fold(item.text);
+  for (const section2 of noteSections) for (const item of folded[section2]) item.text = fold(item.text);
   folded.gaps = folded.gaps.map(fold);
   return folded;
 }
 function renderNote(note, lineage = []) {
   const sections = noteSections.map(
-    (section) => `## ${section}
-${note[section].map((item) => `- ${item.text}${item.quote ? `
+    (section2) => `## ${section2}
+${note[section2].map((item) => `- ${item.text}${item.quote ? `
   Exact source: ${JSON.stringify(item.quote)}` : ""} [${item.sources.join(", ")}]${item.supersedes?.length ? ` (supersedes: ${item.supersedes.join(", ")})` : ""}`).join("\n")}`
   );
   if (note.gaps.length) sections.push(`## Unresolved
@@ -519,21 +519,21 @@ function queryHistory(snapshot, request, budgetTokens = 4e3) {
       start = Math.max(0, (hits.length ? Math.min(...hits) : 0) - 120);
     }
     const charLimit = request.operation === "search" ? 1400 : remaining * 2;
-    let excerpt = text.slice(start, start + charLimit);
-    while (textTokens(JSON.stringify(excerpt)) + 100 > remaining && excerpt.length)
-      excerpt = excerpt.slice(0, Math.floor(excerpt.length * 0.8));
-    if (!excerpt) break;
+    let excerpt3 = text.slice(start, start + charLimit);
+    while (textTokens(JSON.stringify(excerpt3)) + 100 > remaining && excerpt3.length)
+      excerpt3 = excerpt3.slice(0, Math.floor(excerpt3.length * 0.8));
+    if (!excerpt3) break;
     page.entries.push({
       entryId: entry.id,
       parentId: entry.parentId,
       role: sourceRole(entry),
       position,
       offset: start,
-      text: excerpt
+      text: excerpt3
     });
-    remaining -= textTokens(JSON.stringify(excerpt)) + 100;
-    if (request.operation === "read" && start + excerpt.length < text.length) {
-      offset = start + excerpt.length;
+    remaining -= textTokens(JSON.stringify(excerpt3)) + 100;
+    if (request.operation === "read" && start + excerpt3.length < text.length) {
+      offset = start + excerpt3.length;
       break;
     }
     offset = 0;
@@ -1011,7 +1011,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.6d21d37d4e59aefe";
+var PREVIEW_BUILD_ID = "stock-preview+src.c6aefd74b04f4aaa";
 
 // packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
 var SUPPORTED_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0"]);
@@ -1497,6 +1497,77 @@ function reusablePrefix(candidate, classification, branch) {
 // packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts
 import { Type as Type3 } from "typebox";
 import { Check as Check3 } from "typebox/value";
+
+// packages/coding-agent/src/extensions/context-memory/preview/quote-diagnostics.ts
+var MAX_LOCATIONS = 5;
+function normalizeQuote(text) {
+  return text.normalize("NFKC").replace(/[\u2018\u2019\u201A\u201B\u2032]/gu, "'").replace(/[\u201C\u201D\u201E\u201F\u2033]/gu, '"').replace(/[\u2010-\u2015\u2212]/gu, "-").replace(/\s+/gu, " ").trim();
+}
+function diagnoseQuotes(note, branch) {
+  const byId = new Map(branch.map((entry) => [entry.id, entry]));
+  const text = (id) => {
+    const entry = byId.get(id);
+    return entry ? sourceText(entry) || void 0 : void 0;
+  };
+  const readable = [...byId.values()].flatMap((entry) => {
+    const value = sourceText(entry);
+    return value ? [{ entry, text: value }] : [];
+  });
+  let normalized;
+  const failures = [];
+  let unreadable = false;
+  for (const section2 of noteSections) {
+    note[section2].forEach((item, index) => {
+      if (item.sources.some((id) => !text(id)) || item.supersedes?.some((id) => !text(id))) unreadable = true;
+      const quote = item.quote;
+      if (!quote || item.sources.some((id) => text(id)?.includes(quote))) return;
+      const exact = readable.filter((source) => source.text.includes(quote));
+      let kind = "elsewhere";
+      let found = exact;
+      if (!exact.length) {
+        normalized ??= readable.map((source) => ({ entry: source.entry, text: normalizeQuote(source.text) }));
+        const target = normalizeQuote(quote);
+        found = target ? normalized.filter((source) => source.text.includes(target)) : [];
+        kind = found.length ? "format" : "absent";
+      }
+      failures.push({
+        section: section2,
+        index,
+        quote,
+        cited: [...item.sources],
+        kind,
+        foundIn: found.slice(0, MAX_LOCATIONS).map((source) => ({ entryId: source.entry.id, role: sourceRole(source.entry) }))
+      });
+    });
+  }
+  return { failures, unreadable };
+}
+function quoteCounts(failures) {
+  const counts = { failed: failures.length, elsewhere: 0, format: 0, absent: 0 };
+  for (const failure of failures) counts[failure.kind]++;
+  return counts;
+}
+function quoteFailureMessage(counts, repaired = false) {
+  const parts = [
+    counts.elsewhere ? `${counts.elsewhere} found verbatim in other entries` : "",
+    counts.format ? `${counts.format} matching only after spacing or punctuation changes` : "",
+    counts.absent ? `${counts.absent} found in no entry` : ""
+  ].filter(Boolean);
+  return `CONTEXT_NOTE_QUOTE: ${counts.failed} quotation${counts.failed === 1 ? " does" : "s do"} not match the entries cited${parts.length ? ` (${parts.join(", ")})` : ""}${repaired ? " after one quotation repair" : ""}. No checkpoint committed; original history retained.`;
+}
+function quoteFeedback(failures) {
+  return failures.map((failure) => {
+    const where = failure.foundIn.map((location) => `${location.entryId} (${location.role})`).join(", ");
+    const field = `${failure.section}[${failure.index}].quote`;
+    if (failure.kind === "elsewhere")
+      return `${field} is not in ${failure.cited.join(", ")}; the exact text is in ${where}. Cite that entry, or drop the quote. Text from an assistant or tool entry is not a user ruling.`;
+    if (failure.kind === "format")
+      return `${field} differs from ${where} in spacing or punctuation; copy the text exactly or drop the quote.`;
+    return `${field} is in no readable entry; quote exact text from a cited entry or drop the quote.`;
+  }).join("\n");
+}
+
+// packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts
 var ONE_LINE = `^[^${LINE_BREAKS}]+$`;
 var entryIds = (minItems, description) => Type3.Array(Type3.String({ minLength: 1, maxLength: 64 }), { minItems, maxItems: 20, uniqueItems: true, description });
 var fact2 = Type3.Object(
@@ -1532,19 +1603,23 @@ function validateWorkNote(value, branch) {
   if (!Check3(workNoteSchema, value))
     throw new Error("CONTEXT_NOTE_INVALID: a work note has state and optional data sections, one line per fact");
   const note = structuredClone(value);
-  return validateNote(
-    {
-      instructions: [],
-      failedPaths: note.failedPaths ?? [],
-      reasons: note.reasons ?? [],
-      state: note.state,
-      nextSteps: note.nextSteps ?? [],
-      files: note.files ?? [],
-      gaps: note.gaps ?? []
-    },
-    branch,
-    2e3
-  );
+  const memory = {
+    instructions: [],
+    failedPaths: note.failedPaths ?? [],
+    reasons: note.reasons ?? [],
+    state: note.state,
+    nextSteps: note.nextSteps ?? [],
+    files: note.files ?? [],
+    gaps: note.gaps ?? []
+  };
+  try {
+    return validateNote(memory, branch, 2e3);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
+    const feedback = quoteFeedback(diagnoseQuotes(memory, branch).failures);
+    throw new Error(feedback ? `${error.message}
+${feedback}` : error.message);
+  }
 }
 function workNotes(branch, afterId) {
   const after = afterId ? branch.findIndex((entry) => entry.id === afterId) : -1;
@@ -1566,7 +1641,7 @@ function mergeWorkNotes(previous, notes) {
   );
   for (const { note, gapsListed } of notes) {
     const superseded = new Set(
-      noteSections.flatMap((section) => note[section].flatMap((item) => item.supersedes ?? []))
+      noteSections.flatMap((section2) => note[section2].flatMap((item) => item.supersedes ?? []))
     );
     const replaced = (item) => item.sources.some((id) => superseded.has(id));
     if (merged.instructions.some(replaced)) return void 0;
@@ -1577,15 +1652,15 @@ function mergeWorkNotes(previous, notes) {
       ...merged.files,
       ...note.nextSteps.length ? [] : merged.nextSteps
     ];
-    const given = noteSections.flatMap((section) => note[section]);
+    const given = noteSections.flatMap((section2) => note[section2]);
     for (const id of superseded) {
       const earlier = droppable.filter((item) => item.sources.includes(id)).length;
       if (earlier > given.filter((item) => item.supersedes?.includes(id)).length) return void 0;
     }
-    for (const section of ["failedPaths", "reasons", "state", "files"]) {
-      const kept = merged[section].filter((item) => !replaced(item));
+    for (const section2 of ["failedPaths", "reasons", "state", "files"]) {
+      const kept = merged[section2].filter((item) => !replaced(item));
       const seen = new Set(kept.map((item) => JSON.stringify(item)));
-      merged[section] = [...kept, ...note[section].filter((item) => !seen.has(JSON.stringify(item)))];
+      merged[section2] = [...kept, ...note[section2].filter((item) => !seen.has(JSON.stringify(item)))];
     }
     merged.nextSteps = note.nextSteps.length ? note.nextSteps : merged.nextSteps.filter((item) => !replaced(item));
     if (gapsListed) merged.gaps = [...new Set(note.gaps)];
@@ -1643,6 +1718,122 @@ function assertUserMessages(branch) {
 
 // packages/coding-agent/src/extensions/context-memory/preview/writer.ts
 import { estimateTokens } from "@earendil-works/pi-coding-agent";
+
+// packages/coding-agent/src/extensions/context-memory/preview/quote-repair.ts
+import { Type as Type4 } from "typebox";
+import { Check as Check4 } from "typebox/value";
+var QUOTE_REPAIR_MAX_FACTS = 5;
+var EXCERPT_CHARS = 1600;
+var CITED_EXCERPTS = 3;
+var section = Type4.Union([
+  Type4.Literal("instructions"),
+  Type4.Literal("failedPaths"),
+  Type4.Literal("reasons"),
+  Type4.Literal("state"),
+  Type4.Literal("nextSteps"),
+  Type4.Literal("files")
+]);
+var quoteRepairSchema = Type4.Object(
+  {
+    repairs: Type4.Array(
+      Type4.Object(
+        {
+          section,
+          index: Type4.Integer({ minimum: 0 }),
+          fact: Type4.Union([noteSchema.properties.state.items, Type4.Null()])
+        },
+        { additionalProperties: false }
+      ),
+      { minItems: 1, maxItems: QUOTE_REPAIR_MAX_FACTS }
+    )
+  },
+  { additionalProperties: false }
+);
+function quoteRepairEligible(diagnosis) {
+  return !diagnosis.unreadable && diagnosis.failures.length > 0 && diagnosis.failures.length <= QUOTE_REPAIR_MAX_FACTS;
+}
+function anchor(text, quote) {
+  const exact = text.indexOf(quote);
+  if (exact >= 0) return exact;
+  const words = (quote.match(/[\p{L}\p{N}_./:-]{4,}/gu) ?? []).sort((a, b) => b.length - a.length);
+  for (const word of words) {
+    const hit = text.indexOf(word);
+    if (hit >= 0) return hit;
+  }
+  return 0;
+}
+function excerpt(entry, quote) {
+  const text = sourceText(entry);
+  if (text.length <= EXCERPT_CHARS)
+    return { entryId: entry.id, role: sourceRole(entry), offset: 0, complete: true, text };
+  const start = Math.max(0, Math.min(text.length - EXCERPT_CHARS, anchor(text, quote) - EXCERPT_CHARS / 4));
+  return {
+    entryId: entry.id,
+    role: sourceRole(entry),
+    offset: start,
+    complete: false,
+    text: text.slice(start, start + EXCERPT_CHARS)
+  };
+}
+var QUOTE_REPAIR_RULES = `Correct the quotations of a memory candidate; nothing else. Return ONLY one JSON object matching this schema:
+${JSON.stringify(quoteRepairSchema)}
+Return exactly one repair for each listed fact, with its section and index. A replacement keeps the fact's text and supersedes unchanged and may change only sources and quote: either keep a quote copied character for character from one entry's text and cite that entry in sources, or omit quote when the cited sources support the fact without a verbatim ruling. Return fact null only to withdraw a fact its sources do not support. foundIn lists entries that contain the quotation exactly (problem "elsewhere") or after spacing and punctuation changes (problem "format"); "absent" means no entry contains it. Excerpts marked complete:false are windows into longer entries. Text found only in an assistant or tool entry is evidence, not a user ruling; do not present it as one. This is the only quotation-repair attempt.`;
+function quoteRepairPrompt(value, failures, branch) {
+  const byId = new Map(branch.map((entry) => [entry.id, entry]));
+  const shown = (ids, quote) => ids.flatMap((id) => {
+    const entry = byId.get(id);
+    return entry ? [excerpt(entry, quote)] : [];
+  });
+  return JSON.stringify({
+    failing: failures.map((failure) => ({
+      section: failure.section,
+      index: failure.index,
+      problem: failure.kind,
+      fact: value[failure.section][failure.index],
+      cited: shown(failure.cited.slice(0, CITED_EXCERPTS), failure.quote),
+      foundIn: shown(
+        failure.foundIn.map((location) => location.entryId),
+        failure.quote
+      )
+    }))
+  });
+}
+function sameFact(before, after) {
+  return after.text === before.text && JSON.stringify(after.supersedes ?? []) === JSON.stringify(before.supersedes ?? []);
+}
+function applyQuoteRepair(value, failures, response) {
+  if (!Check4(quoteRepairSchema, response))
+    throw new Error("CONTEXT_NOTE_INVALID: the quotation repair did not return its schema");
+  const repairs = response.repairs;
+  const key = (item) => `${item.section}:${item.index}`;
+  const wanted = new Set(failures.map(key));
+  const given = new Set(repairs.map(key));
+  if (given.size !== repairs.length || given.size !== wanted.size || [...wanted].some((item) => !given.has(item)))
+    throw new Error("CONTEXT_NOTE_INVALID: the quotation repair must answer each failing fact exactly once");
+  const note = structuredClone(value);
+  const outcome = { requoted: 0, unquoted: 0, dropped: 0 };
+  const dropped = /* @__PURE__ */ new Map();
+  for (const repair of repairs) {
+    const facts3 = note[repair.section];
+    const before = value[repair.section][repair.index];
+    if (repair.fact === null) {
+      outcome.dropped++;
+      dropped.set(repair.section, (dropped.get(repair.section) ?? /* @__PURE__ */ new Set()).add(repair.index));
+      continue;
+    }
+    if (!sameFact(before, repair.fact))
+      throw new Error(
+        "CONTEXT_NOTE_REPAIR_LOSS: a quotation repair may change only sources and quote; no checkpoint committed"
+      );
+    facts3[repair.index] = repair.fact;
+    if (repair.fact.quote) outcome.requoted++;
+    else outcome.unquoted++;
+  }
+  for (const [name, indices] of dropped) note[name] = note[name].filter((_, index) => !indices.has(index));
+  return { note, outcome };
+}
+
+// packages/coding-agent/src/extensions/context-memory/preview/writer.ts
 function* sourceChunks(entries, tokenBudget) {
   let chunk = [];
   let used = 0;
@@ -1744,7 +1935,7 @@ function parseNote(response) {
 }
 function referencedEvidence(note, branch, budget) {
   const referenced = new Set(
-    note ? noteSections.flatMap((section) => note[section].flatMap((item) => item.sources)) : []
+    note ? noteSections.flatMap((section2) => note[section2].flatMap((item) => item.sources)) : []
   );
   let used = 0;
   return branch.filter((entry) => referenced.has(entry.id)).map((entry) => ({ entryId: entry.id, role: sourceRole(entry), text: sourceText(entry).slice(0, 1400) })).filter((entry) => {
@@ -1752,19 +1943,29 @@ function referencedEvidence(note, branch, budget) {
     return used <= budget;
   });
 }
+var TOOL_CALL_DECLINED = "Not run: tools are unavailable while the memory note is written. Reply now with only the memory JSON object.";
 function assertRepairPreserved(before, after) {
-  const items = (note) => noteSections.flatMap((section) => note[section]);
+  const items = (note) => noteSections.flatMap((section2) => note[section2]);
   const afterItems = items(after);
   const sources = new Set(afterItems.flatMap((item) => item.sources));
   const supersedes = new Set(afterItems.flatMap((item) => item.supersedes ?? []));
   const quotes = new Set(afterItems.flatMap((item) => item.quote ? [item.quote] : []));
   if (items(before).some(
     (item) => item.sources.some((id) => !sources.has(id)) || item.supersedes?.some((id) => !supersedes.has(id)) || item.quote && !quotes.has(item.quote)
-  ) || noteSections.some((section) => before[section].length > 0 && after[section].length === 0) || before.gaps.length > 0 && after.gaps.length === 0)
+  ) || noteSections.some((section2) => before[section2].length > 0 && after[section2].length === 0) || before.gaps.length > 0 && after.gaps.length === 0)
     throw new Error(
       "CONTEXT_NOTE_REPAIR_LOSS: size repair lost evidence anchors, exact quotations or an occupied section; no checkpoint committed"
     );
 }
+var QuotationRefusal = class extends Error {
+  note;
+  diagnosis;
+  constructor(message, note, diagnosis) {
+    super(message);
+    this.note = note;
+    this.diagnosis = diagnosis;
+  }
+};
 async function writeMemory(options) {
   if (!Number.isSafeInteger(options.noteTokens) || options.noteTokens < 500 || options.baseNoteTokens !== void 0 && (!Number.isSafeInteger(options.baseNoteTokens) || options.baseNoteTokens < 500))
     throw new Error("CONTEXT_CONFIG: writer note budgets must be integer counts >= 500");
@@ -1782,6 +1983,11 @@ async function writeMemory(options) {
   let repairUsed = false;
   let phase = "generate";
   const calls = [];
+  let quotations;
+  let repairKind;
+  let quotationRepair;
+  let toolCallResponses = 0;
+  let toolCallDeclined = false;
   const report = () => options.onProgress?.({
     writerModel,
     writerEffort,
@@ -1789,7 +1995,12 @@ async function writeMemory(options) {
     usageReports: usages.length,
     repairUsed,
     writerCallDetails: structuredClone(calls),
-    ...usages.length ? { usage: sumMemoryUsage(usages) } : {}
+    ...usages.length ? { usage: sumMemoryUsage(usages) } : {},
+    ...quotations ? { quotations: { ...quotations } } : {},
+    ...repairKind ? { repairKind } : {},
+    ...quotationRepair ? { quotationRepair: { ...quotationRepair } } : {},
+    ...toolCallResponses ? { toolCallResponses } : {},
+    ...toolCallDeclined ? { toolCallDeclined } : {}
   });
   const complete = async (selected, context, request) => {
     options.signal.throwIfAborted();
@@ -1825,6 +2036,7 @@ async function writeMemory(options) {
         }
       }
       response = await stream.result();
+      if (response.content.some((block) => block.type === "toolCall")) toolCallResponses++;
       const usage = reportedUsage(response);
       if (usage) {
         usages.push(usage);
@@ -1872,20 +2084,99 @@ async function writeMemory(options) {
     if (failed) throw failure;
     return response;
   };
-  const readCandidate = (response) => {
+  const validateCandidate = (value, repaired) => {
+    try {
+      return validateNoteContent(value, options.branch);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
+      const note = value;
+      const diagnosis = diagnoseQuotes(note, options.branch);
+      const counts = quoteCounts(diagnosis.failures);
+      quotations ??= counts;
+      report();
+      throw new QuotationRefusal(quoteFailureMessage(counts, repaired), note, diagnosis);
+    }
+  };
+  const parseCandidate = (response) => {
     options.signal.throwIfAborted();
     const value = parseNote(response);
     calls[calls.length - 1].noteBytes = Buffer.byteLength(JSON.stringify(value), "utf8");
     report();
-    const note = oneLineNote(validateNoteContent(value, options.branch));
+    return value;
+  };
+  const checkCandidate = (value, repaired = false) => {
+    const note = oneLineNote(validateCandidate(value, repaired));
     if (options.activeRequests?.length && !note.nextSteps.some((step) => step.text.trim()))
       throw new Error(
         "CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step"
       );
     return note;
   };
+  const readCandidate = (response) => checkCandidate(parseCandidate(response));
+  const repairQuotations = async (failure) => {
+    const { diagnosis } = failure;
+    if (!options.config.noteRepair || repairUsed || !quoteRepairEligible(diagnosis)) throw failure;
+    const maxTokens = outputBudget(model, options.noteTokens);
+    const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, options.branch);
+    if (textTokens(QUOTE_REPAIR_RULES) + textTokens(prompt) + maxTokens > Math.min(model.contextWindow, 64e3))
+      throw failure;
+    options.signal.throwIfAborted();
+    repairUsed = true;
+    repairKind = "quotation";
+    phase = "repair";
+    try {
+      const value = parseCandidate(
+        await complete(
+          model,
+          {
+            systemPrompt: QUOTE_REPAIR_RULES,
+            messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+            tools: []
+          },
+          {
+            ...writerEffort === "off" ? {} : { reasoning: writerEffort },
+            maxTokens,
+            signal: options.signal,
+            maxRetries: 0,
+            toolChoice: "none",
+            transport: "sse",
+            cacheRetention: "none"
+          }
+        )
+      );
+      const repaired = applyQuoteRepair(failure.note, diagnosis.failures, value);
+      quotationRepair = repaired.outcome;
+      report();
+      return checkCandidate(repaired.note, true);
+    } finally {
+      phase = "generate";
+    }
+  };
+  const declineToolCall = async (context, request, response) => {
+    const calls2 = response.content.flatMap((block) => block.type === "toolCall" ? [block] : []);
+    if (!calls2.length || response.stopReason !== "toolUse" || !options.config.noteRepair || toolCallDeclined)
+      return response;
+    options.signal.throwIfAborted();
+    toolCallDeclined = true;
+    const declined = calls2.map((call) => ({
+      role: "toolResult",
+      toolCallId: call.id,
+      toolName: call.name,
+      content: [{ type: "text", text: TOOL_CALL_DECLINED }],
+      isError: true,
+      timestamp: Date.now()
+    }));
+    return await complete(model, { ...context, messages: [...context.messages, response, ...declined] }, request);
+  };
   const accept = async (response) => {
-    const candidate = readCandidate(response);
+    const value = parseCandidate(response);
+    let candidate;
+    try {
+      candidate = checkCandidate(value);
+    } catch (error) {
+      if (!(error instanceof QuotationRefusal)) throw error;
+      candidate = await repairQuotations(error);
+    }
     const bytes = noteBytes(candidate);
     if (bytes <= options.noteTokens * 3) return candidate;
     if (!options.config.noteRepair || repairUsed) throw new NoteBudgetError(bytes, options.noteTokens);
@@ -1900,7 +2191,7 @@ Preserve every existing source ID, supersedes ID and quote exactly somewhere in 
       candidate,
       // Complete verified quotations are supplied even when the bounded excerpts miss their location.
       verifiedQuotes: noteSections.flatMap(
-        (section) => candidate[section].flatMap(
+        (section2) => candidate[section2].flatMap(
           (item) => item.quote ? [
             {
               sources: item.sources.filter(
@@ -1920,6 +2211,7 @@ Preserve every existing source ID, supersedes ID and quote exactly somewhere in 
       );
     options.signal.throwIfAborted();
     repairUsed = true;
+    repairKind = "size";
     phase = "repair";
     try {
       const repaired = readCandidate(
@@ -1948,7 +2240,7 @@ Preserve every existing source ID, supersedes ID and quote exactly somewhere in 
       phase = "generate";
     }
   };
-  const result = options.config.writerModel === SESSION_WRITER ? await writeWithSession(model, options, complete, writerEffort, accept) : await writeWithFixedWriter(model, options, complete, writerEffort, accept);
+  const result = options.config.writerModel === SESSION_WRITER ? await writeWithSession(model, options, complete, writerEffort, accept, declineToolCall) : await writeWithFixedWriter(model, options, complete, writerEffort, accept);
   if (options.activeRequests?.length && !result.note.nextSteps.some((step) => step.text.trim().length > 0))
     throw new Error(
       "CONTEXT_CONTINUATION_MISSING: an unfinished turn requires an explicit next step or final reporting step"
@@ -2009,7 +2301,7 @@ ${noteBudgetInstruction(noteTokens, options.baseNoteTokens)}`;
     throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
   return { note, chunkCount };
 }
-async function writeWithSession(model, options, complete, effort, accept) {
+async function writeWithSession(model, options, complete, effort, accept, declineToolCall) {
   const { noteTokens, signal, prefix } = options;
   const maxTokens = outputBudget(model, noteTokens);
   if (!prefix) throw new Error("CONTEXT_WRITER_UNAVAILABLE: the session writer needs the current provider context");
@@ -2018,8 +2310,14 @@ async function writeWithSession(model, options, complete, effort, accept) {
     throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
   const fixedTokens = textTokens(prefix.systemPrompt ?? "") + prefix.messages.reduce((sum, message) => sum + estimateTokens(message), 0) + textTokens(JSON.stringify(prefix.tools ?? [])) + maxTokens;
   let instruction;
-  for (const head of [80, 40, 0]) {
-    const candidate = handoverInstruction(options, sources, head);
+  const quotable = quotableOriginals(sources, options.activeRequests, noteTokens);
+  for (const [block, head] of [
+    [quotable, 80],
+    [[], 80],
+    [[], 40],
+    [[], 0]
+  ]) {
+    const candidate = handoverInstruction(options, sources, head, block);
     if (fixedTokens + textTokens(candidate) <= model.contextWindow) {
       instruction = candidate;
       break;
@@ -2028,27 +2326,42 @@ async function writeWithSession(model, options, complete, effort, accept) {
   if (!instruction)
     throw new Error("CONTEXT_WRITER_CAPACITY: the session context leaves no room for the handover request");
   signal.throwIfAborted();
-  const response = await complete(
-    model,
-    {
-      systemPrompt: prefix.systemPrompt,
-      messages: [...prefix.messages, { role: "user", content: instruction, timestamp: Date.now() }],
-      ...prefix.tools ? { tools: [...prefix.tools] } : {}
-    },
-    {
-      ...effort === "off" ? {} : { reasoning: effort },
-      maxTokens,
-      signal,
-      maxRetries: 0,
-      toolChoice: "none",
-      transport: "sse"
-    }
-  );
+  const context = {
+    systemPrompt: prefix.systemPrompt,
+    messages: [...prefix.messages, { role: "user", content: instruction, timestamp: Date.now() }],
+    ...prefix.tools ? { tools: [...prefix.tools] } : {}
+  };
+  const request = {
+    ...effort === "off" ? {} : { reasoning: effort },
+    maxTokens,
+    signal,
+    maxRetries: 0,
+    // No tool choice, as in the session's own requests: the provider can then reuse the cached prefix. Under
+    // "none", DeepSeek leaves the tool definitions out of the prompt, so the prefix ends after the system prompt.
+    // A tool call is never run: it is declined once, and a second one refuses the note with CONTEXT_WRITER_FAILED.
+    transport: "sse"
+  };
+  const response = await declineToolCall(context, request, await complete(model, context, request));
   signal.throwIfAborted();
   const note = await accept(response);
   return { note, chunkCount: 1 };
 }
-function handoverInstruction(options, sources, head) {
+function quotableOriginals(sources, active, budgetTokens) {
+  const activeIds = new Set(active?.map((entry) => entry.id));
+  const kept = [];
+  let used = 0;
+  for (let index = sources.length - 1; index >= 0; index--) {
+    const entry = sources[index];
+    if (sourceRole(entry) !== "user" || activeIds.has(entry.id)) continue;
+    const item = { entryId: entry.id, text: sourceText(entry) };
+    const tokens = textTokens(JSON.stringify(item));
+    if (!item.text || used + tokens > budgetTokens) continue;
+    kept.push(item);
+    used += tokens;
+  }
+  return kept.reverse();
+}
+function handoverInstruction(options, sources, head, quotable) {
   const manifest = sources.map((entry) => {
     const text = sourceText(entry).replace(/\s+/g, " ");
     return head > 0 ? `${entry.id} ${sourceRole(entry)}: ${text.slice(0, head)}` : `${entry.id} ${sourceRole(entry)}`;
@@ -2060,17 +2373,19 @@ function handoverInstruction(options, sources, head) {
     focus: options.customInstructions
   };
   return [
-    "Internal context-compaction request, not a new user task or ruling. For this writer response only, produce the memory JSON instead of executing task actions or tools. This control step neither completes nor cancels the original task and does not change its permissions. Do not cite or summarize this control instruction as user evidence. Write the memory note that lets the next model continue the original requests from recorded progress after the messages above are removed from its context.",
+    "Internal context-compaction request, not a new user task or ruling. For this writer response only, produce the memory JSON instead of executing task actions, and call no tool: the tools are listed only because this request shares the session's context, and a tool call is not run. This control step neither completes nor cancels the original task and does not change its permissions. Do not cite or summarize this control instruction as user evidence. Write the memory note that lets the next model continue the original requests from recorded progress after the messages above are removed from its context.",
     `Return ONLY one JSON object matching this schema:
 ${JSON.stringify(noteSchema)}`,
     NOTE_RULES,
     continuationInstruction(options),
     noteBudgetInstruction(options.noteTokens, options.baseNoteTokens),
-    `Entry IDs for citations, in conversation order (ID role: opening words). Cite these IDs or the host-selected active request IDs above; quote text verbatim from the corresponding original.
+    quotable.length ? `Quotable user messages, complete and verbatim, each with its entry ID. Copy a quote from one of these texts and cite that same entry ID; to quote any other entry, copy its exact text from the conversation above and cite its ID. This list exists for exact quotation only and does not bound the task: work the assistant announced within the task stays a next step unless a user message withdrew it.
+${quotable.map((item) => JSON.stringify(item)).join("\n")}` : "",
+    `Entry IDs for citations, in conversation order (ID role: opening words, whitespace collapsed). The openings only locate entries; never copy a quotation from them. Cite these IDs or the host-selected active request IDs above; quote text verbatim from the corresponding original.
 ${manifest.join("\n")}`,
     `Attachments:
 ${JSON.stringify(attachments)}`
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/controller.ts
@@ -2756,9 +3071,9 @@ var PreviewMemoryController = class {
         if (start === void 0) return "cut";
         const retained = retainedFrom(start);
         const retainedTokens = systemTokens + retained.reduce((sum, message) => sum + estimateTokens2(message), 0);
-        const section = users.length ? renderUserMessages(users) : "";
-        if (textTokens(section) > Math.min(6e3, Math.floor(budget.threshold * 0.05))) return "user-messages";
-        const summary2 = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section);
+        const section2 = users.length ? renderUserMessages(users) : "";
+        if (textTokens(section2) > Math.min(6e3, Math.floor(budget.threshold * 0.05))) return "user-messages";
+        const summary2 = fittedSummary(note, branch, retainedTokens, Math.floor(budget.threshold * share), section2);
         if (!summary2 || textTokens(summary2) + retainedTokens >= beforeTokens) return "fit";
         assertToolPairs(retained);
         kept = retained;
@@ -3372,13 +3687,259 @@ var PreviewFailureStore = class {
   }
 };
 
+// packages/coding-agent/src/extensions/context-memory/preview/history-view.ts
+import { createHash as createHash5 } from "node:crypto";
+import { Type as Type5 } from "typebox";
+var HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"];
+var VIEW_VERSION = "view-v1";
+var EXCERPT_CHARS2 = 400;
+var EDIT_TOOLS = /* @__PURE__ */ new Set(["edit", "write"]);
+var previewHistorySchema = Type5.Object(
+  {
+    operation: Type5.Union([Type5.Literal("search"), Type5.Literal("read"), Type5.Literal("list")]),
+    query: Type5.Optional(Type5.String({ maxLength: 1e3 })),
+    entryId: Type5.Optional(Type5.String({ maxLength: 64 })),
+    kind: Type5.Optional(
+      // Spelled out: a mapped array would lose the literal types.
+      Type5.Union(
+        [
+          Type5.Literal("instructions"),
+          Type5.Literal("failedPaths"),
+          Type5.Literal("reasons"),
+          Type5.Literal("state"),
+          Type5.Literal("nextSteps"),
+          Type5.Literal("files"),
+          Type5.Literal("edits"),
+          Type5.Literal("errors")
+        ],
+        {
+          description: "For list: instructions (constraints), reasons (decisions), failedPaths, files, nextSteps, state, edits or errors."
+        }
+      )
+    ),
+    cursor: Type5.Optional(
+      Type5.String({
+        maxLength: 2e3,
+        description: "Continuation cursor. Repeat the original operation, query, entryId, kind and grantId unchanged."
+      })
+    ),
+    grantId: Type5.Optional(Type5.String({ maxLength: 128 }))
+  },
+  { additionalProperties: false }
+);
+function viewTerms(query) {
+  const words = query.toLocaleLowerCase().match(/[\p{L}\p{N}_./:-]+/gu) ?? [];
+  const chinese = query.match(/[\p{Script=Han}]{2,}/gu) ?? [];
+  return [
+    .../* @__PURE__ */ new Set([
+      ...words,
+      ...chinese.flatMap((word) => Array.from({ length: word.length - 1 }, (_, i) => word.slice(i, i + 2)))
+    ])
+  ].slice(0, 64);
+}
+function excerpt2(entry, terms) {
+  const text = sourceText(entry);
+  const lower = text.toLocaleLowerCase();
+  const hits = terms.map((term) => lower.indexOf(term)).filter((hit) => hit >= 0);
+  const offset = Math.max(0, (hits.length ? Math.min(...hits) : 0) - 80);
+  return { entryId: entry.id, offset, text: text.slice(offset, offset + EXCERPT_CHARS2) };
+}
+function strings(value) {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : void 0;
+}
+var matches = (text, terms) => {
+  const lower = text.toLocaleLowerCase();
+  return terms.some((term) => lower.includes(term));
+};
+function noteItems(entries, kind, terms) {
+  const position = new Map(entries.map((entry, index) => [entry.id, index]));
+  const supersededBy = /* @__PURE__ */ new Map();
+  const recorded = /* @__PURE__ */ new Map();
+  let latest = -1;
+  entries.forEach((entry, index) => {
+    if (entry.type !== "compaction" || !isRecord(entry.details)) return;
+    const { kind: detailsKind, version, note } = entry.details;
+    if (detailsKind !== CONTEXT_MEMORY_KIND || version !== CONTEXT_MEMORY_VERSION || !isRecord(note)) return;
+    latest = index;
+    const seen = /* @__PURE__ */ new Map();
+    for (const section2 of noteSections) {
+      const facts3 = note[section2];
+      if (!Array.isArray(facts3)) continue;
+      for (const fact3 of facts3) {
+        if (!isRecord(fact3) || typeof fact3.text !== "string") continue;
+        const sources = strings(fact3.sources)?.filter((id) => position.has(id));
+        if (!sources?.length) continue;
+        const supersedes = strings(fact3.supersedes) ?? [];
+        for (const old of supersedes) {
+          const set = supersededBy.get(old) ?? /* @__PURE__ */ new Set();
+          for (const id of sources) set.add(id);
+          supersededBy.set(old, set);
+        }
+        if (section2 !== kind) continue;
+        const quote = typeof fact3.quote === "string" ? fact3.quote : void 0;
+        const base = JSON.stringify([[...sources].sort(), quote ?? ""]);
+        const occurrence = seen.get(base) ?? 0;
+        seen.set(base, occurrence + 1);
+        const key = `${base}#${occurrence}`;
+        const newest2 = sources.reduce((a, b) => position.get(a) >= position.get(b) ? a : b);
+        recorded.set(key, {
+          item: {
+            kind,
+            summary: fact3.text,
+            ...quote ? { quote } : {},
+            sources: sources.map((id) => ({
+              entryId: id,
+              role: sourceRole(entries[position.get(id)]),
+              position: position.get(id)
+            })),
+            ...supersedes.length ? { supersedes } : {},
+            recordedAt: recorded.get(key)?.item.recordedAt ?? index,
+            excerpt: excerpt2(entries[position.get(newest2)], terms)
+          },
+          lastSeen: index
+        });
+      }
+    }
+  });
+  return [...recorded.values()].map(({ item, lastSeen }) => {
+    const own = new Set(item.sources.map((source) => source.entryId));
+    const later = [
+      ...new Set(item.sources.flatMap((source) => [...supersededBy.get(source.entryId) ?? []]))
+    ].filter((id) => !own.has(id));
+    return { ...item, ...later.length ? { supersededBy: later } : {}, inLatestCheckpoint: lastSeen === latest };
+  });
+}
+function editItems(entries) {
+  const results = /* @__PURE__ */ new Map();
+  for (const entry of entries)
+    if (entry.type === "message" && entry.message.role === "toolResult")
+      results.set(entry.message.toolCallId, entry.message.isError);
+  return entries.flatMap((entry, position) => {
+    if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+    return entry.message.content.flatMap((block) => {
+      if (block.type !== "toolCall" || !EDIT_TOOLS.has(block.name)) return [];
+      const path = block.arguments.path;
+      if (typeof path !== "string") return [];
+      const error = results.get(block.id);
+      return [
+        {
+          kind: "edits",
+          entryId: entry.id,
+          position,
+          tool: block.name,
+          path,
+          outcome: error === void 0 ? "no-result" : error ? "error" : "ok"
+        }
+      ];
+    });
+  });
+}
+function errorItems(entries, terms) {
+  return entries.flatMap((entry, position) => {
+    if (entry.type !== "message") return [];
+    const message = entry.message;
+    if (message.role === "toolResult" && message.isError)
+      return [
+        {
+          kind: "errors",
+          entryId: entry.id,
+          role: "toolResult",
+          position,
+          tool: message.toolName,
+          excerpt: excerpt2(entry, terms)
+        }
+      ];
+    if (message.role === "bashExecution" && typeof message.exitCode === "number" && message.exitCode !== 0)
+      return [
+        {
+          kind: "errors",
+          entryId: entry.id,
+          role: "bashExecution",
+          position,
+          exitCode: message.exitCode,
+          excerpt: excerpt2(entry, terms)
+        }
+      ];
+    return [];
+  });
+}
+function newest(item) {
+  return item.kind === "edits" || item.kind === "errors" ? item.position : Math.max(...item.sources.map((source) => source.position));
+}
+function searchable(item, entries) {
+  if (item.kind === "edits") return `${item.tool} ${item.path}`;
+  if (item.kind === "errors") return `${item.tool ?? ""} ${sourceText(entries[item.position])}`;
+  return [item.summary, item.quote ?? "", ...item.sources.map((source) => sourceText(entries[source.position]))].join(
+    "\n"
+  );
+}
+function listHistory(snapshot, request, budgetTokens = 4e3) {
+  const kind = request.kind;
+  if (!kind) throw new Error("HISTORY_KIND_REQUIRED: list needs a kind");
+  const signature = createHash5("sha256").update(JSON.stringify(["list", kind, request.query ?? "", VIEW_VERSION])).digest("hex");
+  let index = 0;
+  if (request.cursor) {
+    let cursor;
+    try {
+      cursor = JSON.parse(Buffer.from(request.cursor, "base64url").toString("utf8"));
+    } catch {
+      throw new Error("HISTORY_CURSOR_INVALID");
+    }
+    if (!isRecord(cursor) || cursor.sessionId !== snapshot.sessionId || cursor.signature !== signature || !Number.isSafeInteger(cursor.index) || Number(cursor.index) < 0)
+      throw new Error(
+        "HISTORY_CURSOR_INVALID: repeat the original operation, kind and query with the cursor, or restart the list"
+      );
+    if (cursor.scope !== snapshot.scopeHash) {
+      const end = snapshot.entries.findIndex((entry) => entry.id === cursor.leafId);
+      const pinned = end >= 0 ? snapshot.entries.slice(0, end + 1) : [];
+      if (!pinned.length || hashEntries(pinned) !== cursor.scope)
+        throw new Error("HISTORY_CURSOR_INVALID: source is no longer on this branch");
+      snapshot = { ...snapshot, leafId: pinned[pinned.length - 1].id, entries: pinned, scopeHash: cursor.scope };
+    }
+    index = Number(cursor.index);
+  }
+  const terms = viewTerms(request.query ?? "");
+  const entries = snapshot.entries;
+  const all = kind === "edits" ? editItems(entries) : kind === "errors" ? errorItems(entries, terms) : noteItems(entries, kind, terms);
+  const items = (terms.length ? all.filter((item) => matches(searchable(item, entries), terms)) : all).sort(
+    (a, b) => newest(b) - newest(a)
+  );
+  const page = {
+    sessionId: snapshot.sessionId,
+    leafId: snapshot.leafId,
+    scopeHash: snapshot.scopeHash,
+    kind,
+    items: []
+  };
+  let remaining = Math.max(512, Math.min(4e3, budgetTokens)) - 350;
+  for (; index < items.length; index++) {
+    const tokens = textTokens(JSON.stringify(items[index]));
+    if (tokens > remaining && page.items.length) break;
+    page.items.push(items[index]);
+    remaining -= tokens;
+  }
+  if (index < items.length)
+    page.cursor = Buffer.from(
+      JSON.stringify({
+        sessionId: snapshot.sessionId,
+        leafId: snapshot.leafId,
+        scope: snapshot.scopeHash,
+        signature,
+        index
+      })
+    ).toString("base64url");
+  if (!page.items.length)
+    page.message = "No items of this kind on this branch. The list comes from earlier checkpoints and tool records and can miss what a writer left out; search before concluding the history lacks it.";
+  return page;
+}
+
 // packages/coding-agent/src/extensions/context-memory/preview/preparation.ts
 import { join as join5 } from "node:path";
 var DEADLINE_MS = 12e4;
 var settingsCache = /* @__PURE__ */ new Map();
-function previewSwitch(section) {
-  if (section === void 0) return { enabled: false };
-  return isRecord(section) && (section.enabled === void 0 || typeof section.enabled === "boolean") ? { enabled: section.enabled === true } : { enabled: false, error: "invalid-config" };
+function previewSwitch(section2) {
+  if (section2 === void 0) return { enabled: false };
+  return isRecord(section2) && (section2.enabled === void 0 || typeof section2.enabled === "boolean") ? { enabled: section2.enabled === true } : { enabled: false, error: "invalid-config" };
 }
 function readPreparationSettings(agentDir) {
   const path = join5(agentDir, "pi-context-memory.json");
@@ -3693,17 +4254,24 @@ function contextMemoryPreview(pi) {
   pi.registerTool({
     name: "context_history",
     label: "Context history",
-    description: "Search or read original history on the current branch. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
+    description: "Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
     promptGuidelines: [
-      "Search context_history for earlier decisions and evidence omitted by compaction, then read the matching original entry ID. Follow a cursor by repeating the same operation, query and entryId with that cursor."
+      "Search context_history for earlier decisions and evidence omitted by compaction, then read the matching original entry ID. Follow a cursor by repeating the same operation, query and entryId with that cursor.",
+      "To see how a decision, constraint or setting changed, list its kind with a query; read the cited entry before relying on it."
     ],
-    parameters: historyQuerySchema,
+    parameters: previewHistorySchema,
     async execute(_id, request, signal, _update, ctx) {
       signal?.throwIfAborted();
       controller.assertReady(ctx);
       if (request.grantId)
         throw new Error("HISTORY_SCOPE_DENIED: parent-history grants are unsupported in this preview");
-      const page = queryHistory(freezeHistory(ctx.sessionManager), request);
+      if (request.operation === "list") {
+        const view = listHistory(freezeHistory(ctx.sessionManager), request);
+        return { content: [{ type: "text", text: JSON.stringify(view) }], details: view };
+      }
+      const { kind, ...query } = request;
+      if (kind !== void 0) throw new Error("HISTORY_QUERY_INVALID: kind applies to list only");
+      const page = queryHistory(freezeHistory(ctx.sessionManager), query);
       return { content: [{ type: "text", text: JSON.stringify(page) }], details: page };
     }
   });

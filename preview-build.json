@@ -1,7 +1,7 @@
 {
-  "build": "stock-preview+src.6d21d37d4e59aefe",
-  "version": "0.4.3",
-  "sourceCommit": "23d10a09b06152a8d4be783c4bca4ff6c9151864",
+  "build": "stock-preview+src.c6aefd74b04f4aaa",
+  "version": "0.5.0",
+  "sourceCommit": "f95109b1e1439093be5b51269cefaf62e19db6b1",
   "supportedPi": "1.3.0",
   "supportedPiVersions": [
     "1.3.0",
@@ -9,7 +9,7 @@
     "1.1.0"
   ],
   "checkpointSchema": 1,
-  "sourceHash": "6d21d37d4e59aefef91b91bb492894943b6cd88feffcab08afc1fb59856239df",
+  "sourceHash": "c6aefd74b04f4aaa2639c10ad48fbf5aa7058216264aafa24e21d2c9befc4ff3",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -49,7 +49,7 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
-      "sha256": "647208a0bcdaf845510e1fe8a0c6ff0e8c3cd0615c8f8f16ec69a5b1a5e2c811"
+      "sha256": "3f7b333bf53402b97dbfd11b99d9cbf037c6896a9689ec2c8dc1c7d408179de1"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts",
@@ -58,6 +58,10 @@
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts",
       "sha256": "31e43b63d1363d1632c98088aa0bce3423cb28f486e62737bf4ad58afd464aad"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/history-view.ts",
+      "sha256": "d456b74497ab5701ffc6f9bcc73644e965459e0e04cdfa54e7706dd9da796cc3"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/notices.ts",
@@ -72,12 +76,20 @@
       "sha256": "9a25b6bba289edb4e978775727995d302a9a14a7fbc298cf39ba60ab37447dc1"
     },
     {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/quote-diagnostics.ts",
+      "sha256": "411c0a2d342a2be833ada3c9d831107b4d08c6a8b132ebc01fe24aae27e31a35"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/quote-repair.ts",
+      "sha256": "b41ad5485560ba0fc4452bf120ec4ab52e39e69f9b18ee305921c57f676424e8"
+    },
+    {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts",
-      "sha256": "abcd92bad204e3e7606e8caad91625b9dcb2a16be05cae4bdc38c869dfffc187"
+      "sha256": "0f2d0b2c5d79756f0100d54e4f3d68b1f4818776be40d1e5b353b685593bca4f"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/writer.ts",
-      "sha256": "dbcb8eb242ac7c2df2eac64a88b4138d4aeb1aa5f900fa82e17a3235a826b084"
+      "sha256": "94b1b1f65ba90683554a0341e7e6f820a5b20a6a462d67328650c70d9906011c"
     }
   ],
   "externalImports": [

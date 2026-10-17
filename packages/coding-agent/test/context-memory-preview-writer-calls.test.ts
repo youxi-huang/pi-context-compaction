@@ -11,6 +11,7 @@ import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.t
 import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
 import {
 	type PreviewWriterRegistry,
+	TOOL_CALL_DECLINED,
 	type WriteMemoryOptions,
 	type WriterCallHooks,
 	type WriterDispatchRequest,
@@ -469,7 +470,7 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(test.progress.at(-1)?.usage).toEqual(usage);
 	});
 
-	it("refuses a session writer response that calls a tool, without running it or repairing", async () => {
+	describe("a session writer that calls a tool", () => {
 		const prefix = {
 			systemPrompt: "Synthetic session control",
 			messages: [{ role: "user" as const, content: "Keep port 4317.", timestamp: 1 }],
@@ -480,25 +481,63 @@ describe("preview writer provider-call reservations and settlements", () => {
 			content: [{ type: "toolCall", id: "call-1", name: "synthetic_tool", arguments: {} }],
 			stopReason: "toolUse",
 		};
-		const test = harness(
-			() => {
-				const stream = createAssistantMessageEventStream();
-				stream.push({ type: "done", reason: "toolUse", message: called });
-				stream.end(called);
-				return stream;
-			},
-			{
-				config: { ...DEFAULT_MEMORY_CONFIG, writerEffort: "low" },
+		const toolUse = () => {
+			const stream = createAssistantMessageEventStream();
+			stream.push({ type: "done", reason: "toolUse", message: called });
+			stream.end(called);
+			return stream;
+		};
+		const sessionHarness = (replies: (() => ReturnType<typeof completed>)[], noteRepair = true) => {
+			let index = 0;
+			return harness(() => replies[Math.min(index++, replies.length - 1)](), {
+				config: { ...DEFAULT_MEMORY_CONFIG, writerEffort: "low", noteRepair },
 				sessionModel: { ...model, id: "session-model" },
 				sessionThinkingLevel: "high",
 				prefix,
-			},
-		);
-		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
-		expect(test.requests).toHaveBeenCalledTimes(1);
-		expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, toolCallResponses: 1 });
-		const instruction = test.requests.mock.calls[0][1].messages.at(-1)?.content;
-		expect(instruction).toContain("call no tool");
+			});
+		};
+
+		it("declines one call without running it and commits the note written after it", async () => {
+			const test = sessionHarness([toolUse, () => completed(response())]);
+			const result = await writeMemory(test.options);
+			expect(result.note.state[0].text).toBe("The synthetic service uses port 4317.");
+			expect(test.requests).toHaveBeenCalledTimes(2);
+			const [first, second] = test.requests.mock.calls.map((call) => call[1]);
+			// The second request continues the first, so the provider can read all of it from cache.
+			expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+			expect(second.messages.at(-2)).toEqual(called);
+			expect(second.messages.at(-1)).toMatchObject({
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "synthetic_tool",
+				isError: true,
+				content: [{ type: "text", text: TOOL_CALL_DECLINED }],
+			});
+			expect(second.tools).toEqual(prefix.tools);
+			expect(test.requests.mock.calls[1][2]).toEqual(test.requests.mock.calls[0][2]);
+			expect(test.progress.at(-1)).toMatchObject({
+				writerCalls: 2,
+				repairUsed: true,
+				repairKind: "tool-call",
+				toolCallResponses: 1,
+			});
+			expect(test.before.map((call) => call.phase)).toEqual(["generate", "repair"]);
+			expect(first.messages.at(-1)?.content).toContain("call no tool");
+		});
+
+		it("refuses the note at a second call", async () => {
+			const test = sessionHarness([toolUse]);
+			await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
+			expect(test.requests).toHaveBeenCalledTimes(2);
+			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 2, repairKind: "tool-call", toolCallResponses: 2 });
+		});
+
+		it("refuses the note at once when repair is off", async () => {
+			const test = sessionHarness([toolUse, () => completed(response())], false);
+			await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
+			expect(test.requests).toHaveBeenCalledTimes(1);
+			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, repairUsed: false, toolCallResponses: 1 });
+		});
 	});
 
 	it("preserves session prefix values and cache defaults with the current session model and effort", async () => {

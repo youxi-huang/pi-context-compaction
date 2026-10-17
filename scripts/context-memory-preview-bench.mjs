@@ -558,7 +558,11 @@ async function parent() {
 				refusedByCode: codes,
 				firstPassQuotationFailures: list.filter((row) => row.quotations).length,
 				quotationClasses: { elsewhere: sum((row) => row.quotations?.elsewhere), format: sum((row) => row.quotations?.format), absent: sum((row) => row.quotations?.absent) },
-				repairs: { quotation: list.filter((row) => row.repairKind === "quotation").length, size: list.filter((row) => row.repairKind === "size").length },
+				repairs: {
+					quotation: list.filter((row) => row.repairKind === "quotation").length,
+					size: list.filter((row) => row.repairKind === "size").length,
+					toolCall: list.filter((row) => row.repairKind === "tool-call").length,
+				},
 				repairedAndCommitted: list.filter((row) => row.repairKind && row.ok).length,
 				toolCallResponses: sum((row) => row.toolCalls),
 				repairOutcome: { requoted: sum((row) => row.quotationRepair?.requoted), unquoted: sum((row) => row.quotationRepair?.unquoted), dropped: sum((row) => row.quotationRepair?.dropped) },

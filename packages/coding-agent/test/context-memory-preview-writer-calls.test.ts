@@ -517,11 +517,12 @@ describe("preview writer provider-call reservations and settlements", () => {
 			expect(test.requests.mock.calls[1][2]).toEqual(test.requests.mock.calls[0][2]);
 			expect(test.progress.at(-1)).toMatchObject({
 				writerCalls: 2,
-				repairUsed: true,
-				repairKind: "tool-call",
+				repairUsed: false,
+				toolCallDeclined: true,
 				toolCallResponses: 1,
 			});
-			expect(test.before.map((call) => call.phase)).toEqual(["generate", "repair"]);
+			expect(test.progress.at(-1)).not.toHaveProperty("repairKind");
+			expect(test.before.map((call) => call.phase)).toEqual(["generate", "generate"]);
 			expect(first.messages.at(-1)?.content).toContain("call no tool");
 		});
 
@@ -529,7 +530,39 @@ describe("preview writer provider-call reservations and settlements", () => {
 			const test = sessionHarness([toolUse]);
 			await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
 			expect(test.requests).toHaveBeenCalledTimes(2);
-			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 2, repairKind: "tool-call", toolCallResponses: 2 });
+			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 2, toolCallDeclined: true, toolCallResponses: 2 });
+		});
+
+		it("still repairs the quotations of the note written after a declined call, in three calls at most", async () => {
+			const misquoted = {
+				...note(),
+				state: [{ text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4318" }],
+			};
+			const repair = {
+				repairs: [
+					{
+						section: "state",
+						index: 0,
+						fact: { text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4317" },
+					},
+				],
+			};
+			const test = sessionHarness([
+				toolUse,
+				() => completed(response(JSON.stringify(misquoted))),
+				() => completed(response(JSON.stringify(repair))),
+			]);
+			const result = await writeMemory(test.options);
+			expect(result.note.state[0].quote).toBe("port 4317");
+			expect(test.requests).toHaveBeenCalledTimes(3);
+			expect(test.before.map((call) => call.phase)).toEqual(["generate", "generate", "repair"]);
+			expect(test.progress.at(-1)).toMatchObject({
+				writerCalls: 3,
+				repairUsed: true,
+				repairKind: "quotation",
+				toolCallDeclined: true,
+				toolCallResponses: 1,
+			});
 		});
 
 		it("refuses the note at once when repair is off", async () => {

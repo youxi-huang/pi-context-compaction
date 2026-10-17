@@ -180,12 +180,14 @@ export interface WriterProgress {
 	writerCallDetails: WriterCallRecord[];
 	/** Quotation failures of the first refused candidate, by class; counts only. */
 	quotations?: QuoteCounts;
-	/** The compaction's one repair, when it ran: for note size, for quotations or for a declined tool call. */
-	repairKind?: "size" | "quotation" | "tool-call";
+	/** The compaction's one repair, when it ran: for note size or for quotations. */
+	repairKind?: "size" | "quotation";
 	/** What a quotation repair changed, as counts. */
 	quotationRepair?: QuoteRepairOutcome;
-	/** Writer responses that called a tool instead of writing the note; each refuses the note, and none is run. */
+	/** Writer responses that called a tool instead of writing the note; none is run. */
 	toolCallResponses?: number;
+	/** A tool call was declined and the request continued once; this does not spend the repair. */
+	toolCallDeclined?: boolean;
 }
 
 export interface WriteMemoryResult {
@@ -375,6 +377,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let repairKind: WriterProgress["repairKind"];
 	let quotationRepair: QuoteRepairOutcome | undefined;
 	let toolCallResponses = 0;
+	let toolCallDeclined = false;
 	const report = () =>
 		options.onProgress?.({
 			writerModel,
@@ -388,6 +391,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			...(repairKind ? { repairKind } : {}),
 			...(quotationRepair ? { quotationRepair: { ...quotationRepair } } : {}),
 			...(toolCallResponses ? { toolCallResponses } : {}),
+			...(toolCallDeclined ? { toolCallDeclined } : {}),
 		});
 	const complete: PreviewComplete = async (selected, context, request) => {
 		options.signal.throwIfAborted();
@@ -564,32 +568,27 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		}
 	};
 	/**
-	 * The compaction's one repair, spent on a tool call. The session writer keeps the session's tools so that it can
-	 * reuse the cached prefix, and may call one instead of writing the note. The call is never run: it is answered as
-	 * unavailable and the same request continues once, so the provider reads the whole earlier request from its
-	 * cache. A second tool call refuses the note.
+	 * The session writer keeps the session's tools so that it can reuse the cached prefix, and may call one instead
+	 * of writing the note. The call is never run: it is answered as unavailable and the same request continues once,
+	 * so the provider reads the whole earlier request from its cache. The continuation is still generation and leaves
+	 * the size or quotation repair available, so a compaction makes at most three writer calls. A second tool call
+	 * refuses the note; with `noteRepair` off, so does the first.
 	 */
 	const declineToolCall: DeclineToolCall = async (context, request, response) => {
 		const calls = response.content.flatMap((block) => (block.type === "toolCall" ? [block] : []));
-		if (!calls.length || response.stopReason !== "toolUse" || !options.config.noteRepair || repairUsed)
+		if (!calls.length || response.stopReason !== "toolUse" || !options.config.noteRepair || toolCallDeclined)
 			return response;
 		options.signal.throwIfAborted();
-		repairUsed = true;
-		repairKind = "tool-call";
-		phase = "repair";
-		try {
-			const declined: Message[] = calls.map((call) => ({
-				role: "toolResult",
-				toolCallId: call.id,
-				toolName: call.name,
-				content: [{ type: "text", text: TOOL_CALL_DECLINED }],
-				isError: true,
-				timestamp: Date.now(),
-			}));
-			return await complete(model, { ...context, messages: [...context.messages, response, ...declined] }, request);
-		} finally {
-			phase = "generate";
-		}
+		toolCallDeclined = true;
+		const declined: Message[] = calls.map((call) => ({
+			role: "toolResult",
+			toolCallId: call.id,
+			toolName: call.name,
+			content: [{ type: "text", text: TOOL_CALL_DECLINED }],
+			isError: true,
+			timestamp: Date.now(),
+		}));
+		return await complete(model, { ...context, messages: [...context.messages, response, ...declined] }, request);
 	};
 	const accept: AcceptNote = async (response) => {
 		const value = parseCandidate(response);
@@ -784,7 +783,7 @@ async function writeWithSession(
 		maxRetries: 0,
 		// No tool choice, as in the session's own requests: the provider can then reuse the cached prefix. Under
 		// "none", DeepSeek leaves the tool definitions out of the prompt, so the prefix ends after the system prompt.
-		// A tool call is never run; it is declined once, and a second one refuses the note with CONTEXT_WRITER_FAILED.
+		// A tool call is never run: it is declined once, and a second one refuses the note with CONTEXT_WRITER_FAILED.
 		transport: "sse",
 	};
 	const response = await declineToolCall(context, request, await complete(model, context, request));

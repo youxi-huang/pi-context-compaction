@@ -103,7 +103,8 @@ earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
 also reports the first refused candidate's quotation failures by class
 (`quotations`), the kind of a repair that ran (`repairKind`), what a
 quotation repair changed (`quotationRepair`) and how many writer responses
-called a tool instead of writing the note (`toolCallResponses`); all are counts.
+called a tool instead of writing the note (`toolCallResponses`), and whether
+one was declined (`toolCallDeclined`); all but the last are counts.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -225,8 +226,9 @@ session's requests do. A provider that caches prompt prefixes therefore serves
 most of the request from the cache the session has already warmed: on DeepSeek,
 96 to 97% of the writer's input over 128 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
-unavailable and the same request continues once, which spends the compaction's
-one repair; a second, or one with `noteRepair` off, refuses the note with
+unavailable and the same request continues once. That continuation does not
+spend the size or quotation repair, so a compaction makes at most three writer
+calls. A second tool call, or one with `noteRepair` off, refuses the note with
 `CONTEXT_WRITER_FAILED`. On DeepSeek about one writer response in twenty called
 a tool.
 

@@ -1,5 +1,85 @@
 # Validation record
 
+## v0.5.0: corrected candidate on P1 to P3 with DeepSeek V4.1 Flash, 2026-10-16 to 17 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It
+measured the candidate after the findings of the first run, on official Pi 1.3.0
+with `deepseek/deepseek-flash` at thinking level `high`:
+
+- `stock-preview+src.be57f3cecb90cc0f` from `f91e3cf`: the writer keeps the session's
+  tools and sets no tool choice, the quotable block no longer reads as the task's
+  boundary, and tool calls are counted;
+- `stock-preview+src.aa324084031fd7ac` from `2c025b8`: the same, with one declined
+  tool call per compaction (writer bench only);
+- the baseline from `47069fe`, as in the first run, for P3's probes.
+
+The bench reproduced a session's prompt cache (`--cache warm`), the probes were
+scored with scorer version 2, and P3 joined P1 and P2. The maintainer confirmed a
+rerun of about 330 requests and $0.6 and asked for a fixture that tests retrieval;
+adding P3 and two baseline runs on it raised the run to 854 requests and $1.51 at
+catalog prices, under a cap of $2.50 set before the first request.
+
+### Writer bench, eight cuts with eight attempts each
+
+| | `be57f3ce` | `aa324084`, with the decline |
+| --- | ---: | ---: |
+| Committed | 58 of 64: 37 of 40 on P1 and P2, 21 of 24 on P3 | 61 of 64: 37 of 40 and 24 of 24 |
+| Refused | 5 `CONTEXT_WRITER_FAILED` (4 tool calls, 1 failed repair call), 1 `CONTEXT_NOTE_INVALID` | 2 `CONTEXT_NOTE_QUOTE`, each after a declined tool call, 1 `CONTEXT_NOTE_INVALID` |
+| Responses that called a tool | 4 | 3, all declined; 1 then committed |
+| Quotation repairs | 11, 10 committed | 9, all committed |
+| Writer input read from cache | 96.5% | 97.4% |
+| Catalog writer cost | $0.285 for 75 calls | $0.286 for 76 calls |
+| Median pause | 12.3 s | 13.8 s |
+| Note size, median, against the bytes it condenses | 4,287 bytes, 5.2% | 4,264 bytes, 5.2% |
+| Gold answers cited, first asked at the cut and carried | 479 of 494, 382 of 410 | 497 of 519, 401 of 424 |
+
+Against the first run's cold candidate on P1 and P2, $0.549 for 43 calls, a writer
+call costs about 70% less. The two notes refused after a declined tool call had no
+repair left for their quotations: the compaction's one repair covers all three
+kinds. In all, 7 of this run's 144 compactions drew a tool call, none of them
+among the 16 in probe chains.
+
+### Probes, two runs per build
+
+Every candidate chain cut committed on its first attempt. The baseline's first P3
+cut was refused once for a quotation in each run and committed on the retry.
+
+| | P1, candidate | P2, candidate | P3, candidate | P3, baseline |
+| --- | ---: | ---: | ---: | ---: |
+| Passed with `context_history` | 59 of 60 | 34 of 34 | 56 of 56 | 52 of 56 |
+| Passed with no tools | 60 of 60 | 34 of 34 | 40 of 56 | 43 of 56 |
+| `context_history` calls per question | 1.27 | 1.09 | 2.55 | 3.09 |
+| Of which `list` | 7 | 2 | 19 | 0 |
+| Questions stopped at the round limit | 0 | 0 | 2 | 6 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 | 0 |
+
+With no tools the notes alone missed 16 of P3's 56 answers, so P3 exercises
+retrieval as intended. There the candidate answered every probe with fewer calls
+than the baseline, which stopped six questions at the round limit and answered
+four of them in no valid form. The candidate's own notes held no more than the
+baseline's (40 against 43 of 56 with no tools); the gain is in retrieval. Scorer
+version 2 counted three answers as prose. Probes read 71 to 73% of their input from
+cache, against 37% with a directory per unit.
+
+### Spend
+
+The bench counted 854 requests in six runs and $1.51 at catalog prices: 167 for
+the two writer benches, 468 for the candidate's probes and 219 for the baseline's.
+The DeepSeek balance fell by ¥4.62 between 23:52 and 00:10 UTC, which covers all
+six runs. Neither figure is an invoice.
+
+### What this shows
+
+On these fixtures and this model the candidate keeps notes as compact as before
+and loses no more of them to quotations than the first run's candidate: 3 refused
+of 40 on P1 and P2 with the decline, against 8 for the baseline. Keeping the tools
+cut a writer call's cost by about 70%, and declining one tool call recovered most
+of what that cost in refusals. Where the answer is not in the note, the typed list
+was used and the candidate needed fewer calls. This is one model, three synthetic
+sessions and two probe runs per build; it does not establish a refusal rate or
+compare against native Pi compaction. Session copies, notes and answers stayed on
+the local machine.
+
 ## v0.5.0 candidate: writer bench and recovery probes on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. Three

@@ -11,6 +11,7 @@ import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.t
 import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
 import {
 	type PreviewWriterRegistry,
+	TOOL_CALL_DECLINED,
 	type WriteMemoryOptions,
 	type WriterCallHooks,
 	type WriterDispatchRequest,
@@ -469,6 +470,109 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(test.progress.at(-1)?.usage).toEqual(usage);
 	});
 
+	describe("a session writer that calls a tool", () => {
+		const prefix = {
+			systemPrompt: "Synthetic session control",
+			messages: [{ role: "user" as const, content: "Keep port 4317.", timestamp: 1 }],
+			tools: [{ name: "synthetic_tool", description: "Synthetic schema", parameters: { type: "object" } }],
+		};
+		const called: AssistantMessage = {
+			...response(),
+			content: [{ type: "toolCall", id: "call-1", name: "synthetic_tool", arguments: {} }],
+			stopReason: "toolUse",
+		};
+		const toolUse = () => {
+			const stream = createAssistantMessageEventStream();
+			stream.push({ type: "done", reason: "toolUse", message: called });
+			stream.end(called);
+			return stream;
+		};
+		const sessionHarness = (replies: (() => ReturnType<typeof completed>)[], noteRepair = true) => {
+			let index = 0;
+			return harness(() => replies[Math.min(index++, replies.length - 1)](), {
+				config: { ...DEFAULT_MEMORY_CONFIG, writerEffort: "low", noteRepair },
+				sessionModel: { ...model, id: "session-model" },
+				sessionThinkingLevel: "high",
+				prefix,
+			});
+		};
+
+		it("declines one call without running it and commits the note written after it", async () => {
+			const test = sessionHarness([toolUse, () => completed(response())]);
+			const result = await writeMemory(test.options);
+			expect(result.note.state[0].text).toBe("The synthetic service uses port 4317.");
+			expect(test.requests).toHaveBeenCalledTimes(2);
+			const [first, second] = test.requests.mock.calls.map((call) => call[1]);
+			// The second request continues the first, so the provider can read all of it from cache.
+			expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+			expect(second.messages.at(-2)).toEqual(called);
+			expect(second.messages.at(-1)).toMatchObject({
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "synthetic_tool",
+				isError: true,
+				content: [{ type: "text", text: TOOL_CALL_DECLINED }],
+			});
+			expect(second.tools).toEqual(prefix.tools);
+			expect(test.requests.mock.calls[1][2]).toEqual(test.requests.mock.calls[0][2]);
+			expect(test.progress.at(-1)).toMatchObject({
+				writerCalls: 2,
+				repairUsed: false,
+				toolCallDeclined: true,
+				toolCallResponses: 1,
+			});
+			expect(test.progress.at(-1)).not.toHaveProperty("repairKind");
+			expect(test.before.map((call) => call.phase)).toEqual(["generate", "generate"]);
+			expect(first.messages.at(-1)?.content).toContain("call no tool");
+		});
+
+		it("refuses the note at a second call", async () => {
+			const test = sessionHarness([toolUse]);
+			await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
+			expect(test.requests).toHaveBeenCalledTimes(2);
+			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 2, toolCallDeclined: true, toolCallResponses: 2 });
+		});
+
+		it("still repairs the quotations of the note written after a declined call, in three calls at most", async () => {
+			const misquoted = {
+				...note(),
+				state: [{ text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4318" }],
+			};
+			const repair = {
+				repairs: [
+					{
+						section: "state",
+						index: 0,
+						fact: { text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4317" },
+					},
+				],
+			};
+			const test = sessionHarness([
+				toolUse,
+				() => completed(response(JSON.stringify(misquoted))),
+				() => completed(response(JSON.stringify(repair))),
+			]);
+			const result = await writeMemory(test.options);
+			expect(result.note.state[0].quote).toBe("port 4317");
+			expect(test.requests).toHaveBeenCalledTimes(3);
+			expect(test.before.map((call) => call.phase)).toEqual(["generate", "generate", "repair"]);
+			expect(test.progress.at(-1)).toMatchObject({
+				writerCalls: 3,
+				repairUsed: true,
+				repairKind: "quotation",
+				toolCallDeclined: true,
+				toolCallResponses: 1,
+			});
+		});
+
+		it("refuses the note at once when repair is off", async () => {
+			const test = sessionHarness([toolUse, () => completed(response())], false);
+			await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED");
+			expect(test.requests).toHaveBeenCalledTimes(1);
+			expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, repairUsed: false, toolCallResponses: 1 });
+		});
+	});
+
 	it("preserves session prefix values and cache defaults with the current session model and effort", async () => {
 		const prefix = {
 			systemPrompt: "Synthetic session control",
@@ -490,7 +594,9 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(actualContext.messages[0]).toBe(prefix.messages[0]);
 		expect(actualContext.tools).toEqual(prefix.tools);
 		expect(actualContext.tools?.[0]).toBe(prefix.tools[0]);
-		expect(actualRequest).toMatchObject({ reasoning: "high", maxRetries: 0, toolChoice: "none" });
+		expect(actualRequest).toMatchObject({ reasoning: "high", maxRetries: 0 });
+		// Like the session's own requests, so the provider can reuse the cached prefix tools included.
+		expect(actualRequest).not.toHaveProperty("toolChoice");
 		expect(actualRequest).not.toHaveProperty("cacheRetention");
 		expect(test.before[0].model).toBe(`${model.provider}/session-model`);
 		expect(test.before[0].writerEffort).toBe("high");

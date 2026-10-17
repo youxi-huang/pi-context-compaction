@@ -6,6 +6,28 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.5.0] — 2026-10-17
+
+v0.5.0 makes the independent extension's notes harder to lose and its history quicker to search. The session writer sees every uncovered user message in full beside its entry ID, a note that fails only on its quotations gets one targeted repair, and `context_history` lists constraints, decisions, failed approaches, files, edits and errors directly. The writer also reuses the session's prompt cache, which cut its cost by about 70% on DeepSeek. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged, and a v0.5.0 checkpoint reopens under v0.4.3. Two bounded runs with DeepSeek V4.1 Flash on Pi 1.3.0 are in the validation record: on the two synthetic sessions both writers ran, v0.5.0 builds committed 37 to 40 of 40 notes against 32 for the v0.4.3 writer, and on the session built for retrieval every probe passed with fewer calls than the baseline. They cover one model and synthetic tasks, not a general failure rate.
+
+### Added
+
+- One quotation repair. When a candidate note fails only because quotations do not match the entries they cite, for at most five facts, the writer gets one request about those facts alone: the entries they cite and the entries that do contain the quoted text, with their roles. A replacement may change only its sources and quote, or withdraw the fact; the rest of the note is kept as written and the whole note is checked again. `noteRepair` governs this repair and the size repair, and a compaction spends at most one of them. A second failure blocks as before, and the extension never moves a quotation to another entry on its own.
+- `context_history` lists one kind of item with `operation: "list"`: the constraints, decisions, failed approaches, files, plans and state that committed checkpoints recorded, plus edits and errors read from tool records, newest first, with superseded items marked and their original entries named. The list is computed on every call and stores nothing; search and read are unchanged.
+- `/compaction-status` reports under `lastWriter` the first refused candidate's quotation failures by class, the kind of repair that ran, what a quotation repair changed, how many writer responses called a tool and whether one was declined.
+
+### Changed
+
+- The session writer's handover request lists every uncovered user message in full beside its entry ID, and says that the manifest's openings are not to be copied as quotations. Both recorded live runs lost a checkpoint to a quotation cited to the wrong entry. The list is marked as serving quotation only: on DeepSeek, without that line, the writer read it as the whole task and recorded the assistant's announced next step as unrequested.
+- The session writer sets no tool choice, as the session's own requests do, so a provider that caches prompt prefixes serves its request from the session's cache. With `tool_choice: "none"`, DeepSeek left the tool definitions out of the prompt and every compaction paid for the whole history; in a check, 91 to 99.6% of the writer's input now came from cache and each call cost about a third. The request tells the model to call no tool. A tool call is never run: the first is answered as unavailable and the request continues once on the same cached prefix, without spending the size or quotation repair, so a compaction makes at most three writer calls; a second tool call refuses the note, and `noteRepair` governs the continuation too.
+- A refused quotation's message counts the failures by class: text found in other entries, text that differs only in spacing or punctuation, and text found nowhere. A refused `context_note` names each failing field and the entries that contain its quoted text.
+
+### Maintenance
+
+- `eval/preview` adds an evaluation set for the preview, separate from the frozen fixtures: three invented sessions with revisions, withdrawn work, forbidden retries, quotation traps and, in P3, answers no note can hold, with 75 typed probes and their scorer. Scorer version 2 passes an answer that leads with the right value in prose and counts it; `rescore.ts` applies it to saved replies. `scripts/context-memory-preview-bench.mjs` runs a writer bench and the probes on official Pi, offline by default.
+- The stock-Pi scenarios check quotation repair and the typed list end to end.
+- The bench reaches a provider through Pi's proxy-aware dispatcher, retries a refused probe cut up to four attempts, and reports each committed note's size against the history it condenses and the gold answers it cites. By default it reproduces a session's prompt cache, warming the prefix before each cut's compactions as a session's turns do; `--cache cold` measures a cold prefix. Two bounded DeepSeek runs of the baseline and the candidate are in the validation record.
+
 ## [v0.4.3] — 2026-10-16
 
 v0.4.3 adds official Pi 1.3.0 to the independent extension as its primary host, while retaining Pi 1.2.0, Pi 1.1.0 and existing checkpoints. `/compaction-doctor` now tells a failure that a new `/compact` can clear from one it cannot, and publication reads its host list from the candidate itself. Both optional preparation paths remain disabled by default. One bounded real-provider run on Pi 1.3.0 with DeepSeek V4.1 Flash is in the validation record: two checkpoints, the first after one refused note, and both continuation checks passed. It covers one task and is not a quality or cost comparison.

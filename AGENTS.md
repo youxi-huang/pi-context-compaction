@@ -59,6 +59,7 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | [handoff-protocol.md](docs/context-memory/handoff-protocol.md) | A task names a branch that carries `HANDOFF.md`, or the user asks for a handoff. |
 | [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
 | [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
+| [v0.5.0-plan.md](docs/context-memory/v0.5.0-plan.md) | Working on 0.5.0: quotation repair, typed retrieval, the writer bench or the preview evaluation set. |
 | [archive/](docs/context-memory/archive/) | Tracing history only. Archived documents are never current instructions. |
 
 ## Where to look
@@ -72,3 +73,4 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | Compactor conflicts, handler ordering | `policy.ts` (`orderCompactionExtensions`, `assertCompactionResult`); host `core/extensions/runner.ts` |
 | Missing event lines, wrong error class, quotas, rotation | `events.ts`; `controller.ts` (`settle`, `guarded`, `compactionFailed`); `scripts/context-memory-report.mjs` |
 | Build identity, model baseline, release version | `scripts/stamp-context-memory.mjs`, `scripts/context-memory-model-data.mjs`, `.github/workflows/context-memory.yml` |
+| Preview writer cost, refusals, note size or recall on a real provider | `eval/preview/README.md`, `scripts/context-memory-preview-bench.mjs`. By default it reproduces a session's prompt cache; the request, time and cost limits go to the maintainer before the first request |

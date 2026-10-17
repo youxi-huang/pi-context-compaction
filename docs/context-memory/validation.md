@@ -1,5 +1,311 @@
 # Validation record
 
+## v0.5.0: corrected candidate on P1 to P3 with DeepSeek V4.1 Flash, 2026-10-16 to 17 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It
+measured the candidate after the findings of the first run, on official Pi 1.3.0
+with `deepseek/deepseek-flash` at thinking level `high`:
+
+- `stock-preview+src.be57f3cecb90cc0f` from `f91e3cf`: the writer keeps the session's
+  tools and sets no tool choice, the quotable block no longer reads as the task's
+  boundary, and tool calls are counted;
+- `stock-preview+src.aa324084031fd7ac` from `2c025b8`: the same, with one declined
+  tool call per compaction (writer bench only);
+- the baseline from `47069fe`, as in the first run, for P3's probes;
+- the release build, `stock-preview+src.c6aefd74b04f4aaa` from `ea80ca8`, in which a
+  declined tool call no longer spends the repair (writer bench only).
+
+The bench reproduced a session's prompt cache (`--cache warm`), the probes were
+scored with scorer version 2, and P3 joined P1 and P2. The maintainer confirmed a
+rerun of about 330 requests and $0.6 and asked for a fixture that tests retrieval;
+adding P3 and two baseline runs on it raised the run to 854 requests and $1.51 at
+catalog prices, under a cap of $2.50 set before the first request.
+
+### Writer bench, eight cuts with eight attempts each
+
+| | `be57f3ce` | `aa324084`, with the decline |
+| --- | ---: | ---: |
+| Committed | 58 of 64: 37 of 40 on P1 and P2, 21 of 24 on P3 | 61 of 64: 37 of 40 and 24 of 24 |
+| Refused | 5 `CONTEXT_WRITER_FAILED` (4 tool calls, 1 failed repair call), 1 `CONTEXT_NOTE_INVALID` | 2 `CONTEXT_NOTE_QUOTE`, each after a declined tool call, 1 `CONTEXT_NOTE_INVALID` |
+| Responses that called a tool | 4 | 3, all declined; 1 then committed |
+| Quotation repairs | 11, 10 committed | 9, all committed |
+| Writer input read from cache | 96.5% | 97.4% |
+| Catalog writer cost | $0.285 for 75 calls | $0.286 for 76 calls |
+| Median pause | 12.3 s | 13.8 s |
+| Note size, median, against the bytes it condenses | 4,287 bytes, 5.2% | 4,264 bytes, 5.2% |
+| Gold answers cited, first asked at the cut and carried | 479 of 494, 382 of 410 | 497 of 519, 401 of 424 |
+
+Against the first run's cold candidate on P1 and P2, $0.549 for 43 calls, a writer
+call costs about 70% less. The two notes refused after a declined tool call had no
+repair left for their quotations: the compaction's one repair covers all three
+kinds. In all, 7 of this run's 144 compactions drew a tool call, none of them
+among the 16 in probe chains.
+
+### Probes, two runs per build
+
+Every candidate chain cut committed on its first attempt. The baseline's first P3
+cut was refused once for a quotation in each run and committed on the retry.
+
+| | P1, candidate | P2, candidate | P3, candidate | P3, baseline |
+| --- | ---: | ---: | ---: | ---: |
+| Passed with `context_history` | 59 of 60 | 34 of 34 | 56 of 56 | 52 of 56 |
+| Passed with no tools | 60 of 60 | 34 of 34 | 40 of 56 | 43 of 56 |
+| `context_history` calls per question | 1.27 | 1.09 | 2.55 | 3.09 |
+| Of which `list` | 7 | 2 | 19 | 0 |
+| Questions stopped at the round limit | 0 | 0 | 2 | 6 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 | 0 |
+
+With no tools the notes alone missed 16 of P3's 56 answers, so P3 exercises
+retrieval as intended. There the candidate answered every probe with fewer calls
+than the baseline, which stopped six questions at the round limit and answered
+four of them in no valid form. The candidate's own notes held no more than the
+baseline's (40 against 43 of 56 with no tools); the gain is in retrieval. Scorer
+version 2 counted three answers as prose. Probes read 71 to 73% of their input from
+cache, against 37% with a directory per unit.
+
+### Release build
+
+After these runs the maintainer decided that continuing after a declined tool call
+should not spend the compaction's size or quotation repair (`ea80ca8`), so a
+compaction makes at most three writer calls. The release build ran the same writer
+bench:
+
+| | Release build `c6aefd74` |
+| --- | ---: |
+| Committed | 62 of 64: 40 of 40 on P1 and P2, 22 of 24 on P3 |
+| Refused | 1 `CONTEXT_NOTE_INVALID`, 1 `CONTEXT_WRITER_FAILED` from a quotation repair call |
+| Responses that called a tool | 1, declined, then committed |
+| Quotation repairs | 16, 15 committed |
+| Writer input read from cache | 95.5% |
+| Catalog writer cost | $0.307 for 81 calls |
+| Median pause | 13.9 s |
+| Note size, median, against the bytes it condenses | 4,251 bytes, 5.4% |
+| Gold answers cited, first asked at the cut and carried | 499 of 527, 379 of 423 |
+
+No compaction in this bench needed a third call; a focused test covers that path.
+The failed repair call produced 11,962 output tokens, 10,720 of them reasoning, and
+no usable repair: the repair's output budget is sized for the note, not for
+reasoning at level `high`. The first bench's one failed repair call cannot be told
+apart from it with the recorded counts. That budget is left to 0.5.1.
+
+### Spend
+
+The bench counted 943 requests in seven runs and $1.88 at catalog prices: 256 for
+the three writer benches, 468 for the candidate's probes and 219 for the baseline's.
+The DeepSeek balance fell by ¥5.80 between 23:52 and 00:30 UTC, which covers all
+seven runs. Neither figure is an invoice.
+
+### What this shows
+
+On these fixtures and this model the candidate keeps notes as compact as before
+and loses fewer of them to quotations than the baseline: on P1 and P2, 37 to 40 of
+40 committed across the three writer benches, against 32 for the baseline. Keeping
+the tools cut a writer call's cost by about 70%, and declining one tool call
+recovered most of what that cost in refusals. Where the answer is not in the note, the typed list
+was used and the candidate needed fewer calls. This is one model, three synthetic
+sessions and two probe runs per build; it does not establish a refusal rate or
+compare against native Pi compaction. Session copies, notes and answers stayed on
+the local machine.
+
+### Release check
+
+The release commit `c1c1fce` sets the package version to 0.5.0, and `ea80ca8` then
+keeps the repair available after a declined tool call. That gives the release
+build `stock-preview+src.c6aefd74b04f4aaa`, the one in the release-build bench
+above. `context-memory-ops.mjs ci` on clean `ea80ca8` exited 0, with 20 of 20
+steps: fingerprint unchanged, `context-memory-check.mjs` 120 script and 368 runtime
+checks, security regressions 111 and 3, acceptance 32/32, 28/28 and 28/28 on Pi
+1.3.0, 1.2.0 and 1.1.0, strict scenarios 148 passed with no gaps, release checks 31
+passed, `--prepare` produced the 0.5.0 package and source archives, and the full
+offline evaluation passed 98 tests.
+
+## v0.5.0 candidate: writer bench and recovery probes on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. Three
+preview builds ran as ordinary packages in official Pi 1.3.0, each unit in its own
+process and agent directory, through `scripts/context-memory-preview-bench.mjs`:
+
+- the baseline, `stock-preview+src.a9181fccb70323cc` from `47069fe`: W0.1 alone, so
+  v0.4.3 writer behavior with quotation failures counted by class;
+- the candidate, `stock-preview+src.8824b07d16c22289` from `fe624d7`: W0.1, W1 and W2;
+- the corrected candidate, `stock-preview+src.7a2dcba26ea43272` from `f768030`, after
+  the finding below.
+
+The model was `deepseek/deepseek-flash` (DeepSeek V4.1 Flash in Pi's catalog) at
+Pi's default thinking level `high`, for both the writer and the probe answers. The
+sessions were the generated `eval/preview` fixtures, P1 and P2, with five cuts in
+all. The API key stayed in the environment's network proxy; Pi received only a
+placeholder. The maintainer confirmed an envelope of 741 requests, about two hours
+and $6.55 at catalog prices before the first request.
+
+Three harness faults surfaced before any token was spent on them. The bench looked
+the model up with a method Pi 1.3.0 does not have; it now uses
+`ModelRuntime.getModel`. An SDK caller does not get the proxy-aware HTTP dispatcher
+that Pi's CLI installs at startup, so two smoke attempts ended in `Connection error.`
+without reaching the provider; workers now install the same dispatcher. And the
+first probe protocol allowed one retry per cut: in the first baseline probe run,
+both chains were refused twice at their first cut (three `CONTEXT_NOTE_QUOTE`, one
+`CONTEXT_NOTE_INVALID`) and every probe was blocked. Probe chains now retry a cut
+up to four attempts, so probes measure what committed notes keep and the writer
+bench measures refusals.
+
+### Writer bench, five cuts with eight attempts each
+
+| | Baseline | Candidate |
+| --- | ---: | ---: |
+| Committed | 32 of 40 | 39 of 40 |
+| Refused | 6 `CONTEXT_NOTE_QUOTE`, 2 `CONTEXT_NOTE_INVALID` | 1 `CONTEXT_NOTE_SCOPE` |
+| First passes with a failed quotation | 6, holding 7 failed quotations: 2 found in other entries, 2 differing only in spacing or punctuation, 3 found nowhere | 3, each with one quotation found in another entry |
+| Quotation repairs | none | 3, all committed: 3 quotations rebound, none removed, no fact dropped |
+| Writer calls | 40 | 43 |
+| Input, cache-read and output tokens (reasoning) | 1,409,720, 13,056, 87,792 (42,013) | 1,420,765, 13,696, 102,322 (56,063) |
+| Catalog cost | $0.528 | $0.549 |
+| Median pause | 11.7 s | 12.5 s |
+| Note size, median (mean) | 3,861 bytes (3,882) | 3,859 bytes (3,974) |
+| Note size against the bytes it condenses, median | 4.5% | 4.5% |
+| Gold answers cited, first asked at the cut | 255 of 267 | 318 of 329 |
+| Gold answers cited, carried from earlier cuts | 170 of 185 | 221 of 240 |
+
+The condensed bytes are the previous note plus every message after it. A note cites
+a gold answer when one of its source IDs is among that answer's evidence entries;
+this counts citations, not content, and the finding below shows a note citing the
+right entry while demoting what it says. Repaired attempts took 14.4 to 23.0 s,
+against a median of 12.6 s for all candidate attempts.
+
+### Probes, two runs per build
+
+Each run compacted its own chain, then asked 47 probes twice: once with only
+`context_history` active and once with no tools. Every chain cut committed on its
+first attempt.
+
+| | Baseline 1 | Baseline 2 | Candidate 1 | Candidate 2 |
+| --- | ---: | ---: | ---: | ---: |
+| Passed with `context_history`, strict scorer | 46 of 47 | 46 of 47 | 43 of 47 | 44 of 47 |
+| Passed with no tools, strict scorer | 45 of 47 | 46 of 47 | 45 of 47 | 44 of 47 |
+| Scored incorrect | 0 | 2 | 4 | 3 |
+| Abstained | 3 | 0 | 2 | 2 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 | 0 |
+| Invalid | 0 | 0 | 0 | 1, the round limit |
+| `context_history` calls per question | 1.49 | 1.32 | 1.26 | 1.47 |
+| Of which `list` | 0 | 0 | 7 | 4 |
+| Catalog cost | $0.194 | $0.183 | $0.201 | $0.190 |
+
+Every answer scored incorrect, nine in all, gave the right value in prose: "No. The
+bulk export endpoint must not be used again..." for a boolean `false`, or "JSON
+lines (JSONL), not CSV" for a format. The strict scores stand as recorded. Read for
+content, no run gave a wrong value: the baseline answered 93 of 94 with
+`context_history` and 92 of 94 without, the candidate 91 of 94 and 92 of 94. A
+question was answered from about 2,400 to 3,300 input tokens on average, the
+committed note and the question, where the condensed history ran from 39 to 110 KB.
+In these chains, where a note carries earlier cuts forward, the candidate's notes
+were larger: medians of 6,468 and 5,870 bytes against 5,619 and 5,330.
+
+### Finding: the quotable list read as the boundary of the task
+
+The candidate's four abstentions were all one P2 question: which action comes next.
+In P2 the user never asks for the import log; the assistant announces "Next I'll add
+the import log findings" and later does it. Given the complete list of user messages,
+the candidate writer checked the plan against it and recorded the step as a doubt
+("not a recorded user requirement and should be confirmed before acting"), once as a
+ban. The block now says it serves exact quotation only and that work the assistant
+announced within the task stays a next step unless a user message withdrew it.
+
+| P2, first cut | Notes keeping the announced step |
+| --- | --- |
+| Baseline | 5 of 7: 3 of 5 in a targeted bench, 2 of 2 in probe chains. One of the others recorded it as having no basis in user messages |
+| Candidate | 1 of 7: 1 of 5 and 0 of 2. The rest doubted it, one banned it |
+| Corrected candidate | 4 of 4: the fifth attempt was refused `CONTEXT_NOTE_INVALID` |
+
+One P2 probe run on the corrected candidate passed 17 of 17 in both conditions, with
+0.65 `context_history` calls per question. The corrected candidate was not put
+through the full writer bench or P1's probes: 702 of the 741 confirmed requests had
+been used.
+
+### Prompt cache: the session writer missed the session's cache on DeepSeek
+
+The writer's prompt cache barely hit. Each build's writer bench sent about 1.41
+million uncached input tokens and read about 13,000 from cache. Of the 80 attempts,
+12 read nothing and 66 read exactly 384 tokens; the two that read 640 and 768
+included a repair call.
+
+Two things made every writer request leave the cached prefix at the same point,
+right after the system prompt. The bench gave every unit its own working directory,
+and Pi's system prompt ends with it. And the writer sends `tool_choice: "none"`,
+with which DeepSeek leaves the tool definitions out of the prompt, while the
+session's own requests carry them. The second is decisive:
+
+- In a check with one shared working directory and one main-model request over the
+  same history before each cut (two cuts of P2, three attempts each), every writer
+  call still read 384 tokens from cache. DeepSeek counted each writer prompt 156
+  tokens smaller than the warm-up's, although the writer's request body is about 9%
+  larger.
+- Captured offline in DeepSeek's request format, the two requests carry the same
+  system prompt, the same tools and the same 18 history messages. They differ in
+  `tool_choice`, the output limit and the closing message.
+- In four synthetic requests on about 7,400 tokens, `tool_choice: "none"` cut the
+  counted prompt from 7,385 to 5,512 tokens and read 5,248 from the earlier `auto`
+  request's cache: the system prompt matched and the tools were gone.
+- The v0.4.3 session run shows the same. Its first writer call and its second
+  compaction's writer read 1,024 cached tokens between them; the retry's 97,152
+  came from the failed writer call before it, not from the main model.
+
+So on DeepSeek the writer paid for the whole history once per compaction, in a
+session as in the bench, and the writer cost and pause above are what a session
+paid with these builds. The comparison between builds stands: both ran equally cold, and the
+cache does not change what the model writes. The quotable block sits in the
+closing message and changes nothing here. Probes read 37% of their input from
+cache: 11 to 12% on questions answered in one round, 49% on questions with tool
+rounds, which reuse the previous round's prefix in the same process.
+
+Since `739ac7b` the bench can reproduce a session's cache state, and it now does by
+default (`--cache warm`): one shared working directory and, before each cut's
+compactions, one request over the same history with the session's own tools, as a
+session's last turn would be. `--cache cold` reproduces this run.
+
+The maintainer chose to keep the tools, for release as well as for measurement,
+since many sessions run on DeepSeek. Since `a2c62fa` the session writer sets no tool
+choice, as the session's own requests do, and its closing message says to call no
+tool; a tool call still refuses the note and is never run. In the same warm check on
+the corrected build (`stock-preview+src.22d03105e80b8adb`), two cuts of P2 with three
+attempts each:
+
+| | `tool_choice: "none"` | No tool choice |
+| --- | ---: | ---: |
+| Committed | 6 of 6 | 6 of 6, with no tool call |
+| Writer input read from cache | 384 tokens per call, 0.7 to 1.2% | 90.9 to 99.6% |
+| Catalog cost per writer call | $0.0122 to $0.0204 | $0.0039 to $0.0053 |
+| Pause | 9.5 to 17.4 s | 11.3 to 17.8 s |
+
+Each call now costs about a third as much. The pause hardly moved: it goes to
+writing the note, 2,500 to 3,700 output tokens with reasoning, not to reading the
+history. Two warm-up requests per run, about $0.025, are not in these figures.
+
+### Spend and limits
+
+The bench counted 718 provider requests in fourteen runs and $2.61 at catalog prices,
+including the two cache checks' 16 requests and $0.17; the runs took 24 minutes in all.
+Outside the bench there were four synthetic cache requests of about 7,400 tokens each,
+one model listing and three balance reads. The DeepSeek balance fell by ¥6.86 between 22:23 and 22:47 UTC,
+a window that missed the smoke request and about eight baseline writer calls. Neither
+figure is an invoice.
+
+### What this shows
+
+On these fixtures and this model, the candidate commits more notes (39 of 40 against
+32 of 40) at about 4% more writer cost, with notes the same size and the same share
+of gold answers cited; in probe chains its accumulated notes ran 10 to 15% larger.
+Quotations found nowhere and quotations differing only in format disappeared from
+first passes; the three that remained were rebound by one repair each. The typed
+list was used but did not reduce calls per question: with no tools, the notes
+alone answered 184 of 188 probes by content, so these fixtures barely exercise
+retrieval. The candidate's notes changed in one way the citation counts could not
+see, and the correction was measured on P2 only.
+
+This is one model, two synthetic sessions and two probe runs per build. It does not
+establish a refusal rate, compare against native Pi compaction or measure
+retrieval on material that the note cannot hold. Session copies, notes and answers
+stayed on the local machine.
+
 ## v0.4.3: bounded provider run on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

@@ -11,7 +11,9 @@ with `deepseek/deepseek-flash` at thinking level `high`:
   boundary, and tool calls are counted;
 - `stock-preview+src.aa324084031fd7ac` from `2c025b8`: the same, with one declined
   tool call per compaction (writer bench only);
-- the baseline from `47069fe`, as in the first run, for P3's probes.
+- the baseline from `47069fe`, as in the first run, for P3's probes;
+- the release build, `stock-preview+src.c6aefd74b04f4aaa` from `ea80ca8`, in which a
+  declined tool call no longer spends the repair (writer bench only).
 
 The bench reproduced a session's prompt cache (`--cache warm`), the probes were
 scored with scorer version 2, and P3 joined P1 and P2. The maintainer confirmed a
@@ -61,20 +63,45 @@ baseline's (40 against 43 of 56 with no tools); the gain is in retrieval. Scorer
 version 2 counted three answers as prose. Probes read 71 to 73% of their input from
 cache, against 37% with a directory per unit.
 
+### Release build
+
+After these runs the maintainer decided that continuing after a declined tool call
+should not spend the compaction's size or quotation repair (`ea80ca8`), so a
+compaction makes at most three writer calls. The release build ran the same writer
+bench:
+
+| | Release build `c6aefd74` |
+| --- | ---: |
+| Committed | 62 of 64: 40 of 40 on P1 and P2, 22 of 24 on P3 |
+| Refused | 1 `CONTEXT_NOTE_INVALID`, 1 `CONTEXT_WRITER_FAILED` from a quotation repair call |
+| Responses that called a tool | 1, declined, then committed |
+| Quotation repairs | 16, 15 committed |
+| Writer input read from cache | 95.5% |
+| Catalog writer cost | $0.307 for 81 calls |
+| Median pause | 13.9 s |
+| Note size, median, against the bytes it condenses | 4,251 bytes, 5.4% |
+| Gold answers cited, first asked at the cut and carried | 499 of 527, 379 of 423 |
+
+No compaction in this bench needed a third call; a focused test covers that path.
+The failed repair call produced 11,962 output tokens, 10,720 of them reasoning, and
+no usable repair: the repair's output budget is sized for the note, not for
+reasoning at level `high`. The first bench's one failed repair call cannot be told
+apart from it with the recorded counts. That budget is left to 0.5.1.
+
 ### Spend
 
-The bench counted 854 requests in six runs and $1.51 at catalog prices: 167 for
-the two writer benches, 468 for the candidate's probes and 219 for the baseline's.
-The DeepSeek balance fell by ¥4.62 between 23:52 and 00:10 UTC, which covers all
-six runs. Neither figure is an invoice.
+The bench counted 943 requests in seven runs and $1.88 at catalog prices: 256 for
+the three writer benches, 468 for the candidate's probes and 219 for the baseline's.
+The DeepSeek balance fell by ¥5.80 between 23:52 and 00:30 UTC, which covers all
+seven runs. Neither figure is an invoice.
 
 ### What this shows
 
 On these fixtures and this model the candidate keeps notes as compact as before
-and loses no more of them to quotations than the first run's candidate: 3 refused
-of 40 on P1 and P2 with the decline, against 8 for the baseline. Keeping the tools
-cut a writer call's cost by about 70%, and declining one tool call recovered most
-of what that cost in refusals. Where the answer is not in the note, the typed list
+and loses fewer of them to quotations than the baseline: on P1 and P2, 37 to 40 of
+40 committed across the three writer benches, against 32 for the baseline. Keeping
+the tools cut a writer call's cost by about 70%, and declining one tool call
+recovered most of what that cost in refusals. Where the answer is not in the note, the typed list
 was used and the candidate needed fewer calls. This is one model, three synthetic
 sessions and two probe runs per build; it does not establish a refusal rate or
 compare against native Pi compaction. Session copies, notes and answers stayed on
@@ -82,15 +109,15 @@ the local machine.
 
 ### Release check
 
-The release commit `c1c1fce` sets the package version to 0.5.0 and leaves the
-candidate's build ID, `stock-preview+src.aa324084031fd7ac`, unchanged: the source
-measured in the second run is the source released. `context-memory-ops.mjs ci` on
-that clean commit exited 0, with 20 of 20 steps: fingerprint unchanged,
-`context-memory-check.mjs` 120 script and 367 runtime checks, security regressions
-111 and 3, acceptance 32/32, 28/28 and 28/28 on Pi 1.3.0, 1.2.0 and 1.1.0, strict
-scenarios 148 passed with no gaps, release checks 31 passed, `--prepare` produced
-the 0.5.0 package and source archives, and the full offline evaluation passed 98
-tests.
+The release commit `c1c1fce` sets the package version to 0.5.0, and `ea80ca8` then
+keeps the repair available after a declined tool call. That gives the release
+build `stock-preview+src.c6aefd74b04f4aaa`, the one in the release-build bench
+above. `context-memory-ops.mjs ci` on clean `ea80ca8` exited 0, with 20 of 20
+steps: fingerprint unchanged, `context-memory-check.mjs` 120 script and 368 runtime
+checks, security regressions 111 and 3, acceptance 32/32, 28/28 and 28/28 on Pi
+1.3.0, 1.2.0 and 1.1.0, strict scenarios 148 passed with no gaps, release checks 31
+passed, `--prepare` produced the 0.5.0 package and source archives, and the full
+offline evaluation passed 98 tests.
 
 ## v0.5.0 candidate: writer bench and recovery probes on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 

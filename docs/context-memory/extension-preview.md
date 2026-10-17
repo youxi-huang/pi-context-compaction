@@ -224,7 +224,7 @@ The session writer's request is the session's own system prompt, tools and
 messages plus one closing message, and it sets no tool choice, just as the
 session's requests do. A provider that caches prompt prefixes therefore serves
 most of the request from the cache the session has already warmed: on DeepSeek,
-96 to 97% of the writer's input over 128 compactions. The closing message tells
+95 to 97% of the writer's input over 192 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
 unavailable and the same request continues once. That continuation does not
 spend the size or quotation repair, so a compaction makes at most three writer

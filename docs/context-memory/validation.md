@@ -80,6 +80,18 @@ sessions and two probe runs per build; it does not establish a refusal rate or
 compare against native Pi compaction. Session copies, notes and answers stayed on
 the local machine.
 
+### Release check
+
+The release commit `c1c1fce` sets the package version to 0.5.0 and leaves the
+candidate's build ID, `stock-preview+src.aa324084031fd7ac`, unchanged: the source
+measured in the second run is the source released. `context-memory-ops.mjs ci` on
+that clean commit exited 0, with 20 of 20 steps: fingerprint unchanged,
+`context-memory-check.mjs` 120 script and 367 runtime checks, security regressions
+111 and 3, acceptance 32/32, 28/28 and 28/28 on Pi 1.3.0, 1.2.0 and 1.1.0, strict
+scenarios 148 passed with no gaps, release checks 31 passed, `--prepare` produced
+the 0.5.0 package and source archives, and the full offline evaluation passed 98
+tests.
+
 ## v0.5.0 candidate: writer bench and recovery probes on official Pi 1.3.0 with DeepSeek V4.1 Flash, 2026-10-16 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. Three

@@ -1,5 +1,152 @@
 # Validation record
 
+## U3: preview reopen and compaction overhead, 2026-10-18 UTC
+
+On official Pi 1.3.0, warmed session reopen medians were 18.6, 50.8 and
+175.5 ms at 1, 10 and 40 checkpoints, against 10.8, 17.3 and 40.3 ms with
+the extension removed. At checkpoint 40, 674 of the 680 ms compaction pause
+was outside the scripted writer call. Repeated serialization and source hashing
+dominate the profile. Nothing was optimized.
+
+Source: `2d3133f`, based on PR #57's `c3acbba`; preview
+`stock-preview+src.a6732408742a34f4`, version 0.5.1. The scenario runner SHA-256
+was `22a683ff7147a6c8d3a841024a2e94f42406a7a9b68205e8d97b551c95943bac`.
+Measurements used Linux x86_64 and Node 24.19.0 (CI uses Node 22), default
+extension settings, synthetic text and a loopback scripted provider. No real
+provider call or interactive TUI was used. The normal runner copied the
+package outside the repository; the profile used the same isolation below.
+
+Commands, from the repository root:
+
+```sh
+node scripts/context-memory-preview-stock-install.mjs \
+  --stock-root .artifacts/context-memory-preview-stock --version 1.3.0
+node scripts/context-memory-preview-build.mjs
+for n in 1 10 40; do
+  node scripts/context-memory-preview-scenarios.mjs \
+    --package-dir .artifacts/context-memory-preview-package \
+    --stock-root .artifacts/context-memory-preview-stock \
+    --output-dir .artifacts/u3-$n \
+    --only long-session-overhead --perf-checkpoints "$n"
+done
+```
+
+Install and build exited 0. Each scenario exited 0: all requested compactions
+succeeded, all three existing checks passed, and strict acceptance had no gaps,
+exceptions or skips. Reports remain local under the output directories above.
+Initial dependency installation and packaging exited 254 and 1 respectively
+because npm's default cache was unwritable; both succeeded with a writable
+`npm_config_cache`. This selects npm's cache, not a preview setting.
+
+Reopen includes `SessionManager.open`, old-session disposal, model runtime and
+resource loading, session creation and extension binding. Each target has three
+sequential opens of the same file with the extension, then three with the package
+omitted. These are warm filesystem/process measurements, not cold Pi startup or
+a latency distribution. Extension opens at 10 checkpoints in the 40-checkpoint
+run are not pooled with the separate 10-checkpoint run.
+
+| Checkpoints / session size | Extension samples, ms | Disabled samples, ms | Medians: extension / disabled / extra, ms |
+| --- | --- | --- | --- |
+| 1 / 0.3 MB | 20.476, 18.628, 16.386 | 10.845, 10.478, 11.159 | 18.628 / 10.845 / 7.783 |
+| 10 / 3.0 MB | 57.020, 50.796, 48.824 | 16.112, 21.056, 17.323 | 50.796 / 17.323 / 33.473 |
+| 40 / 12.0 MB | 174.515, 175.499, 212.206 | 41.375, 40.270, 39.746 | 175.499 / 40.270 / 135.229 |
+
+The added `observe()` rows read existing `/compaction-status` after each
+compaction and time reopen at the scenario's existing milestones. They add no
+gate. For each run's final compaction, writer time is the sum of
+`lastWriter.writerCallDetails[].ms`; pre-commit local work is
+`lastCompaction.stageMs - writer time`; post-stage is `pauseMs - stageMs`.
+The existing integer timings round to milliseconds. Pre-commit includes
+configuration/source checks, writer preparation, note validation and staging.
+Post-stage includes Pi's checkpoint append and dispatch as well as the extension's
+commit validation and disk readback; it is not an exclusive extension timer.
+
+| Checkpoint | Pause, ms | Writer call, ms | Pre-commit outside writer, ms | Post-stage, ms | Total outside writer, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | 48 | 9 | 31 | 8 | 39 (81.3%) |
+| 10 | 181 | 6 | 126 | 49 | 175 (96.7%) |
+| 40 | 680 | 6 | 481 | 193 | 674 (99.1%) |
+
+Thus 481 ms at checkpoint 40 is local work before the candidate returns to Pi;
+the further 193 ms contains both host and extension work. The external
+`compact()` intervals were 50.247, 181.192 and 680.639 ms. The ordinary request
+overhead check still measured 1 ms at each run's final target; that steady path
+does not measure reopen or a compaction pause.
+
+The parent spawns its worker without forwarding Node's profiler options, so
+profiling the parent alone would miss the measured work. Profiled the existing
+worker directly, with the same environment whitelist and an isolated package:
+
+```sh
+u3_profile_package=$(mktemp -d)
+cp -R .artifacts/context-memory-preview-package "$u3_profile_package/package"
+mkdir -p .artifacts/u3-profile/cases/long-session-overhead--extension/agent
+env -i PATH="$PATH" LANG=C.UTF-8 CI=1 \
+  PI_CODING_AGENT_DIR="$PWD/.artifacts/u3-profile/cases/long-session-overhead--extension/agent" \
+  PI_OFFLINE=0 PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1 \
+  node --cpu-prof --cpu-prof-dir=.artifacts/u3-profile \
+  scripts/context-memory-preview-scenarios.mjs \
+  --package-dir "$u3_profile_package/package" \
+  --stock-root .artifacts/context-memory-preview-stock \
+  --output-dir .artifacts/u3-profile \
+  --only long-session-overhead --perf-checkpoints 40 \
+  --worker long-session-overhead --variant extension
+rm -r "$u3_profile_package"
+```
+
+Exit 0; the worker's result also records all three checks passing. `PI_OFFLINE=0`
+permits the loopback HTTP transport, as in the parent runner; model discovery is
+disabled and the only provider is synthetic. The V8 profile contains 24,978
+samples over 31.211 s. Sample intervals were clipped to the observations'
+monotonic reopen/compaction windows; these are sampled stack times, including
+synchronous I/O, not exact CPU counters. Profiling increased checkpoint 40's
+reported pause to 897 ms (11 ms writer); it is kept apart from the table above.
+
+Hot spots map bundled function names back to the unchanged source below. Paths
+in this table are relative to `packages/coding-agent/src/extensions/context-memory/`;
+inclusive rows contain their callees and must not be added together.
+
+| Profile window | Function, source file and line | Sampled time / share of window |
+| --- | --- | --- |
+| Three extension reopens at 40 checkpoints, 1,081.8 ms total | `sessionStart`, `preview/controller.ts:756` | 669.7 ms / 61.9%, inclusive |
+| Same | `assertPreviewSession`, `preview/controller.ts:306`, calling `validateMemoryCheckpoints`, `notes.ts:259` | 221.3 ms / 20.5%, inclusive |
+| Same | `PreviewFailureStore.evaluate`, `preview/failure-store.ts:366` | 448.3 ms / 41.4%, inclusive |
+| Same, official host portion | `loadEntriesFromFile`, official Pi `dist/core/session-manager.js:325` | 280.8 ms / 26.0%, inclusive; disabled reopens spend 99.6 of 149.7 ms here |
+| Checkpoint 40 outer compaction, 900.7 ms | `compact` / `committed`, `preview/controller.ts:860` / `:1124` | 650.1 / 204.3 ms, inclusive; 849.0 ms (94.3%) in their combined stacks outside the writer's `complete` stack |
+| Same | `hashEntries`, `identity.ts:15` | 439.5 ms / 48.8% self |
+| Same | `hashEntryPrefixes`, `identity.ts:22` | 60.5 ms / 6.7% self |
+| Same | Node `Hash.update`, `node:internal/crypto/hash:145` | 180.4 ms / 20.0% self; nested under the hashing functions |
+| Same | `readSession`, `preview/failure-store.ts:160` | 80.3 ms / 8.9% self, 131.9 ms / 14.6% inclusive |
+| Same | `begin` / `stage` / `confirm`, `preview/failure-store.ts:442` / `:530` / `:559` | 174.1 / 100.1 / 128.5 ms, inclusive |
+
+Across all 40 compaction windows (18.829 s), hashing functions plus
+`Hash.update` account for 71.1% of self samples; `readSession` accounts for 7.9%.
+The profile supports an extension-dominated local pause, while the existing
+wall timers do not separate host append from commit readback exactly.
+
+Required verification: `node scripts/context-memory-ops.mjs verify` exited 0
+(offline build, project and security checks); `git diff --exit-code --
+packages/coding-agent/src/extensions/context-memory/build.ts` exited 0. Official
+host acceptance and the complete preview sequence are recorded in the U3 PR
+after the required clean commit. Real-provider tests and interactive TUI: not run.
+
+Proposals for the maintainer, not implemented:
+
+- **Preview-only; trust-boundary check: yes.** Reuse the successful
+  `assertPreviewSession` result instead of calling `latestMemory` again for the
+  same synchronous branch snapshot in `compact` and `committed`. Prove that the
+  snapshot cannot change between those uses; keep every source check and every
+  readback across the writer call and checkpoint append.
+- **Preview-only; trust-boundary check: yes.** Combine the pre-writer readiness
+  and `begin` passes over one freshly read disk snapshot, retaining their marker,
+  identity and source comparisons. Keep staging and post-append confirmation as
+  separate reads: they check different moments.
+- **Fingerprinted file; trust-boundary check: yes.** Benchmark bounded batching
+  in `identity.ts:15` and `:22` to reduce serialization/hash-update overhead.
+  Require the exact existing UTF-8/newline byte stream and matching hashes for
+  older checkpoints; any implementation needs the maintainer's fingerprint
+  approval and compatibility evidence.
+
 ## v0.5.1 candidate: writer bench on DeepSeek V4.1 Flash, 2026-10-18 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

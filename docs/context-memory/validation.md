@@ -4,7 +4,7 @@
 
 Y2 only, from `main` at `f142f44`. Synthetic loopback responses on Linux with Node 24.19.0, an 80-column, 40-row pseudo-terminal and `@xterm/headless`, adapting the V2 driver in PR #61. The driver is in this task's PR, outside the repository. Each host gets a clean agent directory and a package copy outside every Node project, installed with the official CLI's `install <built-directory>`. No preview configuration or Pi compaction override is used; the 20,000-token history gate stays at its default. Only the loopback fixture's fake key is available.
 
-The complete 1.3.0 baseline walk used `stock-preview+src.ab457ab9de588b77`; the edited walk on all three hosts used `stock-preview+src.47db7ed11dcdb841`. Two doctor strings changed. Checkpoint contents and request counts are asserted independently of screen text, and the official host files checked by acceptance hash identically before and after every completed walk. The synthetic usage counters are fixtures, not cost or performance measurements.
+The complete 1.3.0 baseline walk used `stock-preview+src.ab457ab9de588b77`; the edited walk on all three hosts used `stock-preview+src.47db7ed11dcdb841`. Two doctor strings changed. Checkpoint counts and provider requests are asserted independently of screen text, and the official host files checked by acceptance hash identically before and after every completed walk. The synthetic usage counters are fixtures, not cost or performance measurements.
 
 The 1.3.0 walk below omits blank lines, startup help, long synthetic logs and repeated output. Paths are replaced by `<cwd>`; wrapped notice lines retain their 80-column breaks. Step labels separate captured screens.
 

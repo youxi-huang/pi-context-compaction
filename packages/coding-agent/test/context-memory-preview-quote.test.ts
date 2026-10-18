@@ -435,11 +435,13 @@ describe("preview writer quotation repair", () => {
 		// A repair that spends its whole output on reasoning ends at the length limit with no usable JSON.
 		const answers = [response(misattributed()), { ...response('{"repairs":[{"sect'), stopReason: "length" as const }];
 		const reasoning = { ...model, reasoning: true };
+		const tools: { choice?: unknown; count: number }[] = [];
 		const test = quoteHarness([], {
 			registry: {
 				find: () => reasoning,
 				hasConfiguredAuth: () => true,
-				streamSimple: (_model, _context, options) => {
+				streamSimple: (_model, context, options) => {
+					tools.push({ choice: options?.toolChoice, count: context.tools?.length ?? 0 });
 					// What a DeepSeek-style adapter builds; the writer reads these fields and nothing else.
 					void options?.onPayload?.(
 						{
@@ -464,6 +466,8 @@ describe("preview writer quotation repair", () => {
 		]);
 		expect(calls.map((call) => call.stopReason)).toEqual(["stop", "length"]);
 		expect(JSON.stringify(calls)).not.toContain("not recorded");
+		// Like the session writer, the repair sets no tool choice; it offers no tools to choose from.
+		expect(tools[1]).toEqual({ choice: undefined, count: 0 });
 	});
 
 	it("requires one answer for each failing fact and nothing else", () => {

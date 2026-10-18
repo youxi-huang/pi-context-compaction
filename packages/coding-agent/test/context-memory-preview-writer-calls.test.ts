@@ -361,6 +361,10 @@ describe("preview writer provider-call reservations and settlements", () => {
 			usageReports: dispatched,
 			repairUsed: true,
 		});
+		// The size repair offers no tools and, like the session writer, sets no tool choice.
+		const [, repairContext, repairOptions] = test.requests.mock.calls[1];
+		expect(repairContext.tools).toEqual([]);
+		expect(repairOptions).not.toHaveProperty("toolChoice");
 	});
 
 	it("a refused repair preserves the first paid generation and does not send the repair", async () => {

@@ -609,7 +609,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 						maxTokens,
 						signal: options.signal,
 						maxRetries: 0,
-						toolChoice: "none",
+						// No tool choice, as in the session writer's request; this one carries no tools to choose.
 						transport: "sse",
 						cacheRetention: "none",
 					},
@@ -703,7 +703,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 						maxTokens,
 						signal: options.signal,
 						maxRetries: 0,
-						toolChoice: "none",
+						// No tool choice, as in the session writer's request; this one carries no tools to choose.
 						transport: "sse",
 						cacheRetention: "none",
 					},

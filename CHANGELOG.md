@@ -10,6 +10,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer and repair send `reasoning_effort: "high"`.
 
+### Changed
+
+- The quotation and size repairs set no tool choice, as the session writer does. Their requests offer no tools, so the model sees the same request; they no longer send `tool_choice: "none"` without any tool to choose.
+
 ### Fixed
 
 - `context_history`'s list no longer marks a still-valid fact as superseded because a revision names the entry it shares with a revised fact. A note's `supersedes` names entries, not facts: a constraint stated in the same message as a timeout that was later raised was listed as replaced by the new timeout. A revision now marks only the facts of its own section on that entry, and only when they are no more than the revisions naming it; other facts on a revised entry carry `sourceRevisedBy`, and the tool description says what it means.

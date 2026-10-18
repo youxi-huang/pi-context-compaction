@@ -1,0 +1,43 @@
+import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { type MemoryNote, noteSections, sourceRole, sourceText } from "../notes.ts";
+
+/** Why a refused candidate cites outside its evidence: counts and entry kinds, never the IDs. */
+export interface ScopeCounts {
+	/** Distinct cited IDs that name no entry on the branch. */
+	missing: number;
+	/** Distinct cited IDs of entries on the branch that have no readable text. */
+	unreadable: number;
+	/** Of either kind, the IDs a fact names in `supersedes`. */
+	inSupersedes: number;
+	/** The unreadable entries by message role or entry type, such as `compaction`. */
+	unreadableKinds: Record<string, number>;
+}
+
+/**
+ * Every citation of a schema-valid note that the scope check refuses, where the validator stops at the first. An
+ * invented ID and a real entry with nothing to read call for different fixes. Later duplicates win, as in
+ * `validateNoteContent`.
+ */
+export function diagnoseScope(note: MemoryNote, branch: readonly SessionEntry[]): ScopeCounts {
+	const byId = new Map(branch.map((entry) => [entry.id, entry]));
+	const missing = new Set<string>();
+	const unreadable = new Set<string>();
+	const superseding = new Set<string>();
+	const check = (id: string, supersedes: boolean) => {
+		const entry = byId.get(id);
+		if (entry && sourceText(entry)) return;
+		(entry ? unreadable : missing).add(id);
+		if (supersedes) superseding.add(id);
+	};
+	for (const section of noteSections)
+		for (const item of note[section]) {
+			for (const id of item.sources) check(id, false);
+			for (const id of item.supersedes ?? []) check(id, true);
+		}
+	const unreadableKinds: Record<string, number> = {};
+	for (const id of unreadable) {
+		const kind = sourceRole(byId.get(id)!);
+		unreadableKinds[kind] = (unreadableKinds[kind] ?? 0) + 1;
+	}
+	return { missing: missing.size, unreadable: unreadable.size, inSupersedes: superseding.size, unreadableKinds };
+}

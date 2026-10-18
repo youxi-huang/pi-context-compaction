@@ -17,6 +17,7 @@ import {
 	quoteFeedback,
 } from "../src/extensions/context-memory/preview/quote-diagnostics.ts";
 import { applyQuoteRepair } from "../src/extensions/context-memory/preview/quote-repair.ts";
+import { diagnoseScope } from "../src/extensions/context-memory/preview/scope-diagnostics.ts";
 import { validateWorkNote } from "../src/extensions/context-memory/preview/work-notes.ts";
 import {
 	type PreviewWriterRegistry,
@@ -651,5 +652,50 @@ describe("work-note quotation feedback", () => {
 		).toThrow(
 			"CONTEXT_NOTE_QUOTE: a quoted source does not match the original text\nstate[0].quote is not in u3; the exact text is in u1 (user).",
 		);
+	});
+});
+
+describe("preview writer scope diagnostics", () => {
+	const level: SessionEntry = {
+		type: "thinking_level_change",
+		id: "t1",
+		parentId: "u3",
+		timestamp: "2026-01-01T00:00:00.000Z",
+		thinkingLevel: "high",
+	};
+	const scoped = [...branch, level];
+	const outOfScope = note({
+		instructions: [{ text: "Port rule.", sources: ["u1", "invented"] }],
+		reasons: [{ text: "Threshold raised.", sources: ["t1"], supersedes: ["invented", "gone"] }],
+	});
+
+	it("counts invented IDs and unreadable entries by kind, never the IDs", () => {
+		expect(diagnoseScope(outOfScope, scoped)).toEqual({
+			missing: 2,
+			unreadable: 1,
+			inSupersedes: 2,
+			unreadableKinds: { thinking_level_change: 1 },
+		});
+		expect(diagnoseScope(note({}), scoped)).toEqual({
+			missing: 0,
+			unreadable: 0,
+			inSupersedes: 0,
+			unreadableKinds: {},
+		});
+	});
+
+	it("reports the first scope refusal's counts in status progress, and the refusal is unchanged", async () => {
+		const test = quoteHarness([outOfScope], { branch: scoped, uncovered: scoped });
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_SCOPE: a note cites unavailable evidence");
+		expect(test.requests).toHaveBeenCalledTimes(1);
+		const last = test.progress.at(-1);
+		expect(last?.scope).toEqual({
+			missing: 2,
+			unreadable: 1,
+			inSupersedes: 2,
+			unreadableKinds: { thinking_level_change: 1 },
+		});
+		expect(last?.repairUsed).toBe(false);
+		expect(JSON.stringify(last)).not.toContain("invented");
 	});
 });

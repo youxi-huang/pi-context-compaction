@@ -297,6 +297,7 @@ async function worker() {
 			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
+			scope: writer.scope ?? null,
 			quotationRepair: writer.quotationRepair ?? null,
 			toolCalls: writer.toolCallResponses ?? 0,
 			toolCallDeclined: writer.toolCallDeclined ?? false,
@@ -615,6 +616,17 @@ async function parent() {
 				refusedByCode: codes,
 				firstPassQuotationFailures: list.filter((row) => row.quotations).length,
 				quotationClasses: { elsewhere: sum((row) => row.quotations?.elsewhere), format: sum((row) => row.quotations?.format), absent: sum((row) => row.quotations?.absent) },
+				// Scope refusals' citations: IDs on no entry, entries without readable text and their kinds; counts only.
+				scopeCitations: {
+					refusals: list.filter((row) => row.scope).length,
+					missing: sum((row) => row.scope?.missing),
+					unreadable: sum((row) => row.scope?.unreadable),
+					inSupersedes: sum((row) => row.scope?.inSupersedes),
+					unreadableKinds: list.reduce((kinds, row) => {
+						for (const [kind, count] of Object.entries(row.scope?.unreadableKinds ?? {})) kinds[kind] = (kinds[kind] ?? 0) + count;
+						return kinds;
+					}, {}),
+				},
 				repairs: {
 					quotation: list.filter((row) => row.repairKind === "quotation").length,
 					size: list.filter((row) => row.repairKind === "size").length,
@@ -659,7 +671,7 @@ async function parent() {
 					spend(result, provider === "deepseek");
 					const score = scoreRepair(repairCase, { committed: result.ok === true, code: result.code ?? (result.crashed ? "CRASHED" : null), note: result.committedNote }, branch);
 					scores.push(score);
-					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
+					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, scope: result.scope ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
 					rows.push(row);
 					record("repairs.jsonl", row);
 				};
@@ -726,7 +738,7 @@ async function parent() {
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});

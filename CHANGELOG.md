@@ -9,6 +9,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Added
 
 - `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer sends `reasoning_effort: "high"`.
+- For a note refused with `CONTEXT_NOTE_SCOPE`, `/compaction-status` counts the cited IDs that name no entry on the branch and those of entries with no readable text, by entry kind, without naming them. The two call for different fixes, and the refused note itself is not stored. Four such refusals in one DeepSeek writer bench left their cause unknown.
 
 ### Changed
 

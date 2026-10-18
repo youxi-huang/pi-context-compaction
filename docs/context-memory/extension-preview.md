@@ -109,7 +109,11 @@ one was declined (`toolCallDeclined`); all but the last are counts. Since
 asked for (`effort`), the reasoning settings and output cap its provider
 request carried (`sent`, read from the request Pi built, without its content)
 and how the response ended (`stopReason`), and `quotationRepair.droppedFrom`
-counts withdrawn facts by section. Pi maps a level the model does not declare
+counts withdrawn facts by section. For the first candidate refused with
+`CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
+branch (`missing`) and those of entries without readable text (`unreadable`,
+with their kinds under `unreadableKinds`), and how many of either sit in
+`supersedes`; it never names the IDs. Pi maps a level the model does not declare
 to a supported one, so `sent` can differ from `effort`.
 
 Pi decides whether there is anything to compact before calling the extension.

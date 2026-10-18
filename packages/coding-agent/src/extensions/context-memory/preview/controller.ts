@@ -8,6 +8,8 @@ import {
 	DEFAULT_COMPACTION_SETTINGS,
 	type ExtensionContext,
 	estimateTokens,
+	type InputEvent,
+	type InputEventResult,
 	type SessionBeforeCompactEvent,
 	type SessionCompactEvent,
 	type SessionCompactFailedEvent,
@@ -750,6 +752,16 @@ export class PreviewMemoryController {
 
 	private readyStatus(ctx: ExtensionContext): void {
 		setStatusLine(ctx, ctx.sessionManager.getBranch().filter(isPreviewCheckpoint).length);
+	}
+
+	input(event: InputEvent, ctx: ExtensionContext): InputEventResult | undefined {
+		this.notices.nextEpisode();
+		if (event.source !== "interactive" || !ctx.hasUI || event.images?.length) return;
+		const code = this.stickyFailures.get(ctx.sessionManager.getSessionId());
+		if (!code) return;
+		this.reportBlocked(ctx, code);
+		ctx.ui.setEditorText(event.text);
+		return { action: "handled" };
 	}
 
 	/** In-process stickiness covers a marker write that failed before it could reach disk. */

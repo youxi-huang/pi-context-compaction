@@ -365,11 +365,11 @@ var LINEAGE_SENTENCE_TOKENS = 50;
 function lineageSentence(text) {
   const flat = text.replace(/\s+/g, " ").trim();
   const cut = flat.search(/[.!?]\s|[.!?]$|[。！？]/u);
-  let sentence2 = cut >= 0 ? flat.slice(0, cut + 1) : flat;
-  if (textTokens(sentence2) <= LINEAGE_SENTENCE_TOKENS) return sentence2;
-  while (sentence2.length > 1 && textTokens(`${sentence2}\u2026`) > LINEAGE_SENTENCE_TOKENS)
-    sentence2 = sentence2.slice(0, Math.floor(sentence2.length * 0.8));
-  return `${sentence2}\u2026`;
+  let sentence = cut >= 0 ? flat.slice(0, cut + 1) : flat;
+  if (textTokens(sentence) <= LINEAGE_SENTENCE_TOKENS) return sentence;
+  while (sentence.length > 1 && textTokens(`${sentence}\u2026`) > LINEAGE_SENTENCE_TOKENS)
+    sentence = sentence.slice(0, Math.floor(sentence.length * 0.8));
+  return `${sentence}\u2026`;
 }
 function shrinkLineage(items) {
   if (items.length > 2) return [items[0], ...items.slice(2)];
@@ -930,6 +930,7 @@ var CallJournal = class {
 };
 
 // packages/coding-agent/src/extensions/context-memory/preview/controller.ts
+import { createHash as createHash4 } from "node:crypto";
 import { getInitialSystemMessage } from "@earendil-works/pi-ai";
 import {
   buildSessionProjection,
@@ -1011,7 +1012,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.a6732408742a34f4";
+var PREVIEW_BUILD_ID = "stock-preview+src.289ffa92e5522496";
 
 // packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
 var SUPPORTED_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0"]);
@@ -1022,202 +1023,247 @@ function supportsPi(version) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/notices.ts
-var PREFIX = "context-memory preview";
-var RETRY = "run /compact to try again.";
-var NEW_SESSION = "keep this session file and continue in a new session.";
-var NEW_TEXT_SESSION = "keep this session file and continue in a new text-only session.";
-var NOTE_SIZE = {
-  what: "The handover note is larger than its allowed size, so no checkpoint was saved.",
-  next: RETRY
-};
-var CAPACITY = {
-  what: "The handover note and the retained context do not fit the model's context window.",
-  next: "run /compact again; if this repeats, use a model with a larger context window."
-};
-var MARKER = {
-  what: "The preview could not read or write its failure record in Pi's agent directory (context-memory-preview/).",
-  next: "check free space and permissions there, then run /compact."
-};
-var SESSION_FILE = {
-  what: "The session file could not be read back and checked.",
-  next: "keep the file and check the disk, then run /compact. If this repeats, continue in a new session."
-};
-var TOO_LARGE = { what: "The next request would exceed the model's input limit.", next: "run /compact." };
-var STORED = { what: "A checkpoint in this session no longer passes its checks.", next: NEW_SESSION };
+var NOTICE_PREFIX = "Source-linked compaction";
+var RETRY = "Run /compact to try again.";
+var NEW_SESSION = "Keep this session file and continue in a new session.";
+var NEW_TEXT_SESSION = "Keep this session file and continue in a new text-only session.";
 var ADVICE = {
   CONTEXT_PREVIEW_COMPACT_REQUIRED: {
-    what: "Pi tried context-overflow recovery, which needs an explicit compaction in this preview.",
-    next: "run /compact."
+    what: "Pi's context-overflow recovery needs an explicit /compact here.",
+    next: "Run /compact.",
+    checkpoint: true
   },
   CONTEXT_NOTE_QUOTE: {
-    what: "A quotation in the handover note does not appear in the entry it cites, so no checkpoint was saved.",
-    next: RETRY
+    what: "A quotation in the note doesn't match the message it cites.",
+    next: RETRY,
+    checkpoint: true
   },
   CONTEXT_NOTE_SCOPE: {
-    what: "The handover note cites an entry that cannot be read on this branch, so no checkpoint was saved.",
-    next: RETRY
+    what: "The note cites a message that can't be read on this branch.",
+    next: RETRY,
+    checkpoint: true
   },
   CONTEXT_NOTE_INVALID: {
-    what: "The handover note is not valid structured data, so no checkpoint was saved.",
-    next: RETRY
+    what: "The note doesn't match the required format.",
+    next: RETRY,
+    checkpoint: true
   },
-  CONTEXT_NOTE_BUDGET: NOTE_SIZE,
-  CONTEXT_NOTE_FROZEN: NOTE_SIZE,
-  CONTEXT_NOTE_REPAIR_LOSS: NOTE_SIZE,
+  CONTEXT_NOTE_BUDGET: {
+    what: "The note is larger than its size limit.",
+    next: RETRY,
+    checkpoint: true
+  },
+  CONTEXT_NOTE_FROZEN: {
+    what: "The note can't change while compaction is running.",
+    next: "Wait until Pi is idle, then run /compact."
+  },
+  CONTEXT_NOTE_REPAIR_LOSS: {
+    what: "The repaired note dropped something it must keep.",
+    next: RETRY,
+    checkpoint: true
+  },
   CONTEXT_WRITER_FAILED: {
-    what: "The note writer did not return a usable note, so no checkpoint was saved.",
-    next: RETRY
+    what: "The writer didn't return a usable note.",
+    next: RETRY,
+    checkpoint: true
   },
   CONTEXT_WRITER_UNAVAILABLE: {
-    what: "The note writer set in pi-context-memory.json is not available.",
-    next: 'set writerModel to "session" or to a model Pi can reach, restart Pi, then run /compact.'
+    what: "The writer set in pi-context-memory.json isn't available.",
+    next: 'Set writerModel to "session" or to a model Pi can reach, restart Pi, then run /compact.',
+    checkpoint: true
   },
-  CONTEXT_WRITER_CAPACITY: CAPACITY,
-  CONTEXT_RECOVERY_TOO_LARGE: CAPACITY,
-  CONTEXT_CAPACITY: CAPACITY,
-  CONTEXT_COMPACTION_CANCELLED: { what: "Compaction was cancelled before a checkpoint was saved.", next: RETRY },
+  CONTEXT_WRITER_CAPACITY: {
+    what: "The messages to compact and the note don't fit the writer's context window.",
+    next: "Use a writer model with a larger context window, then run /compact.",
+    checkpoint: true
+  },
+  CONTEXT_RECOVERY_TOO_LARGE: {
+    what: "The note and the recent messages don't fit the model's context window.",
+    next: "Select a model with a larger context window, then run /compact.",
+    checkpoint: true
+  },
+  CONTEXT_CAPACITY: {
+    what: "The model's context window is too small or unknown.",
+    next: "Select a model with a larger context window, then run /compact."
+  },
+  CONTEXT_COMPACTION_CANCELLED: {
+    what: "Compaction was cancelled.",
+    next: RETRY,
+    checkpoint: true
+  },
   CONTEXT_SOURCE_CHANGED: {
-    what: "The session's original entries changed while they were being checked.",
-    next: "wait until Pi is idle and run /compact. If this repeats, keep the session file and continue in a new session."
+    what: "The session's messages changed while they were being checked.",
+    next: "Wait until Pi is idle and run /compact. If this repeats, keep this session file and continue in a new session."
   },
   CONTEXT_TOOL_BOUNDARY: {
     what: "A turn or tool call is still unfinished.",
-    next: "let it finish, then run /compact."
+    next: "Let it finish, then run /compact."
   },
   CONTEXT_NO_CUT: {
     what: "There is no completed history to compact yet.",
-    next: "continue working, then run /compact."
+    next: "Finish a turn, then run /compact.",
+    checkpoint: true
   },
-  CONTEXT_NO_NEW_SOURCE: { what: "There is no new history to compact.", next: "continue working, then run /compact." },
+  CONTEXT_NO_NEW_SOURCE: {
+    what: "There is no new history to compact.",
+    next: "Finish a new turn, then run /compact.",
+    checkpoint: true
+  },
   CONTEXT_NO_MODEL_OR_SOURCE: {
     what: "No model is selected, or there is no completed history to compact.",
-    next: "select a model and finish a turn, then run /compact."
+    next: "Select a model and finish a turn, then run /compact."
   },
   CONTEXT_PREVIEW_PENDING: {
-    what: "An earlier compaction attempt did not finish.",
-    next: "run /compact to retry, or /compaction-recover if Pi already saved that checkpoint."
+    what: "An earlier compaction attempt didn't finish.",
+    next: "Run /compact to retry, or /compaction-recover if Pi already saved that checkpoint."
   },
   CONTEXT_PREVIEW_COMMIT_UNCONFIRMED: {
-    what: "Pi may have saved the checkpoint, but the preview could not confirm it on disk.",
-    next: "run /compaction-recover; if it is refused, run /compact."
+    what: "Pi may have saved the checkpoint, but it couldn't be confirmed on disk.",
+    next: "Run /compaction-recover. If it's refused, run /compact."
   },
-  CONTEXT_PREVIEW_MARKER_IO: MARKER,
-  CONTEXT_PREVIEW_MARKER_INVALID: MARKER,
-  CONTEXT_PREVIEW_SESSION_IO: SESSION_FILE,
-  CONTEXT_PREVIEW_SESSION_INVALID: SESSION_FILE,
+  CONTEXT_PREVIEW_MARKER_IO: {
+    what: "The failure record in Pi's agent directory can't be read or written.",
+    next: "Check free space and permissions in context-memory-preview/, then run /compact."
+  },
+  CONTEXT_PREVIEW_MARKER_INVALID: {
+    what: "The failure record in Pi's agent directory is unreadable.",
+    next: "Run /compact to replace it."
+  },
+  CONTEXT_PREVIEW_SESSION_IO: {
+    what: "The session file couldn't be read back.",
+    next: "Check the disk, then run /compact. If this repeats, keep the file and continue in a new session."
+  },
+  CONTEXT_PREVIEW_SESSION_INVALID: {
+    what: "The session file failed its format check.",
+    next: "Run /compact to try again. If this repeats, keep this session file and continue in a new session."
+  },
   CONTEXT_MIGRATION_REQUIRED: {
-    what: "This protected session now contains a checkpoint from another compactor, which the preview cannot check. Checkpoints are not migrated.",
-    next: NEW_SESSION
+    what: "This protected session now has a checkpoint from another compactor, which can't be checked here.",
+    next: NEW_SESSION,
+    compactCannotClear: true
   },
   CONTEXT_CONFIG: {
-    what: "pi-context-memory.json in Pi's agent directory could not be read.",
-    next: "fix or remove that file, then restart Pi."
+    what: "pi-context-memory.json can't be read.",
+    next: "Fix or remove that file, then restart Pi.",
+    compactCannotClear: true
   },
-  CONTEXT_INPUT_TOO_LARGE: TOO_LARGE,
-  CONTEXT_PAYLOAD_TOO_LARGE: TOO_LARGE,
+  CONTEXT_INPUT_TOO_LARGE: {
+    what: "The next request would exceed the model's input limit.",
+    next: "Run /compact."
+  },
+  CONTEXT_PAYLOAD_TOO_LARGE: {
+    what: "The request Pi built would exceed the model's context window.",
+    next: "Run /compact."
+  },
   CONTEXT_RECOVERY_MISSING: {
-    what: "The checked checkpoint is missing from the request, possibly because another extension changed the context.",
-    next: "disable extensions that rewrite the context, restart Pi, then run /compact."
+    what: "The checkpoint is missing from the request, possibly because another extension changed the context.",
+    next: "Disable extensions that rewrite the context, restart Pi, then run /compact."
   },
-  CONTEXT_NOTE_VERSION: STORED,
-  CONTEXT_CONTINUATION_MISSING: STORED
+  CONTEXT_NOTE_VERSION: {
+    what: "A saved checkpoint has a format this version can't read.",
+    next: NEW_SESSION,
+    compactCannotClear: true
+  },
+  CONTEXT_CONTINUATION_MISSING: {
+    what: "A checkpoint note is missing the unfinished request or its next step.",
+    next: "Run /compact to try again. If this repeats, keep this session file and continue in a new session."
+  }
 };
 function unsupportedAdvice(reason, version) {
   switch (reason) {
     case "host":
       return {
         what: `This protected session needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}.`,
-        next: `open this session with Pi ${SUPPORTED_PI_LABEL} and run /compact there to clear the block, or ${NEW_SESSION}`
+        next: `Open it with Pi ${SUPPORTED_PI_LABEL} and run /compact there, or continue in a new session.`,
+        compactCannotClear: true
       };
     case "image":
       return {
-        what: "This protected session now contains an image, which the preview cannot check.",
-        next: NEW_TEXT_SESSION
+        what: "This protected session now contains an image, which can't be checked.",
+        next: NEW_TEXT_SESSION,
+        compactCannotClear: true
       };
     case "non-text":
       return {
-        what: "This protected session now contains a non-text extension message, which the preview cannot check.",
-        next: NEW_TEXT_SESSION
+        what: "This protected session now contains a non-text extension message, which can't be checked.",
+        next: NEW_TEXT_SESSION,
+        compactCannotClear: true
       };
     case "context-edit":
-      return { what: "This protected session contains a context edit the preview cannot check.", next: NEW_SESSION };
+      return {
+        what: "This protected session contains a context edit that can't be checked.",
+        next: NEW_SESSION,
+        compactCannotClear: true
+      };
+    case "in-memory":
+      return {
+        what: "This protected session isn't saved to a file, so it can't be checked.",
+        next: "Start Pi with a saved session.",
+        compactCannotClear: true
+      };
     default:
       return {
-        what: "An earlier operation in this session was outside what the preview supports.",
-        next: "run /compact to confirm a new checkpoint."
+        what: "An earlier step in this session isn't supported here.",
+        next: "Run /compact to confirm a new checkpoint."
       };
   }
 }
 function adviceFor(code, reason, version) {
   if (code === "CONTEXT_PREVIEW_UNSUPPORTED") return unsupportedAdvice(reason, version);
   return ADVICE[code] ?? {
-    what: "The preview could not confirm that it is safe to continue.",
-    next: "run /compaction-doctor for details."
+    what: "The session couldn't be confirmed as safe to continue.",
+    next: "Run /compaction-doctor for details."
   };
 }
-function blockedNotice(code, durable, reason, version = PRIMARY_PI_VERSION) {
+function blockedNotice(code, durable, reason, version = PRIMARY_PI_VERSION, repeated = false) {
   const advice = adviceFor(code, reason, version);
-  const impact = durable ? "Requests in this session are paused; new input, /reload and restarting Pi do not clear this." : "Requests stop until this is fixed; no lasting block is recorded.";
-  return `${PREFIX}: ${code}. ${advice.what} ${impact} Next: ${advice.next}`;
+  if (repeated) return `${NOTICE_PREFIX}: requests are still paused. ${advice.next} (${code})`;
+  const impact = durable ? advice.compactCannotClear ? "Requests stay paused in this session." : "Requests stay paused, through /reload and restarts, until a checkpoint is saved." : "Nothing is paused, and the next request is checked again.";
+  const outcome = advice.checkpoint ? "checkpoint not saved" : durable ? "requests paused" : "request stopped";
+  return `${NOTICE_PREFIX}: ${outcome}. ${advice.what} ${impact} ${advice.next} (${code})`;
 }
 var INACTIVE = {
   host: (version) => [
-    `it is validated on Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}`,
-    `Use Pi ${SUPPORTED_PI_LABEL} to try the preview.`
+    `it needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}`,
+    `Use Pi ${SUPPORTED_PI_LABEL} to try it.`
   ],
-  "in-memory": () => ["this session has no session file", "Start Pi with a saved session to use the preview."],
+  "in-memory": () => ["the session isn't saved to a file", "Start Pi with a saved session to use it."],
   "foreign-checkpoint": () => [
-    "this session already has a checkpoint from Pi's own compaction or another compactor, and checkpoints are not migrated",
-    "Start a new session to use source-linked compaction."
+    "the session already has a checkpoint from Pi's own compaction or another compactor",
+    "Start a new session to use it."
   ],
-  image: () => [
-    "this session contains an image, and the preview supports text-only sessions",
-    "Start a new text-only session to use source-linked compaction."
-  ],
-  "non-text": () => [
-    "this session contains a non-text extension message, and the preview supports text-only sessions",
-    "Start a new text-only session to use source-linked compaction."
-  ],
-  "context-edit": () => [
-    "this session contains a context edit the preview does not support",
-    "Start a new session to use source-linked compaction."
-  ]
+  image: () => ["the session contains an image", "Start a new text-only session to use it."],
+  "non-text": () => ["the session contains a non-text extension message", "Start a new text-only session to use it."],
+  "context-edit": () => ["the session contains a context edit it can't check", "Start a new session to use it."]
 };
 function inactiveNotice(reason, version) {
   const [why, hint] = INACTIVE[reason](version);
-  return `${PREFIX} is not active in this session: ${why}. It has not changed this session, and Pi's own compaction applies here. ${hint}`;
-}
-function sentence(text) {
-  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+  return `${NOTICE_PREFIX} is off in this session because ${why}. Pi's own compaction applies, and nothing was changed. ${hint}`;
 }
 function doctorReport(diagnosis, settings) {
-  const lines = [`${PREFIX} doctor (read-only: no model call, nothing written)`];
+  const lines = [`${NOTICE_PREFIX} doctor (read-only: no model call, nothing written)`];
   const line = (label, result, detail) => lines.push(`  ${label}: ${result} - ${detail}`);
   const reason = diagnosis.reason;
   const inactive = diagnosis.protection === "not-protected";
   if (settings.disabled) {
-    line(
-      "extension",
-      "inactive",
-      `turned off by "enabled": false in pi-context-memory.json; Pi's own compaction applies`
-    );
-    lines.push("Result: inactive. Remove that setting and restart Pi to use the preview.");
+    line("extension", "inactive", 'turned off by "enabled": false in pi-context-memory.json');
+    lines.push("Result: off. Pi's own compaction applies. Remove that setting and restart Pi to turn it on.");
     return lines.join("\n");
   }
   line(
     "extension",
     settings.configError ? "blocked" : "ok",
-    settings.configError ? `pi-context-memory.json could not be read (${settings.configError}); fix or remove it, then restart Pi` : `loaded, build ${diagnosis.build}`
+    settings.configError ? `pi-context-memory.json can't be read. Fix or remove it, then restart Pi. (${settings.configError})` : `loaded, build ${diagnosis.build}`
   );
   line(
     "host",
     supportsPi(diagnosis.host) ? "ok" : inactive ? "inactive" : "blocked",
-    supportsPi(diagnosis.host) ? `Pi ${diagnosis.host}, a validated release` : `Pi ${diagnosis.host}; this preview is validated on Pi ${SUPPORTED_PI_LABEL}`
+    supportsPi(diagnosis.host) ? `Pi ${diagnosis.host}, supported` : `Pi ${diagnosis.host}, needs Pi ${SUPPORTED_PI_LABEL}`
   );
   if (inactive && reason === "host") {
-    line("session", "inactive", "not checked on this Pi version; Pi's own compaction applies");
+    line("session", "inactive", "not checked on this Pi version. Pi's own compaction applies");
   } else if (inactive && reason) {
-    line("session", "inactive", `${INACTIVE[reason](diagnosis.host)[0]}; Pi's own compaction applies`);
+    line("session", "inactive", `${INACTIVE[reason](diagnosis.host)[0]}. Pi's own compaction applies`);
   } else if (reason) {
     line(
       "session",
@@ -1228,86 +1274,85 @@ function doctorReport(diagnosis, settings) {
     line(
       "session",
       "ok",
-      diagnosis.protection === "protected" ? "persistent text session, protected (it has a preview checkpoint or an attempt record)" : "persistent text session, eligible (protected from its first /compact)"
+      diagnosis.protection === "protected" ? "saved text session, protected" : "saved text session, protection starts with /compact"
     );
   }
   if (diagnosis.writerError) {
-    line(
-      "writer",
-      "blocked",
-      `${diagnosis.writerError}: ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`
-    );
+    const advice = adviceFor(diagnosis.writerError, reason, diagnosis.host);
+    line("writer", "blocked", `${advice.what} ${advice.next} (${diagnosis.writerError})`);
   } else if (diagnosis.writer) {
     line(
       "writer",
       "ok",
-      settings.writerModel === "session" ? `the session model (${diagnosis.writer})` : `fixed writer ${diagnosis.writer}`
+      settings.writerModel === "session" ? `session model (${diagnosis.writer})` : `fixed writer (${diagnosis.writer})`
     );
   } else {
-    line(
-      "writer",
-      "unknown",
-      settings.configError ? "depends on pi-context-memory.json" : "no model is selected yet"
-    );
+    line("writer", "unknown", settings.configError ? "depends on pi-context-memory.json" : "select a model first");
   }
   const manual = diagnosis.manualCompaction;
-  const tokens = manual.contextTokens === null || manual.contextTokens === 0 ? "" : ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`;
-  const gate = `Pi decides whether there is enough older history. It keeps the most recent ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} estimated tokens by default (compaction.keepRecentTokens) and answers "Nothing to compact (session too small)" until there is more, which is not a failure.${tokens}`;
-  const recover = "/compaction-recover can confirm the checkpoint Pi already saved, without a model call";
-  if (manual.preview === "not-active")
-    line("manual /compact", "inactive", "handled by Pi's own compaction in this session");
+  const tokens = manual.contextTokens ? ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.` : "";
+  const gate = `Pi compacts only history older than its latest ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} tokens by default.${tokens}`;
+  const recover = "Run /compaction-recover to confirm the saved checkpoint";
+  if (manual.preview === "not-active") line("manual /compact", "inactive", "Pi's own compaction applies");
   else if (manual.preview === "blocked") {
     const blocking = diagnosis.code ?? diagnosis.writerError;
     line(
       "manual /compact",
       "blocked",
-      blocking ? `/compact cannot clear ${blocking} here: ${adviceFor(blocking, reason, diagnosis.host).next}` : "/compact cannot run here yet"
+      blocking ? `/compact can't clear this here. ${adviceFor(blocking, reason, diagnosis.host).next} (${blocking})` : "/compact can't run here yet"
     );
   } else if (manual.preview === "retry")
     line(
       "manual /compact",
       "retry",
-      manual.recover ? `${recover}; otherwise a new /compact retries. ${gate}` : `a new /compact retries, and requests resume once its checkpoint is confirmed on disk. ${gate}`
+      manual.recover ? `${recover}, or /compact to retry. ${gate}` : `Run /compact to retry. ${gate}`
     );
   else if (manual.preview === "waiting-for-turn")
     line(
       "manual /compact",
       "unknown",
-      `the preview needs a finished turn with no queued input first${manual.recover ? `; ${recover} now` : ""}. ${gate}`
+      `Finish a turn with no queued input first.${manual.recover ? ` ${recover} now.` : ""} ${gate}`
     );
-  else line("manual /compact", "unknown", `the preview is ready; ${gate}`);
+  else line("manual /compact", "unknown", `Ready to try. ${gate}`);
   const durable = diagnosis.state === "pending" || diagnosis.state === "blocked" && diagnosis.protection === "protected";
   if (durable && diagnosis.code) {
     const advice = adviceFor(diagnosis.code, reason, diagnosis.host);
-    line("durable block", "blocked", `${diagnosis.code}. ${advice.what} Next: ${advice.next}`);
+    line("requests", "paused", `${advice.what} ${advice.next} (${diagnosis.code})`);
   } else if (diagnosis.code) {
-    line("durable block", "ok", `none recorded; ${diagnosis.code} stops each request until its cause is fixed`);
+    const advice = adviceFor(diagnosis.code, reason, diagnosis.host);
+    line(
+      "requests",
+      "stopped",
+      `${advice.what} Nothing is paused, and each request is checked again. ${advice.next} (${diagnosis.code})`
+    );
   } else {
-    line("durable block", "ok", "none");
+    line("requests", "ok", "not paused");
   }
-  if (inactive) lines.push("Result: inactive. Nothing was changed in this session; Pi's own compaction applies.");
+  if (inactive) lines.push("Result: off in this session. Pi's own compaction applies, and nothing was changed.");
   else if (diagnosis.code && manual.recover)
     lines.push(
-      "Result: blocked. Run /compaction-recover to confirm the saved checkpoint; if it is refused, run /compact."
+      "Result: requests paused. Run /compaction-recover to confirm the saved checkpoint, or /compact if recovery is refused."
     );
   else if (diagnosis.code)
-    lines.push(`Result: blocked. ${sentence(adviceFor(diagnosis.code, reason, diagnosis.host).next)}`);
+    lines.push(
+      `Result: ${durable ? "requests paused" : "request stopped"}. ${adviceFor(diagnosis.code, reason, diagnosis.host).next}`
+    );
   else if (diagnosis.writerError)
     lines.push(
-      `Result: ready, but /compact cannot write a checkpoint yet. ${sentence(adviceFor(diagnosis.writerError, reason, diagnosis.host).next)}`
+      `Result: ready, but /compact can't write a checkpoint yet. ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`
     );
-  else lines.push("Result: ready. Keep working, and run /compact once the conversation has grown.");
+  else lines.push("Result: ready for requests. Run /compact once the conversation grows.");
   return lines.join("\n");
 }
 function recoverRefusedNotice(code, reason, version = PRIMARY_PI_VERSION) {
   if (code === "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED") {
-    return `${PREFIX}: /compaction-recover found no checkpoint that Pi saved after the preview staged it (${code}), so there is nothing to confirm. It changed nothing. If requests are paused, run /compact to write a new checkpoint.`;
+    return `${NOTICE_PREFIX}: nothing to confirm. No saved checkpoint is waiting to be confirmed, so nothing was changed. If requests are paused, run /compact. (${code})`;
   }
   const advice = adviceFor(code, reason, version);
-  return `${PREFIX}: /compaction-recover could not confirm the staged checkpoint (${code}). ${advice.what} Next: ${advice.next}`;
+  return `${NOTICE_PREFIX}: checkpoint not confirmed. ${advice.what} ${advice.next} (${code})`;
 }
-function readyNotice(build) {
-  return `${PREFIX} is active (${build}). It compacts on /compact and at Pi's threshold after completed turns; context-overflow recovery needs /compact. Run /compaction-doctor to check this session.`;
+function readyNotice() {
+  return `${NOTICE_PREFIX} is on. It writes a checkpoint on /compact and when the context nears its limit. /compaction-doctor checks this session.`;
 }
 function notify(ctx, text, kind) {
   try {
@@ -1319,6 +1364,7 @@ function notify(ctx, text, kind) {
 var NoticeGate = class {
   episode = 0;
   blocked = /* @__PURE__ */ new Map();
+  fullCode = /* @__PURE__ */ new Map();
   shown = /* @__PURE__ */ new Set();
   nextEpisode() {
     this.episode++;
@@ -1327,6 +1373,14 @@ var NoticeGate = class {
     if (this.blocked.get(sessionId) === this.episode) return false;
     this.blocked.set(sessionId, this.episode);
     return true;
+  }
+  repeated(sessionId, code) {
+    const repeated = this.fullCode.get(sessionId) === code;
+    this.fullCode.set(sessionId, code);
+    return repeated;
+  }
+  confirmed(sessionId) {
+    this.fullCode.delete(sessionId);
   }
   once(key) {
     if (this.shown.has(key)) return false;
@@ -1492,6 +1546,16 @@ function reusablePrefix(candidate, classification, branch) {
   const seen = new Set(candidate.input.userHorizon.entryIds);
   const unseen = branch.slice(0, end + 1).some((entry) => entry.type === "message" && entry.message.role === "user" && !seen.has(entry.id));
   return unseen ? void 0 : end;
+}
+
+// packages/coding-agent/src/extensions/context-memory/preview/status-line.ts
+function setStatusLine(ctx, state) {
+  try {
+    if (!ctx.hasUI) return;
+    const text = state === void 0 ? void 0 : state === "writing" ? "compaction: writing note" : state === "paused" ? "compaction: paused, see /compaction-doctor" : state === 0 ? "compaction: on" : `compaction: ${state} checkpoint${state === 1 ? "" : "s"}`;
+    ctx.ui.setStatus("context-memory", text);
+  } catch {
+  }
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts
@@ -2478,8 +2542,8 @@ function previewErrorCode(error, aborted = false) {
   if (matched && (PROJECT_CODES.has(matched) || PREVIEW_CODES.has(matched))) return matched;
   return aborted ? "CONTEXT_COMPACTION_CANCELLED" : "CONTEXT_WRITER_FAILED";
 }
-function reportPreviewError(ctx, code, durable = true, reason, version = VERSION) {
-  notify(ctx, blockedNotice(code, durable, reason, version), "error");
+function reportPreviewError(ctx, code, durable = true, reason, version = VERSION, repeated = false) {
+  notify(ctx, blockedNotice(code, durable, reason, version, repeated), repeated ? "warning" : "error");
 }
 function assertToolPairs(messages) {
   const pending = /* @__PURE__ */ new Set();
@@ -2613,13 +2677,20 @@ var UNSUPPORTED_ERRORS = {
   image: "CONTEXT_PREVIEW_UNSUPPORTED: image-bearing sessions are not supported by this preview",
   "non-text": "CONTEXT_PREVIEW_UNSUPPORTED: non-text custom messages are not supported"
 };
-function assertPreviewSession(session, version = VERSION, branch) {
+function assertPreviewSession(session, version = VERSION, branch, onSerializedEntry) {
   const reason = unsupportedReason(session, version);
   if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
   const sources = branch ?? session.getBranch();
-  const latest = validateMemoryCheckpoints(sources);
+  const latest = validateMemoryCheckpoints(sources, onSerializedEntry);
   assertUserMessages(sources);
   return latest;
+}
+function assertHashedPreviewSession(session, version, branch) {
+  const hash2 = createHash4("sha256");
+  const checkpoint = assertPreviewSession(session, version, branch, (_index, serialized) => {
+    hash2.update(serialized).update("\n");
+  });
+  return { checkpoint, sourceHash: hash2.digest("hex") };
 }
 var PreviewMemoryController = class {
   config;
@@ -2635,6 +2706,7 @@ var PreviewMemoryController = class {
   /** Per session, like every other state here, so status never mixes one session's calls with another's metrics. */
   lastProgress = /* @__PURE__ */ new Map();
   verified;
+  pendingSessionNotice;
   notices = new NoticeGate();
   preparation;
   journal;
@@ -2908,15 +2980,18 @@ var PreviewMemoryController = class {
     const session = ctx.sessionManager;
     const branch = session.getBranch();
     let checkpoint;
+    let serializedBranch;
     if (this.verified && this.extendsVerified(this.verified, session, branch)) {
       checkpoint = this.verified.checkpoint;
     } else {
       this.verified = void 0;
-      checkpoint = assertPreviewSession(session, this.hostVersion, branch);
+      const serialized = [];
+      checkpoint = assertPreviewSession(session, this.hostVersion, branch, (_index, text) => serialized.push(text));
+      serializedBranch = serialized;
     }
     const sticky = this.stickyFailures.get(session.getSessionId());
     if (sticky) throw new Error(sticky);
-    this.store.assertReady(session);
+    this.store.assertReady(session, serializedBranch);
     this.verified = {
       session,
       sessionId: session.getSessionId(),
@@ -2942,15 +3017,43 @@ var PreviewMemoryController = class {
     this.store.forgetReadback();
   }
   /** Tree navigation is a trust boundary, even when the selected branch extends the previous one. */
-  branchChanged() {
+  branchChanged(ctx) {
     this.forgetVerified();
+    if (this.stickyFailures.has(ctx.sessionManager.getSessionId())) {
+      setStatusLine(ctx, "paused");
+    } else if (unsupportedReason(ctx.sessionManager, this.hostVersion)) {
+      setStatusLine(ctx, ctx.sessionManager.getEntries().some(isPreviewCheckpoint) ? "paused" : void 0);
+    } else if (this.configError || !this.config) {
+      setStatusLine(ctx, void 0);
+    } else {
+      this.readyStatus(ctx);
+    }
+  }
+  readyStatus(ctx) {
+    setStatusLine(ctx, ctx.sessionManager.getBranch().filter(isPreviewCheckpoint).length);
+  }
+  /** Text typed while paused goes back to the editor instead of into the session. */
+  input(event, ctx) {
+    this.showSessionNotice(ctx);
+    const code = event.source === "interactive" && ctx.hasUI && !event.images?.length ? this.stickyFailures.get(ctx.sessionManager.getSessionId()) : void 0;
+    const draft = code ? ctx.ui.getEditorText() : "";
+    const joins = draft.trim() !== "";
+    if (!joins) this.notices.nextEpisode();
+    if (!code) return;
+    if (!joins) this.reportBlocked(ctx, code);
+    ctx.ui.setEditorText(joins ? `${draft}
+
+${event.text}` : event.text);
+    return { action: "handled" };
   }
   /** In-process stickiness covers a marker write that failed before it could reach disk. */
   fail(ctx, code) {
+    this.pendingSessionNotice = void 0;
     this.forgetVerified();
     const sessionId = ctx.sessionManager.getSessionId();
     this.observedFailures.set(sessionId, code);
     this.stickyFailures.set(sessionId, code);
+    setStatusLine(ctx, "paused");
     try {
       this.store.fail(ctx.sessionManager, code);
     } catch (error) {
@@ -2960,35 +3063,59 @@ var PreviewMemoryController = class {
   /** At most one blocking notice per session for each user input or manual compaction attempt. */
   reportBlocked(ctx, code, durable = true) {
     try {
-      if (!this.notices.blockedOnce(ctx.sessionManager.getSessionId())) return;
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (!this.notices.blockedOnce(sessionId)) return;
       reportPreviewError(
         ctx,
         code,
         durable,
         unsupportedReason(ctx.sessionManager, this.hostVersion),
-        this.hostVersion
+        this.hostVersion,
+        durable && this.notices.repeated(sessionId, code)
       );
     } catch {
     }
   }
   /** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
   sessionStart(ctx) {
+    this.pendingSessionNotice = void 0;
     this.forgetVerified();
     this.preparation?.activate(ctx.sessionManager.getSessionId());
+    const deferNotice = ctx.hasUI && ctx.sessionManager.getEntries().some((entry) => entry.type === "compaction");
     const reason = this.safeInactive(ctx);
     if (reason) {
-      this.standAside(ctx, reason);
+      this.standAside(ctx, reason, deferNotice);
       return;
     }
-    if (this.guard(ctx, () => this.assertReady(ctx)) && this.notices.once("ready")) {
-      notify(ctx, readyNotice(PREVIEW_BUILD_ID), "info");
+    if (this.guard(ctx, () => this.assertReady(ctx))) {
+      this.readyStatus(ctx);
+      this.sessionNotice(ctx, "ready", readyNotice(), deferNotice);
+    }
+  }
+  sessionNotice(ctx, key, text, defer = false) {
+    if (defer) {
+      this.pendingSessionNotice = { sessionId: ctx.sessionManager.getSessionId(), key, text };
+    } else if (this.notices.once(key)) {
+      notify(ctx, text, "info");
+    }
+  }
+  /** The first input arrives after Pi has drawn the reopened session. */
+  showSessionNotice(ctx) {
+    const pending = this.pendingSessionNotice;
+    this.pendingSessionNotice = void 0;
+    if (pending?.sessionId === ctx.sessionManager.getSessionId()) {
+      this.sessionNotice(ctx, pending.key, pending.text);
     }
   }
   /** The preview leaves this session to Pi; say so once per session and process. */
-  standAside(ctx, reason) {
-    if (this.notices.once(`inactive:${ctx.sessionManager.getSessionId()}:${reason}`)) {
-      notify(ctx, inactiveNotice(reason, this.hostVersion), "info");
-    }
+  standAside(ctx, reason, deferNotice = false) {
+    setStatusLine(ctx, void 0);
+    this.sessionNotice(
+      ctx,
+      `inactive:${ctx.sessionManager.getSessionId()}:${reason}`,
+      inactiveNotice(reason, this.hostVersion),
+      deferNotice
+    );
   }
   /**
    * Stock Pi catches extension exceptions: abort is necessary before reporting any guard failure.
@@ -3069,25 +3196,31 @@ var PreviewMemoryController = class {
     this.preparation?.cancel("compaction");
     this.activeCompactions.add(ctx.sessionManager.getSessionId());
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
+    setStatusLine(ctx, "writing");
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-      assertPreviewSession(ctx.sessionManager, this.hostVersion);
+      const branch = structuredClone(ctx.sessionManager.getBranch());
+      const { checkpoint: previous, sourceHash: branchHash } = assertHashedPreviewSession(
+        ctx.sessionManager,
+        this.hostVersion,
+        branch
+      );
       if (!(event.reason === "manual" || event.reason === "threshold") || event.willRetry) {
         throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: overflow recovery needs an explicit /compact");
       }
       event.signal.throwIfAborted();
-      const branch = structuredClone(ctx.sessionManager.getBranch());
       const projection = ctx.sessionManager.buildSessionProjection();
       assertToolPairs(projection.messages);
       const last = [...projection.messages].reverse().find((message) => message.role !== "system");
       const completed = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
-      const recovering = this.stickyFailures.has(ctx.sessionManager.getSessionId()) || this.store.status(ctx.sessionManager).state !== "ready";
+      const readback = {};
+      const recovering = this.stickyFailures.has(ctx.sessionManager.getSessionId()) || this.store.status(ctx.sessionManager, branchHash, readback).state !== "ready";
       const terminated = last?.role === "user" || last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted");
       if (!last || !(completed || recovering && terminated) || ctx.hasPendingMessages()) {
         throw new Error("CONTEXT_TOOL_BOUNDARY: manual compaction requires a completed turn with no queued input");
       }
       if (!ctx.model || !ctx.sessionManager.getLeafId()) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
-      const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual");
+      const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual", branchHash, readback);
       this.observedFailures.delete(attempt.sessionId);
       const snapshot = {
         sessionId: attempt.sessionId,
@@ -3107,7 +3240,6 @@ var PreviewMemoryController = class {
       assertToolPairs(kept);
       let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
       let coveredIndex = branch.length - 1;
-      const previous = latestMemory(branch);
       const notes = workNotes(branch, previous?.memory.coveredThrough);
       const increments = notes.map((item) => item.note);
       const activeIds = new Set(
@@ -3219,7 +3351,7 @@ var PreviewMemoryController = class {
         });
       }
       event.signal.throwIfAborted();
-      if (snapshot.sessionId !== ctx.sessionManager.getSessionId() || snapshot.leafId !== ctx.sessionManager.getLeafId() || hashEntries(branch) !== hashEntries(ctx.sessionManager.getBranch())) {
+      if (snapshot.sessionId !== ctx.sessionManager.getSessionId() || snapshot.leafId !== ctx.sessionManager.getLeafId() || attempt.sourceHash !== hashEntries(ctx.sessionManager.getBranch())) {
         throw new Error("CONTEXT_SOURCE_CHANGED: discard the generated candidate");
       }
       const summary = fittedSummary(
@@ -3283,14 +3415,16 @@ var PreviewMemoryController = class {
     this.forgetVerified();
     const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
     this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
-    if (!ours && !this.protected(ctx)) return;
+    if (!ours && !this.protected(ctx)) {
+      setStatusLine(ctx, void 0);
+      return;
+    }
     try {
-      assertPreviewSession(ctx.sessionManager, this.hostVersion);
-      const memory = latestMemory(ctx.sessionManager.getBranch());
+      const { checkpoint: memory, sourceHash } = assertHashedPreviewSession(ctx.sessionManager, this.hostVersion);
       if (!event.fromExtension || memory?.entry.id !== event.compactionEntry.id) {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       }
-      this.store.commit(ctx.sessionManager, event.compactionEntry);
+      this.store.commit(ctx.sessionManager, event.compactionEntry, sourceHash);
       const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
       this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
       const last = this.lastCompaction.get(ctx.sessionManager.getSessionId());
@@ -3301,6 +3435,8 @@ var PreviewMemoryController = class {
       this.preparation?.committed();
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());
       this.observedFailures.delete(ctx.sessionManager.getSessionId());
+      this.readyStatus(ctx);
+      this.notices.confirmed(ctx.sessionManager.getSessionId());
     } catch (error) {
       const code = previewErrorCode(error);
       this.fail(ctx, code);
@@ -3317,17 +3453,18 @@ var PreviewMemoryController = class {
     this.forgetVerified();
     try {
       if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-      assertPreviewSession(ctx.sessionManager, this.hostVersion);
+      const { checkpoint: memory, sourceHash } = assertHashedPreviewSession(ctx.sessionManager, this.hostVersion);
       const leaf = ctx.sessionManager.getLeafEntry();
-      const memory = latestMemory(ctx.sessionManager.getBranch());
       if (leaf?.type !== "compaction" || memory?.entry.id !== leaf.id || !this.store.markerPresent(ctx.sessionManager)) {
         throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
       }
-      this.store.recover(ctx.sessionManager, leaf);
+      this.store.recover(ctx.sessionManager, leaf, sourceHash);
       this.preparation?.committed();
       this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
       this.stickyFailures.delete(ctx.sessionManager.getSessionId());
       this.observedFailures.delete(ctx.sessionManager.getSessionId());
+      this.readyStatus(ctx);
+      this.notices.confirmed(ctx.sessionManager.getSessionId());
     } catch (error) {
       throw new Error(previewErrorCode(error));
     }
@@ -3344,7 +3481,7 @@ var PreviewMemoryController = class {
 };
 
 // packages/coding-agent/src/extensions/context-memory/preview/failure-store.ts
-import { createHash as createHash4, randomUUID as randomUUID4 } from "node:crypto";
+import { createHash as createHash5, randomUUID as randomUUID4 } from "node:crypto";
 import { lstatSync as lstatSync3 } from "node:fs";
 import { join as join4, resolve as resolve3 } from "node:path";
 var MAX_MARKER_BYTES = 8192;
@@ -3389,7 +3526,7 @@ var CODES = /* @__PURE__ */ new Set([
   "CONTEXT_PREVIEW_COMPACT_REQUIRED"
 ]);
 function digest(value) {
-  return createHash4("sha256").update(value).digest("hex");
+  return createHash5("sha256").update(value).digest("hex");
 }
 function identifier(value) {
   return typeof value === "string" && /^[A-Za-z0-9:_-]{1,128}$/.test(value);
@@ -3552,8 +3689,8 @@ var PreviewFailureStore = class {
     }
     throw new PreviewStoreError(code);
   }
-  status(session) {
-    return this.evaluate(session, true);
+  status(session, branchHash, readback) {
+    return this.evaluate(session, true, false, branchHash, readback);
   }
   /** The same evaluation without latching a newly observed failure; for read-only diagnostics. */
   inspect(session) {
@@ -3571,7 +3708,7 @@ var PreviewFailureStore = class {
       return !(isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR"));
     }
   }
-  evaluate(session, latch, request = false) {
+  evaluate(session, latch, request = false, branchHash, readback, serializedBranch) {
     try {
       const identity = this.identity(session);
       const marker = this.readMarker(identity, latch);
@@ -3580,14 +3717,32 @@ var PreviewFailureStore = class {
       if (latched) return { state: "blocked", code: latched };
       if (request && this.unchangedSinceReadback(session, identity)) return { state: "ready" };
       if (request) this.frontier = void 0;
+      if (readback?.sourceHash && readback.leafId === session.getLeafId()) {
+        if (readback.sourceHash !== (branchHash ?? hashEntries(session.getBranch())))
+          throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+        return { state: "ready" };
+      }
       const disk = readSession(identity, true);
       if (!disk) {
         if (session.getEntries().some((entry) => entry.type === "message" || entry.type === "compaction"))
           throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
       } else {
         const leafId = session.getLeafId();
-        if (leafId !== null && hashEntries(branchAt(disk.entries, leafId)) !== hashEntries(session.getBranch()))
-          throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+        if (leafId !== null) {
+          const branch = branchAt(disk.entries, leafId);
+          if (serializedBranch) {
+            if (branch.length !== serializedBranch.length || branch.some((entry, index) => JSON.stringify(entry) !== serializedBranch[index]))
+              throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+          } else {
+            const sourceHash = hashEntries(branch);
+            if (sourceHash !== (branchHash ?? hashEntries(session.getBranch())))
+              throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+            if (readback) {
+              readback.leafId = leafId;
+              readback.sourceHash = sourceHash;
+            }
+          }
+        }
         const file = fileIdentity(identity.file);
         if (request && file?.size === BigInt(disk.bytes)) {
           const entries = session.getEntries();
@@ -3628,20 +3783,22 @@ var PreviewFailureStore = class {
     return true;
   }
   /** Request guard. Full readback at a trust boundary, then only the length check until the next one. */
-  assertReady(session) {
-    const status = this.evaluate(session, true, true);
+  assertReady(session, serializedBranch) {
+    const status = this.evaluate(session, true, true, void 0, void 0, serializedBranch);
     if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
   }
   /** A trust boundary: session start, compaction, recovery and every failure read the whole file again. */
   forgetReadback() {
     this.frontier = void 0;
   }
-  begin(session, explicitRetry = false) {
+  begin(session, explicitRetry = false, branchHash, readback = {}) {
     this.frontier = void 0;
     try {
       const identity = this.identity(session);
-      if (!explicitRetry) this.assertReady(session);
-      else {
+      if (!explicitRetry) {
+        const status = this.evaluate(session, true, false, branchHash, readback);
+        if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
+      } else {
         try {
           this.readMarker(identity);
         } catch (error) {
@@ -3657,10 +3814,10 @@ var PreviewFailureStore = class {
         sessionId: identity.sessionId,
         leafId,
         lastCheckpointId: [...branch].reverse().find((entry) => entry.type === "compaction")?.id ?? null,
-        sourceHash: hashEntries(branch)
+        sourceHash: branchHash ?? hashEntries(branch)
       };
-      if (hashEntries(branchAt(readSession(identity).entries, leafId)) !== attempt.sourceHash)
-        throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+      const diskHash = readback.leafId === leafId ? readback.sourceHash : hashEntries(branchAt(readSession(identity).entries, leafId));
+      if (diskHash !== attempt.sourceHash) throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
       writeMarker(this.path(identity), {
         version: 1,
         state: "pending",
@@ -3714,13 +3871,13 @@ var PreviewFailureStore = class {
       this.reject(session, error, "CONTEXT_PREVIEW_MARKER_IO");
     }
   }
-  commit(session, entry) {
-    this.confirm(session, entry, false);
+  commit(session, entry, branchHash) {
+    this.confirm(session, entry, false, branchHash);
   }
-  recover(session, entry) {
-    this.confirm(session, entry, true);
+  recover(session, entry, branchHash) {
+    this.confirm(session, entry, true, branchHash);
   }
-  confirm(session, entry, explicitRecovery) {
+  confirm(session, entry, explicitRecovery, branchHash) {
     this.frontier = void 0;
     let recoveryMarker;
     try {
@@ -3730,14 +3887,19 @@ var PreviewFailureStore = class {
       recoveryMarker = marker;
       if (!marker?.attempt || !marker.candidateHash || marker.sessionId !== identity.sessionId || marker.sessionPathHash !== identity.sessionPathHash || !explicitRecovery && marker.state !== "pending" || entry.type !== "compaction" || !identifier(entry.id) || entry.parentId !== marker.attempt.leafId || session.getLeafId() !== entry.id || candidateHash(entry) !== marker.candidateHash)
         throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
-      if (!persisted) this.recordFailure(session, marker.code, marker);
+      if (!persisted) {
+        this.recordFailure(session, marker.code, marker);
+        branchHash = void 0;
+      }
       this.assertCandidate(marker.attempt, entry);
       const disk = readSession(identity).entries;
       const stored = disk.get(entry.id);
       if (stored?.type !== "compaction" || stored.fromHook !== true || hashEntries([stored]) !== hashEntries([entry]) || candidateHash(stored) !== marker.candidateHash || stored.parentId !== marker.attempt.leafId)
         throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
-      const sources = branchAt(disk, marker.attempt.leafId);
-      if (hashEntries(sources) !== marker.attempt.sourceHash || ([...sources].reverse().find((item) => item.type === "compaction")?.id ?? null) !== marker.attempt.lastCheckpointId || hashEntries(session.getBranch()) !== hashEntries(branchAt(disk, entry.id)))
+      const diskBranch = branchAt(disk, entry.id);
+      const sources = diskBranch.slice(0, -1);
+      const hashes = hashEntryPrefixes(diskBranch, [sources.length, diskBranch.length]);
+      if (hashes.get(sources.length) !== marker.attempt.sourceHash || ([...sources].reverse().find((item) => item.type === "compaction")?.id ?? null) !== marker.attempt.lastCheckpointId || (branchHash ?? hashEntries(session.getBranch())) !== hashes.get(diskBranch.length))
         throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
       this.assertCoverage(entry, sources, marker.attempt.sourceHash);
       removeMarker(this.path(identity));
@@ -3760,7 +3922,7 @@ var PreviewFailureStore = class {
 };
 
 // packages/coding-agent/src/extensions/context-memory/preview/history-view.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { Type as Type5 } from "typebox";
 var HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"];
 var VIEW_VERSION = "view-v2";
@@ -3970,7 +4132,7 @@ function searchable(item, entries) {
 function listHistory(snapshot, request, budgetTokens = 4e3) {
   const kind = request.kind;
   if (!kind) throw new Error("HISTORY_KIND_REQUIRED: list needs a kind");
-  const signature = createHash5("sha256").update(JSON.stringify(["list", kind, request.query ?? "", VIEW_VERSION])).digest("hex");
+  const signature = createHash6("sha256").update(JSON.stringify(["list", kind, request.query ?? "", VIEW_VERSION])).digest("hex");
   let index = 0;
   if (request.cursor) {
     let cursor;
@@ -4225,7 +4387,7 @@ function contextMemoryPreview(pi) {
   });
   const disabled = config?.enabled === false;
   pi.registerCommand("compaction-status", {
-    description: "Show the context-memory preview's writer, checkpoint, protection and request state as JSON",
+    description: "Show source-linked compaction's writer, checkpoint and request state as JSON",
     handler: async (_args, ctx) => {
       try {
         show(ctx, JSON.stringify(controller.status(ctx), null, 2));
@@ -4235,7 +4397,7 @@ function contextMemoryPreview(pi) {
     }
   });
   pi.registerCommand("compaction-doctor", {
-    description: "Check whether the context-memory preview is loaded and usable here, without calling a model",
+    description: "Check source-linked compaction in this session without calling a model",
     handler: async (_args, ctx) => {
       try {
         show(
@@ -4249,7 +4411,7 @@ function contextMemoryPreview(pi) {
   });
   if (disabled) return;
   pi.registerCommand("compaction-recover", {
-    description: "Confirm an already saved, staged checkpoint after an interrupted commit observation",
+    description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
       const reason = controller.safeInactive(ctx);
@@ -4259,7 +4421,7 @@ function contextMemoryPreview(pi) {
       }
       try {
         controller.recover(ctx);
-        show(ctx, "context-memory preview: the staged checkpoint and its original sources were confirmed on disk.");
+        show(ctx, `${NOTICE_PREFIX}: checkpoint confirmed on disk. Requests resume.`);
       } catch (error) {
         const code = previewErrorCode(error);
         show(
@@ -4278,9 +4440,7 @@ function contextMemoryPreview(pi) {
     const active = new Set(pi.getActiveTools());
     return pi.getAllTools().filter((tool) => active.has(tool.name)).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
   });
-  pi.on("input", () => {
-    controller.notices.nextEpisode();
-  });
+  pi.on("input", (event, ctx) => controller.input(event, ctx));
   pi.on(
     "cache_warming_decision",
     (_event, ctx) => controller.safeInactive(ctx) ? void 0 : { action: "stop" }
@@ -4294,7 +4454,7 @@ function contextMemoryPreview(pi) {
         if (controller.notices.once("writer"))
           notify(
             ctx,
-            `context-memory preview: ${previewErrorCode(error)}. The fixed writer in pi-context-memory.json is not available; correct it and restart Pi before /compact.`,
+            `${NOTICE_PREFIX}: /compact can't write a checkpoint yet. The fixed writer in pi-context-memory.json isn't available. Correct writerModel and restart Pi. (${previewErrorCode(error)})`,
             "warning"
           );
       }
@@ -4324,7 +4484,7 @@ function contextMemoryPreview(pi) {
   pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
   pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
   pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-  pi.on("session_tree", () => controller.branchChanged());
+  pi.on("session_tree", (_event, ctx) => controller.branchChanged(ctx));
   pi.on("model_select", () => controller.invalidatePreparation("model-change"));
   pi.on("session_shutdown", () => controller.shutdownPreparation());
   pi.registerTool({

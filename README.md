@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.1
+# Independent extension preview — v0.5.2
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.1 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.1 supports manual and completed-turn threshold compaction.** Optional
+**v0.5.2 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.1
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.2
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.1
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.2
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.1 lists
+Check that the installed preview lists the new Pi version first; v0.5.2 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.1)
+The [v0.5.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.2)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -75,23 +75,27 @@ preserves Pi credentials, other package registrations and session files.
 ## First use
 
 Start a new, persistent, text-only session. After Pi starts or reloads its
-extensions, the preview shows one short line saying it is active. Then run:
+extensions, the preview shows `Source-linked compaction is on.` Pi's footer then
+shows `compaction: on`, the number of checkpoints on the current branch,
+`compaction: writing note` during a compaction, or
+`compaction: paused, see /compaction-doctor`. Then run:
 
 ```text
 /compaction-doctor
 ```
 
 It prints a short checklist: extension loaded, host version, session support,
-writer, manual `/compact` eligibility and any durable block. It calls no model,
-writes no failure record and does not change the session. After a failed
+writer, manual `/compact` eligibility and whether requests are paused. It calls
+no model, writes no failure record and does not change the session. After a failed
 attempt, the manual `/compact` line says which way out applies: `retry` when a
 new `/compact` replaces the failed attempt, with `/compaction-recover` named
 first when Pi already saved the staged checkpoint; `blocked` only when
 `/compact` cannot help in this session, as with an unsupported host or content,
 an unreadable configuration or an unavailable writer. Because Pi's own
 compaction settings are not visible to extensions, it reports Pi's side of
-`/compact` eligibility as `unknown` instead of guessing; `Result: ready` means
-nothing is blocking requests, not that Pi will accept `/compact` yet.
+`/compact` eligibility as `unknown` instead of guessing; `Result: ready for
+requests` means nothing is blocking requests, not that Pi will accept
+`/compact` yet.
 
 `/compaction-status` prints the same findings as JSON. It keeps the fields of
 earlier previews and, since v0.3.3, adds `host`, `supportedHost`, `protection`,
@@ -311,16 +315,25 @@ block that only a successful `/compact` cleared.
 
 If a blocked session ends exactly at an older successful checkpoint without a
 staged attempt, stock Pi may report `Already compacted` before invoking the
-extension. Add a short text retry request; it remains blocked and is preserved
-as unfinished input, then use `/compact`. Recovery keeps that whole input turn.
+extension. Pi then needs more new history than a paused session can add
+before `/compact` runs again, so keep the session file and continue in a new
+session.
 Initialization failures before any completed source turn, unsupported session
 formats and incompatible hosts require a fresh supported session after fixing
 the cause. Neither recovery command forces those cases through validation.
 
 Each failure and each blocked input produces one notice (v0.3.2 could repeat
-the same notice two to four times). The notice names the controlled error code,
-says what happened and whether requests are paused, and gives the next step;
-`/compact` is suggested only where it can help. Pi's overflow recovery request
+the same notice two to four times). The first explains what happened, whether
+requests are paused and what to do, with the controlled error code last.
+Later inputs blocked by the same code get a short warning until a checkpoint
+or recovery is confirmed. Text typed in Pi's interactive editor while paused
+goes back to the editor: no request starts and nothing enters the session.
+Messages queued during a failed `/compact` come back together under one
+notice. After a refused `/compact`, Pi adds its own `Compaction cancelled`
+below the notice. Inputs from RPC, print mode or other extensions, and inputs
+with images, still reach the request guard, where Pi adds `This operation was
+aborted`. The notice says why, and `/compact` is suggested only where it can
+help. Pi's overflow recovery request
 is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
 `CONTEXT_PREVIEW_UNSUPPORTED`; before v0.4.0, threshold
 compaction was reported the same way). After a rollback to v0.3.2, that record reads

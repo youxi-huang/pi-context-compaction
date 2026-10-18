@@ -91,8 +91,9 @@ export function reportPreviewError(
 	durable = true,
 	reason?: InactiveReason,
 	version = VERSION,
+	repeated = false,
 ): void {
-	notify(ctx, blockedNotice(code, durable, reason, version), "error");
+	notify(ctx, blockedNotice(code, durable, reason, version, repeated), "error");
 }
 
 export function assertToolPairs(messages: readonly AgentMessage[]): void {
@@ -754,13 +755,15 @@ export class PreviewMemoryController {
 	/** At most one blocking notice per session for each user input or manual compaction attempt. */
 	reportBlocked(ctx: ExtensionContext, code: string, durable = true): void {
 		try {
-			if (!this.notices.blockedOnce(ctx.sessionManager.getSessionId())) return;
+			const sessionId = ctx.sessionManager.getSessionId();
+			if (!this.notices.blockedOnce(sessionId)) return;
 			reportPreviewError(
 				ctx,
 				code,
 				durable,
 				unsupportedReason(ctx.sessionManager, this.hostVersion),
 				this.hostVersion,
+				durable && this.notices.repeated(sessionId, code),
 			);
 		} catch {
 			// Notices are advisory; the abort and any marker have already taken effect.
@@ -779,7 +782,7 @@ export class PreviewMemoryController {
 		}
 		if (this.guard(ctx, () => this.assertReady(ctx))) {
 			this.readyStatus(ctx);
-			if (this.notices.once("ready")) notify(ctx, readyNotice(PREVIEW_BUILD_ID), "info");
+			if (this.notices.once("ready")) notify(ctx, readyNotice(), "info");
 		}
 	}
 
@@ -1168,6 +1171,7 @@ export class PreviewMemoryController {
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
 			this.readyStatus(ctx);
+			this.notices.confirmed(ctx.sessionManager.getSessionId());
 		} catch (error) {
 			const code = previewErrorCode(error);
 			this.fail(ctx, code);
@@ -1202,6 +1206,7 @@ export class PreviewMemoryController {
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
 			this.readyStatus(ctx);
+			this.notices.confirmed(ctx.sessionManager.getSessionId());
 		} catch (error) {
 			throw new Error(previewErrorCode(error));
 		}

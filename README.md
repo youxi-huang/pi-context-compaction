@@ -45,9 +45,7 @@ The extension does not replace Pi's executable or copy its credentials. Authenti
 
 ## Your first session
 
-The footer shows whether compaction is on, how many checkpoints are on the current branch, when it is writing a note, or when requests are paused with a pointer to `/compaction-doctor`.
-
-Start a **new, persistent, text-only** Pi session. Pi shows one short line saying the preview is active. Then enter:
+Start a **new, persistent, text-only** Pi session. Pi shows `Source-linked compaction is on.` Then enter:
 
 ```text
 /compaction-doctor
@@ -131,7 +129,7 @@ What happens in an unsupported session depends on whether the preview already pr
 
 ## When something goes wrong
 
-Start with `/compaction-doctor` for a plain-language check, or `/compaction-status` for the same findings as JSON: the extension build, the selected writer, checkpoint information, the session's protection, and whether requests are `ready`, `pending` or `blocked`, with a controlled error code. Each failure and each blocked input shows one notice that names the code, says whether requests are paused and gives the next step.
+Start with `/compaction-doctor` for a plain-language check, or `/compaction-status` for the same findings as JSON: the extension build, the selected writer, checkpoint information, the session's protection, and whether requests are `ready`, `pending` or `blocked`, with a controlled error code. A failure notice explains what happened and what to do, with the code last. Later inputs blocked by the same code get a short reminder until a checkpoint or recovery is confirmed.
 
 If a compaction attempt fails because the note, its sources, the writer or the on-disk state could not be checked, **the extension does not publish an unchecked summary or quietly switch to another writer**. Requests stay paused across new input, `/reload` and reopening the session.
 

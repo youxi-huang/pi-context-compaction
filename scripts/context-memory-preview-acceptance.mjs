@@ -231,7 +231,7 @@ async function runtimeAcceptance() {
 			const status = JSON.parse(await commandOutput("/compaction-status"));
 			assert.equal(requests.length, 0, "The self-check reached the local HTTP provider");
 			assert(!existsSync(marker), "The self-check wrote a failure marker");
-			for (const line of ["extension: ok", `host: ok - Pi ${stockVersion}`, "session: ok", "writer: ok", "manual /compact: unknown", "durable block: ok - none"]) assert(doctor.includes(line), `Doctor output lacks "${line}"`);
+			for (const line of ["extension: ok", `host: ok - Pi ${stockVersion}`, "session: ok", "writer: ok", "manual /compact: unknown", "requests: ok - not paused"]) assert(doctor.includes(line), `Doctor output lacks "${line}"`);
 			assert.equal(status.state, "ready", "A fresh session did not report ready");
 			assert.equal(status.protection, "eligible", "A fresh session did not report eligible protection");
 			assert.equal(status.manualCompaction?.pi, "unknown", "Status claimed to know Pi's own compaction gate");

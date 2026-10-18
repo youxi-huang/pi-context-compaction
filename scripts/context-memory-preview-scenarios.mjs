@@ -97,7 +97,7 @@ async function worker() {
 		console[level] = (...parts) => {
 			const text = parts.map(String).join(" ");
 			if (commandOutput) commandOutput.push(text);
-			else if (text.includes("context-memory preview")) notices.push(text);
+			else if (text.includes("Source-linked compaction")) notices.push(text);
 			else original(...parts);
 		};
 	}
@@ -365,7 +365,7 @@ async function worker() {
 				check(
 					"doctor-separates-checks",
 					"The self-check reports extension, host, session, writer, manual-compaction and durable-block lines",
-					["extension", "host", "session", "writer", "manual /compact", "durable block"].every((label) => doctor.output.includes(label)),
+					["extension", "host", "session", "writer", "manual /compact", "requests"].every((label) => doctor.output.includes(label)),
 					doctor.output,
 				);
 				check("doctor-eligibility-unknown", "The self-check does not promise /compact will run; Pi's own history gate is reported as unknown", /manual \/compact[^\n]*unknown/.test(doctor.output), doctor.output);

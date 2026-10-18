@@ -95,7 +95,7 @@ export function reportPreviewError(
 	version = VERSION,
 	repeated = false,
 ): void {
-	notify(ctx, blockedNotice(code, durable, reason, version, repeated), "error");
+	notify(ctx, blockedNotice(code, durable, reason, version, repeated), repeated ? "warning" : "error");
 }
 
 export function assertToolPairs(messages: readonly AgentMessage[]): void {

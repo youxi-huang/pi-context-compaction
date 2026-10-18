@@ -339,7 +339,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		line(
 			"manual /compact",
 			"unknown",
-			`Finish the turn with no queued input first.${manual.recover ? ` ${recover} now.` : ""} ${gate}`,
+			`Finish a turn with no queued input first.${manual.recover ? ` ${recover} now.` : ""} ${gate}`,
 		);
 	else line("manual /compact", "unknown", `Ready to try. ${gate}`);
 	const durable =

@@ -30,6 +30,7 @@ import {
 	CONTEXT_NOTE_TYPE,
 	hashEntries,
 } from "../src/extensions/context-memory/identity.ts";
+import * as memoryNotes from "../src/extensions/context-memory/notes.ts";
 import {
 	latestMemory,
 	type MemoryCheckpoint,
@@ -47,6 +48,7 @@ import {
 	unsupportedReason,
 } from "../src/extensions/context-memory/preview/controller.ts";
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
+import * as failureIo from "../src/extensions/context-memory/preview/failure-io.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 import {
 	blockedNotice,
@@ -593,6 +595,79 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		await expect(controller.compact(event(), ctx)).rejects.toThrow(/CONTEXT_SOURCE_CHANGED/);
 		expect(requests).toHaveLength(1);
 	});
+	it.each(["sync", "complete", "prefix"])("leaves the cloned branch unchanged on the %s path", async (path) => {
+		if (path === "prefix") {
+			const first = session.entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = `${sourceText}\n${"local check ok\n".repeat(1000)}`;
+			session.persist();
+		}
+		if (path !== "sync") await prepare();
+		if (path === "prefix") appendRuling();
+		const validate = memoryNotes.validateMemoryCheckpoints;
+		let snapshot: readonly SessionEntry[] | undefined;
+		let hash: string | undefined;
+		vi.spyOn(memoryNotes, "validateMemoryCheckpoints").mockImplementation((branch, onSerialized) => {
+			const result = validate(branch, onSerialized);
+			if (branch[0] !== session.entries[0]) {
+				snapshot = branch;
+				hash = hashEntries(branch);
+			}
+			return result;
+		});
+		const value = await controller.compact(event(), ctx);
+		expect(value.details?.preparation?.path).toBe(path);
+		expect(snapshot).toBeDefined();
+		expect(hashEntries(snapshot!)).toBe(hash);
+		expect(snapshot).toEqual(session.getBranch());
+	});
+
+	it.each(["memory", "disk"])("still refuses a same-leaf %s edit during the writer call", async (location) => {
+		const stream = ctx.modelRegistry.streamSimple.bind(ctx.modelRegistry);
+		const stage = vi.spyOn(store, "stage");
+		vi.spyOn(ctx.modelRegistry, "streamSimple").mockImplementation((...args) => {
+			const response = stream(...args);
+			const entries = location === "disk" ? structuredClone(session.entries) : session.entries;
+			const first = entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = `${sourceText} The port changed.`;
+			if (location === "disk") session.persist(entries);
+			return response;
+		});
+		await expect(controller.compact(event(), ctx)).rejects.toThrow("CONTEXT_SOURCE_CHANGED");
+		expect(stage).toHaveBeenCalledTimes(location === "disk" ? 1 : 0);
+		expect(store.status(session)).toMatchObject({ state: "blocked", code: "CONTEXT_SOURCE_CHANGED" });
+	});
+
+	it.each(["manual", "threshold"] as const)(
+		"shares the pre-writer read on %s compaction, then reads again at stage",
+		async (reason) => {
+			const read = vi.spyOn(failureIo, "readBoundedFile");
+			const stream = ctx.modelRegistry.streamSimple.bind(ctx.modelRegistry);
+			let readsAtWriter = 0;
+			vi.spyOn(ctx.modelRegistry, "streamSimple").mockImplementation((...args) => {
+				readsAtWriter = read.mock.calls.filter(([file]) => file === session.file).length;
+				return stream(...args);
+			});
+			await controller.compact({ ...event(), reason }, ctx);
+			expect(readsAtWriter).toBe(1);
+			expect(read.mock.calls.filter(([file]) => file === session.file)).toHaveLength(2);
+		},
+	);
+
+	it("includes the checkpoint itself in the bytes shared with the readiness readback", async () => {
+		const value = await controller.compact(event(), ctx);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			ctx,
+		);
+		entry.tokensBefore += 1;
+		controller.sessionStart(ctx);
+		expect(ctx.abort).toHaveBeenCalledTimes(1);
+		expect(store.status(session)).toMatchObject({ state: "blocked", code: "CONTEXT_SOURCE_CHANGED" });
+	});
 	it("finds same-leaf in-place source edits at the next trust boundary", async () => {
 		await prepare();
 		const value = await controller.compact(event(), ctx);
@@ -1075,6 +1150,19 @@ describe("independent extension preview: durable failure and commit boundary", (
 		expect(() => store.commit(session, entry)).toThrow(/CONTEXT_/);
 		blocked();
 	});
+	it.each(["commit", "recover"] as const)(
+		"%s refuses an in-place memory edit with unchanged disk sources",
+		(operation) => {
+			const entry = staged();
+			session.append(entry);
+			if (operation === "recover") store.fail(session, "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
+			const first = session.entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = `${sourceText} The port changed.`;
+			expect(() => store[operation](session, entry)).toThrow("CONTEXT_SOURCE_CHANGED");
+			blocked();
+		},
+	);
 	it("rejects a changed in-memory snapshot before staging", () => {
 		const attempt = store.begin(session);
 		const value = candidate(session);
@@ -1193,6 +1281,27 @@ describe("independent extension preview: durable failure and commit boundary", (
 		blocked();
 		new PreviewFailureStore(agentDir).recover(session, entry);
 		expect(new PreviewFailureStore(agentDir).status(session).state).toBe("ready");
+	});
+	it("recomputes the memory hash after recovery has to restore a missing marker", () => {
+		const entry = staged();
+		session.append(entry);
+		vi.mocked(fs.fsyncSync).mockImplementationOnce(() => {
+			throw Object.assign(new Error("Synthetic post-unlink fsync failure"), { code: "ENOSPC" });
+		});
+		vi.mocked(fs.renameSync).mockImplementationOnce(() => {
+			throw Object.assign(new Error("Synthetic blocked marker write failure"), { code: "ENOSPC" });
+		});
+		expect(() => store.commit(session, entry)).toThrow("CONTEXT_PREVIEW_MARKER_IO");
+		expect(fs.existsSync(markerPath())).toBe(false);
+		const branchHash = hashEntries(session.getBranch());
+		vi.mocked(fs.fsyncSync).mockImplementationOnce((fd) => {
+			const first = session.entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = `${sourceText} The port changed.`;
+			originalFs.fsyncSync(fd);
+		});
+		expect(() => store.recover(session, entry, branchHash)).toThrow("CONTEXT_SOURCE_CHANGED");
+		blocked();
 	});
 	it("explicit recovery cannot turn an unstaged writer failure into success", () => {
 		store.begin(session);

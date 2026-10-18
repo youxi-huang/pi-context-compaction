@@ -77,23 +77,37 @@ export interface PreviewStatus {
 	code?: string;
 }
 
-/** Operational markers contain hashes and identifiers, never transcript or note text. */
+/** Readback evidence shared only within one synchronous call, before any write or Pi append. */
+export interface PreviewReadback {
+	leafId?: string | null;
+	sourceHash?: string;
+}
+
+/**
+ * Operational markers contain hashes and identifiers, never transcript or note text.
+ * Supplied bytes/hashes belong only to the caller's current synchronous stretch, before any write.
+ */
 export interface PreviewFailureStoreContract {
 	/** Request guard: full readback after a trust boundary, then only a file identity and length check. */
-	assertReady(session: PreviewSession): void;
+	assertReady(session: PreviewSession, serializedBranch?: readonly string[]): void;
 	/** Make the next request read the whole session file back. */
 	forgetReadback(): void;
-	status(session: PreviewSession): PreviewStatus;
+	status(session: PreviewSession, branchHash?: string, readback?: PreviewReadback): PreviewStatus;
 	/** Like status, without latching a newly observed failure. */
 	inspect(session: PreviewSession): PreviewStatus;
 	/** Whether a pending/blocked record, or an unreadable one, exists for this session. Writes nothing. */
 	markerPresent(session: PreviewSession): boolean;
 	/** Only an explicit manual compaction may replace a previous failure marker. */
-	begin(session: PreviewSession, explicitRetry?: boolean): PreviewAttempt;
+	begin(
+		session: PreviewSession,
+		explicitRetry?: boolean,
+		branchHash?: string,
+		readback?: PreviewReadback,
+	): PreviewAttempt;
 	stage(session: PreviewSession, attempt: PreviewAttempt, candidate: PreviewCompaction): void;
 	/** Success requires reading the matching checkpoint and original sources from disk. */
-	commit(session: PreviewSession, entry: CompactionEntry): void;
+	commit(session: PreviewSession, entry: CompactionEntry, branchHash?: string): void;
 	/** Explicitly confirms an already staged durable checkpoint whose commit was not observed. */
-	recover(session: PreviewSession, entry: CompactionEntry): void;
+	recover(session: PreviewSession, entry: CompactionEntry, branchHash?: string): void;
 	fail(session: PreviewSession, code: string): void;
 }

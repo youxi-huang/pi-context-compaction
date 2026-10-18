@@ -160,6 +160,26 @@ describe("preview request readback: full at trust boundaries, length check betwe
 		expect(sessionReads(read)).toBe(2);
 	});
 
+	it("shares one fresh read between implicit begin and its readiness check", () => {
+		const read = vi.spyOn(failureIo, "readBoundedFile");
+		store.begin(session);
+		expect(sessionReads(read)).toBe(1);
+		expect(store.status(session).state).toBe("pending");
+	});
+
+	it.each(["memory", "disk"])("begin refuses a same-leaf %s edit after an earlier readback", (location) => {
+		store.assertReady(session);
+		if (location === "disk") rewriteFirstSourceInPlace(session);
+		else {
+			const first = session.entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = "Synthetic port is 4318.";
+		}
+		const read = vi.spyOn(failureIo, "readBoundedFile");
+		expect(() => store.begin(session)).toThrow("CONTEXT_SOURCE_CHANGED");
+		expect(sessionReads(read)).toBe(1);
+	});
+
 	it("finds an append that reached memory but not disk at the next request", () => {
 		store.assertReady(session);
 		session.append(user("lost", "leaf"), false);
@@ -304,6 +324,34 @@ describe("preview request validation: full at trust boundaries, new entries betw
 		session.append(user("next", "leaf"));
 		controller.assertReady(ctx);
 		expect(validate).toHaveBeenCalledTimes(1);
+	});
+
+	it("serializes the in-memory branch once for validation and readiness", () => {
+		const stringify = vi.spyOn(JSON, "stringify");
+		controller.assertReady(ctx);
+		for (const entry of session.entries) {
+			expect(stringify.mock.calls.filter(([value]) => value === entry)).toHaveLength(1);
+		}
+	});
+
+	it("compares canonical bytes even when the disk JSON has different spacing", () => {
+		writeFileSync(
+			session.file,
+			`${[session.header, ...session.entries].map((entry) => JSON.stringify(entry).replaceAll('":', '": ')).join("\n")}\n`,
+		);
+		expect(() => controller.assertReady(ctx)).not.toThrow();
+	});
+
+	it.each(["memory", "disk"])("shared validation bytes still refuse an in-place %s edit", (location) => {
+		controller.assertReady(ctx);
+		if (location === "disk") rewriteFirstSourceInPlace(session);
+		else {
+			const first = session.entries[0];
+			if (first.type !== "message" || first.message.role !== "user") throw new Error("Missing source");
+			first.message.content = "Synthetic port is 4318.";
+		}
+		controller.branchChanged(ctx);
+		expect(() => controller.assertReady(ctx)).toThrow("CONTEXT_SOURCE_CHANGED");
 	});
 
 	it("validates the newly selected branch in full after a branch switch", () => {

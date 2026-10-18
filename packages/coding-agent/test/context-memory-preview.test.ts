@@ -48,7 +48,13 @@ import {
 } from "../src/extensions/context-memory/preview/controller.ts";
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
-import { doctorReport } from "../src/extensions/context-memory/preview/notices.ts";
+import {
+	blockedNotice,
+	doctorReport,
+	inactiveNotice,
+	readyNotice,
+	recoverRefusedNotice,
+} from "../src/extensions/context-memory/preview/notices.ts";
 import { PreviewPreparation } from "../src/extensions/context-memory/preview/preparation.ts";
 import { mergeWorkNotes, validateWorkNote, workNotes } from "../src/extensions/context-memory/preview/work-notes.ts";
 
@@ -220,6 +226,40 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(status.lastCompaction).toBeUndefined();
 		expect(controller.status(ctx).lastCompaction).toMatchObject({ diskConfirmed: true });
 	});
+	it.each(["commit", "recover"])(
+		"a confirmed %s restores the full explanation for a later block with the same code",
+		async (confirmation) => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			controller.fail(ctx, "CONTEXT_NOTE_QUOTE");
+			controller.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+			controller.notices.nextEpisode();
+			controller.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+			expect(warn.mock.calls[1][0]).toContain("requests are still paused");
+			const value = await controller.compact(event(), ctx);
+			const entry = saved(session, value);
+			session.append(entry);
+			if (confirmation === "commit") {
+				controller.committed(
+					{
+						type: "session_compact",
+						compactionEntry: entry,
+						fromExtension: true,
+						reason: "manual",
+						willRetry: false,
+					},
+					ctx,
+				);
+			} else {
+				controller.recover(ctx);
+			}
+			expect(store.status(session).state).toBe("ready");
+			controller.fail(ctx, "CONTEXT_NOTE_QUOTE");
+			controller.notices.nextEpisode();
+			controller.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+			expect(warn.mock.calls[2][0]).toContain("A quotation in the note");
+			expect(warn.mock.calls[2][0]).not.toContain("requests are still paused");
+		},
+	);
 	it("handles Pi's threshold compaction after a completed turn like /compact, without an explicit retry", async () => {
 		expect(controller.thresholdReady(ctx)).toBe(true);
 		const value = await controller.compact({ ...event(), reason: "threshold" } as SessionBeforeCompactEvent, ctx);
@@ -1489,6 +1529,107 @@ describe("independent extension preview: sessions it does not protect", () => {
 		return result;
 	}
 
+	it.each([
+		"CONTEXT_BLOCKED",
+		"CONTEXT_BUSY",
+		"CONTEXT_CAPACITY",
+		"CONTEXT_COMPACTION_CANCELLED",
+		"CONTEXT_COMPACTOR_CONFLICT",
+		"CONTEXT_CONFIG",
+		"CONTEXT_CONTINUATION_MISSING",
+		"CONTEXT_INPUT_TOO_LARGE",
+		"CONTEXT_MIGRATION_REQUIRED",
+		"CONTEXT_NOTE_BUDGET",
+		"CONTEXT_NOTE_FROZEN",
+		"CONTEXT_NOTE_INVALID",
+		"CONTEXT_NOTE_QUOTE",
+		"CONTEXT_NOTE_REPAIR_LOSS",
+		"CONTEXT_NOTE_SCOPE",
+		"CONTEXT_NOTE_VERSION",
+		"CONTEXT_NO_CUT",
+		"CONTEXT_NO_MODEL_OR_SOURCE",
+		"CONTEXT_NO_NEW_SOURCE",
+		"CONTEXT_PAYLOAD_TOO_LARGE",
+		"CONTEXT_RECOVERY_MISSING",
+		"CONTEXT_RECOVERY_TOO_LARGE",
+		"CONTEXT_SOURCE_CHANGED",
+		"CONTEXT_TOOL_BOUNDARY",
+		"CONTEXT_UNSETTLED",
+		"CONTEXT_WRITER_CAPACITY",
+		"CONTEXT_WRITER_FAILED",
+		"CONTEXT_WRITER_UNAVAILABLE",
+		"CONTEXT_PREVIEW_UNSUPPORTED",
+		"CONTEXT_PREVIEW_PENDING",
+		"CONTEXT_PREVIEW_MARKER_INVALID",
+		"CONTEXT_PREVIEW_MARKER_IO",
+		"CONTEXT_PREVIEW_SESSION_INVALID",
+		"CONTEXT_PREVIEW_SESSION_IO",
+		"CONTEXT_PREVIEW_COMMIT_UNCONFIRMED",
+		"CONTEXT_PREVIEW_COMPACT_REQUIRED",
+	])("gives %s from a saved failure its own notice, doctor advice and recovery advice", (code) => {
+		new PreviewFailureStore(agentDir).fail(session, code);
+		const preview = controller();
+		const ctx = context();
+		preview.context(messages(), ctx);
+		expect(ctx.abort).toHaveBeenCalledTimes(1);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toMatch(new RegExp(`^Source-linked compaction: .*\\(${code}\\)$`));
+		const report = doctorReport(preview.diagnose(ctx), { disabled: false });
+		expect(report).toContain("requests: paused - ");
+		expect(report).toContain(`(${code})`);
+		for (const text of [warnings[0], report, recoverRefusedNotice(code)]) {
+			expect(text).not.toContain("Run /compaction-doctor for details.");
+			expect(text).not.toMatch(/\b(marker|staged|durable|latch|episode)\b/);
+		}
+	});
+	it("explains a new code in full, isolates sessions and keeps repeats short after a refused recovery", () => {
+		const preview = controller();
+		const ctx = context();
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+		preview.notices.nextEpisode();
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+		expect(warnings).toHaveLength(2);
+		expect(warnings[1]).toBe(
+			"Source-linked compaction: requests are still paused. Run /compact to try again. (CONTEXT_NOTE_QUOTE)",
+		);
+		expect(() => preview.recover(ctx)).toThrow("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
+		preview.notices.nextEpisode();
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+		expect(warnings[2]).toBe(warnings[1]);
+		const other = { ...ctx, sessionManager: new SyntheticSession(root, "other-session") } as ExtensionContext;
+		preview.fail(other, "CONTEXT_NOTE_QUOTE");
+		preview.reportBlocked(other, "CONTEXT_NOTE_QUOTE");
+		expect(warnings[3]).toContain("A quotation in the note");
+		preview.notices.nextEpisode();
+		preview.fail(ctx, "CONTEXT_NOTE_SCOPE");
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_SCOPE");
+		expect(warnings[4]).toContain("The note cites a message");
+		expect(warnings[4]).not.toContain("requests are still paused");
+		const reopened = controller();
+		reopened.context(messages(), ctx);
+		expect(warnings[5]).toContain("A quotation in the note");
+	});
+	it("uses the agreed ready and off notices, with the build kept out of the ready line", () => {
+		expect(readyNotice()).toBe(
+			"Source-linked compaction is on. It writes a checkpoint on /compact and when the context nears its limit. /compaction-doctor checks this session.",
+		);
+		expect(inactiveNotice("image", "1.3.0")).toBe(
+			"Source-linked compaction is off in this session because it contains an image. Pi's own compaction applies, and nothing was changed. Start a new text-only session to use it.",
+		);
+		expect(blockedNotice("CONTEXT_NOTE_QUOTE", true)).toBe(
+			"Source-linked compaction: checkpoint not saved. A quotation in the note doesn't match the message it cites. Requests stay paused, through /reload and restarts, until a checkpoint is saved. Run /compact to try again. (CONTEXT_NOTE_QUOTE)",
+		);
+		expect(blockedNotice("CONTEXT_PREVIEW_UNSUPPORTED", true, "image")).toContain(
+			"Requests stay paused in this session.",
+		);
+	});
+	it("keeps an unknown code on the fallback advice without including raw error text", () => {
+		expect(blockedNotice("CONTEXT_UNKNOWN", false)).toContain(
+			"Run /compaction-doctor for details. (CONTEXT_UNKNOWN)",
+		);
+	});
 	it("classifies host, persistence and content it cannot check", () => {
 		expect(unsupportedReason(session)).toBeUndefined();
 		expect(unsupportedReason(session, "1.0.4")).toBe("host");
@@ -1619,7 +1760,11 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(fs.existsSync(markerPath())).toBe(false);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain("pi-context-memory.json");
-		expect(warnings[0]).toContain("no lasting block is recorded");
+		expect(warnings[0]).toContain("Only this request was stopped.");
+		preview.notices.nextEpisode();
+		preview.context(messages(), ctx);
+		expect(warnings).toHaveLength(2);
+		expect(warnings[1]).toBe(warnings[0]);
 	});
 	it("fails closed when the session cannot be classified during a failed guard", () => {
 		const preview = controller({ configError: "CONTEXT_CONFIG" });
@@ -1684,7 +1829,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		const preview = controller();
 		const report = doctorReport(preview.diagnose(context()), { disabled: false, writerModel: "session" });
 		expect(fs.existsSync(join(agentDir, "context-memory-preview"))).toBe(false);
-		for (const label of ["extension: ok", "host: ok", "session: ok", "writer: ok", "durable block: ok"])
+		for (const label of ["extension: ok", "host: ok", "session: ok", "writer: ok", "requests: ok - not paused"])
 			expect(report).toContain(label);
 		expect(report).toMatch(/manual \/compact: unknown/);
 		expect(report).toContain("Nothing to compact (session too small)");
@@ -1697,9 +1842,9 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(diagnosis).toMatchObject({ state: "blocked", code: "CONTEXT_WRITER_FAILED", protection: "protected" });
 		expect(diagnosis.manualCompaction).toMatchObject({ preview: "retry", recover: false });
 		const report = doctorReport(diagnosis, { disabled: false, writerModel: "session" });
-		expect(report).toContain("manual /compact: retry - a new /compact retries");
+		expect(report).toContain("manual /compact: retry - Run /compact to retry.");
 		expect(report).not.toContain("has to be resolved first");
-		expect(report).toContain("Result: blocked. Run /compact to try again.");
+		expect(report).toContain("Result: requests paused. Run /compact to try again.");
 		const queued = { ...context(), hasPendingMessages: () => true } as unknown as ExtensionContext;
 		expect(preview.diagnose(queued).manualCompaction.preview).toBe("waiting-for-turn");
 	});
@@ -1711,9 +1856,9 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(diagnosis.manualCompaction).toMatchObject({ preview: "retry", recover: true });
 		const report = doctorReport(diagnosis, { disabled: false, writerModel: "session" });
 		expect(report).toContain(
-			"manual /compact: retry - /compaction-recover can confirm the checkpoint Pi already saved",
+			"manual /compact: retry - /compaction-recover can confirm a saved checkpoint without a model call",
 		);
-		expect(report).toContain("Result: blocked. Run /compaction-recover to confirm the saved checkpoint");
+		expect(report).toContain("Result: requests paused. Run /compaction-recover to confirm the saved checkpoint");
 	});
 	it("the doctor calls /compact blocked only when it cannot clear the block in this session", () => {
 		protect();
@@ -1721,7 +1866,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		const unsupported = controller().diagnose(context());
 		expect(unsupported.manualCompaction).toMatchObject({ preview: "blocked", recover: false });
 		expect(doctorReport(unsupported, { disabled: false })).toContain(
-			"manual /compact: blocked - /compact cannot clear CONTEXT_PREVIEW_UNSUPPORTED here: keep this session file and continue in a new text-only session.",
+			"manual /compact: blocked - /compact can't clear this here. Keep this session file and continue in a new text-only session. (CONTEXT_PREVIEW_UNSUPPORTED)",
 		);
 		session.entries = session.entries.filter((entry) => entry.id !== "image-input");
 		session.leafId = session.entries.at(-1)!.id;
@@ -1729,7 +1874,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		const config = controller({ configError: "CONTEXT_CONFIG" }).diagnose(context());
 		expect(config.manualCompaction.preview).toBe("blocked");
 		expect(doctorReport(config, { disabled: false, configError: "CONTEXT_CONFIG" })).toContain(
-			"manual /compact: blocked - /compact cannot clear CONTEXT_CONFIG here: fix or remove that file, then restart Pi.",
+			"manual /compact: blocked - /compact can't clear this here. Fix or remove that file, then restart Pi. (CONTEXT_CONFIG)",
 		);
 		const fixed = new PreviewMemoryController({
 			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "missing/writer" },
@@ -1737,8 +1882,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 		}).diagnose(context());
 		expect(fixed).toMatchObject({ state: "ready", manualCompaction: { preview: "blocked" } });
 		const writerReport = doctorReport(fixed, { disabled: false, writerModel: "missing/writer" });
-		expect(writerReport).toMatch(/manual \/compact: blocked - \/compact cannot clear CONTEXT_WRITER_\w+ here/);
-		expect(writerReport).toContain("Result: ready, but /compact cannot write a checkpoint yet.");
+		expect(writerReport).toMatch(/manual \/compact: blocked - .*\(CONTEXT_WRITER_\w+\)/);
+		expect(writerReport).toContain("Result: requests ready, but /compact can't write a checkpoint yet.");
 		expect(writerReport).not.toContain("run /compact once the conversation has grown");
 	});
 	it("does not latch a damaged session file into the process when only inspected", () => {
@@ -1792,6 +1937,9 @@ describe("independent extension preview: sessions it does not protect", () => {
 		await emit(handlers, "input", { type: "input", text: "Continue again.", source: "interactive" }, ctx);
 		await emit(handlers, "context", { type: "context", messages: messages() }, ctx);
 		expect(warnings).toHaveLength(2);
+		expect(warnings[1]).toBe(
+			"Source-linked compaction: requests are still paused. Run /compact. (CONTEXT_PREVIEW_COMPACT_REQUIRED)",
+		);
 	});
 	it("leaves compaction and cache warming to Pi only where it does not protect the session", async () => {
 		const handlers = loadPreview();

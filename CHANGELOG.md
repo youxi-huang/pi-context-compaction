@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Changed
+
+- The independent preview uses `Source-linked compaction` in notices, leads with the outcome and puts the code last. Repeated inputs blocked by the same code get a short reminder until a checkpoint or recovery is confirmed. `/compaction-doctor` uses shorter details and a `requests` line, and every code its notice paths can produce or restore has specific advice.
+
 ### Security
 
 - Remove the unused upstream Gondolin micro-VM example and its workspace dependency chain, which included `node-forge` affected by GHSA-86w9-cpqp-85rv. Remove its standalone lockfile and the obsolete audit exception, and update the example index and isolation guide. The documented agent maintenance commands, resident compaction runtime and independent extension do not use this example.

@@ -165,7 +165,7 @@ async function worker() {
 		console[level] = (...parts) => {
 			const text = parts.map(String).join(" ");
 			if (commandOutput) commandOutput.push(text);
-			else if (!text.includes("context-memory preview")) original(...parts);
+			else if (!text.includes("Source-linked compaction")) original(...parts);
 		};
 	}
 	const stock = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js")).href);

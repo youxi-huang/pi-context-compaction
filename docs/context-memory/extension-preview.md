@@ -75,14 +75,14 @@ preserves Pi credentials, other package registrations and session files.
 ## First use
 
 Start a new, persistent, text-only session. After Pi starts or reloads its
-extensions, the preview shows one short line saying it is active. Then run:
+extensions, the preview shows `Source-linked compaction is on.` Then run:
 
 ```text
 /compaction-doctor
 ```
 
 It prints a short checklist: extension loaded, host version, session support,
-writer, manual `/compact` eligibility and any durable block. It calls no model,
+writer, manual `/compact` eligibility and whether requests are paused. It calls no model,
 writes no failure record and does not change the session. After a failed
 attempt, the manual `/compact` line says which way out applies: `retry` when a
 new `/compact` replaces the failed attempt, with `/compaction-recover` named
@@ -318,8 +318,10 @@ formats and incompatible hosts require a fresh supported session after fixing
 the cause. Neither recovery command forces those cases through validation.
 
 Each failure and each blocked input produces one notice (v0.3.2 could repeat
-the same notice two to four times). The notice names the controlled error code,
-says what happened and whether requests are paused, and gives the next step;
+the same notice two to four times). The first explains what happened, whether
+requests are paused and what to do, with the controlled error code last.
+Later inputs blocked by the same code get a short reminder until a checkpoint
+or recovery is confirmed;
 `/compact` is suggested only where it can help. Pi's overflow recovery request
 is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
 `CONTEXT_PREVIEW_UNSUPPORTED`; before v0.4.0, threshold

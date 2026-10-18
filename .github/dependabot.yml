@@ -8,7 +8,6 @@ updates:
     directories:
       - /
       - /packages/coding-agent/examples/extensions/custom-provider-anthropic
-      - /packages/coding-agent/examples/extensions/gondolin
       - /packages/coding-agent/examples/extensions/sandbox
       - /packages/coding-agent/examples/extensions/with-deps
       - /packages/agent/docs/mobile-handoff/02-plugins/02-sandbox

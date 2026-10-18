@@ -14,6 +14,12 @@ This repository is a snapshot of upstream Pi plus one new extension directory, a
 
 The upstream `README.md`, `CONTRIBUTING.md` and `AGENTS.md` are kept as `UPSTREAM_README.md`, `UPSTREAM_CONTRIBUTING.md` and `UPSTREAM_AGENTS.md`. They describe upstream Pi, not this distribution.
 
+## Omitted upstream example
+
+The Gondolin micro-VM example under `packages/coding-agent/examples/extensions/gondolin/` is omitted after the maintainer authorized removal of unused examples for dependency security maintenance. The documented agent operations, CI, evaluation and independent extension do not load it. Its workspace declaration, standalone lockfile, TypeScript exclusion, Dependabot directory and audit exception are removed together; the root lockfile is regenerated with npm. The example index and containerization guide describe the remaining distribution.
+
+This is an example and dependency change, with no host runtime source changes or new fingerprint inputs. The preserved `UPSTREAM_README.md` still describes the original upstream snapshot, including its Gondolin example.
+
 ## Independent preview
 
 `context-memory/preview/` is a separate ordinary extension using public imports

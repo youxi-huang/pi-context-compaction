@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Security
+
+- Remove the unused upstream Gondolin micro-VM example and its workspace dependency chain, which included `node-forge` affected by GHSA-86w9-cpqp-85rv. Remove its standalone lockfile and the obsolete audit exception, and update the example index and isolation guide. The documented agent maintenance commands, resident compaction runtime and independent extension do not use this example.
+
 ## [v0.5.1] — 2026-10-18
 
 v0.5.1 makes the independent extension's quotation repair cheaper and its failures easier to diagnose. The repair now runs without reasoning, whatever the writer's effort: in v0.5.0 one repair at `high` spent its output on reasoning and returned nothing usable. `/compaction-status` names what each writer call asked for, what its request carried and how it ended, and counts the citations behind a scope refusal. A repair can no longer withdraw a ruling a user stated, and `context_history`'s list no longer marks a still-valid fact as superseded. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged. Two bounded runs with DeepSeek V4.1 Flash on Pi 1.3.0 are in the validation record: over 38 planted repair cases, two attempts each, the repair passed 76 of 76 without reasoning against 75 of 76 at `high`, and in writer benches beside a same-day run of the v0.5.0 release build the candidate committed 121 of 128 notes against 62 of 64. They cover one model and synthetic tasks, not a general failure rate.

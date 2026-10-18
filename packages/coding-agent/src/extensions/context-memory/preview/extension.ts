@@ -180,7 +180,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		name: "context_history",
 		label: "Context history",
 		description:
-			"Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
+			"Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked; sourceRevisedBy means a later fact revised the item's source entry without saying which fact it replaced, so check the excerpt. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
 		promptGuidelines: [
 			"Search context_history for earlier decisions and evidence omitted by compaction, then read the matching original entry ID. Follow a cursor by repeating the same operation, query and entryId with that cursor.",
 			"To see how a decision, constraint or setting changed, list its kind with a query; read the cited entry before relying on it.",

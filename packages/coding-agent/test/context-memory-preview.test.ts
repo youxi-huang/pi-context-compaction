@@ -1727,6 +1727,58 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	it.each(["native", "protected"])(
+		"keeps the %s reopen notice after Pi's startup status, once per session",
+		async (kind) => {
+			if (kind === "native") addNativeCheckpoint();
+			else protect();
+			const handlers = loadPreview();
+			let statusText = "";
+			const notify = vi.fn((text: string, level = "info") => {
+				if (level === "info") statusText = text;
+			});
+			const base = context();
+			const ctx = { ...base, hasUI: true, ui: { ...base.ui, notify, setStatus: vi.fn() } };
+			const expected = kind === "native" ? "Source-linked compaction is off in this session" : readyNotice();
+			await emit(handlers, "session_start", {}, ctx);
+			// Official Pi renders its compaction count after session_start through the same status text.
+			statusText = "Session compacted 1 time";
+			const read = vi.spyOn(fs, "readFileSync");
+			await emit(handlers, "input", { text: "Continue", source: "interactive" }, ctx);
+			expect(statusText).toContain(expected);
+			expect(read).not.toHaveBeenCalled();
+			await emit(handlers, "input", { text: "Continue again", source: "interactive" }, ctx);
+			await emit(handlers, "session_start", {}, ctx);
+			await emit(handlers, "input", { text: "Still here", source: "interactive" }, ctx);
+			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(1);
+			expect(ctx.abort).not.toHaveBeenCalled();
+			expect(fs.existsSync(markerPath())).toBe(false);
+			session = new SyntheticSession(root, "second-session");
+			if (kind === "native") addNativeCheckpoint();
+			else protect();
+			const next = { ...ctx, sessionManager: session } as unknown as ExtensionContext;
+			await emit(handlers, "session_start", {}, next);
+			await emit(handlers, "input", { text: "Another session", source: "interactive" }, next);
+			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(2);
+		},
+	);
+	it("does not deliver a deferred ready notice after a failure or into another session", () => {
+		protect();
+		const preview = controller();
+		const base = context();
+		const notify = vi.fn();
+		const ctx = { ...base, hasUI: true, ui: { ...base.ui, notify, setStatus: vi.fn() } };
+		preview.sessionStart(ctx);
+		preview.showSessionNotice({
+			...ctx,
+			sessionManager: new SyntheticSession(root, "other-session"),
+		} as unknown as ExtensionContext);
+		expect(notify).not.toHaveBeenCalled();
+		preview.sessionStart(ctx);
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		preview.showSessionNotice(ctx);
+		expect(notify).not.toHaveBeenCalled();
+	});
 	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {
 		const handlers = loadPreview();
 		const setStatus = vi.fn();

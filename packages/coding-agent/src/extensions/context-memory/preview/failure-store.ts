@@ -2,11 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
-import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, hashEntries, isRecord } from "../identity.ts";
+import {
+	CONTEXT_KEEP_NONE,
+	CONTEXT_MEMORY_KIND,
+	CONTEXT_MEMORY_VERSION,
+	hashEntries,
+	hashEntryPrefixes,
+	isRecord,
+} from "../identity.ts";
 import type {
 	PreviewAttempt,
 	PreviewCompaction,
 	PreviewFailureStoreContract,
+	PreviewReadback,
 	PreviewSession,
 	PreviewStatus,
 } from "./contracts.ts";
@@ -340,8 +348,8 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		throw new PreviewStoreError(code);
 	}
 
-	status(session: PreviewSession): PreviewStatus {
-		return this.evaluate(session, true);
+	status(session: PreviewSession, branchHash?: string, readback?: PreviewReadback): PreviewStatus {
+		return this.evaluate(session, true, false, branchHash, readback);
 	}
 
 	/** The same evaluation without latching a newly observed failure; for read-only diagnostics. */
@@ -363,7 +371,14 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	private evaluate(session: PreviewSession, latch: boolean, request = false): PreviewStatus {
+	private evaluate(
+		session: PreviewSession,
+		latch: boolean,
+		request = false,
+		branchHash?: string,
+		readback?: PreviewReadback,
+		serializedBranch?: readonly string[],
+	): PreviewStatus {
 		try {
 			const identity = this.identity(session);
 			const marker = this.readMarker(identity, latch);
@@ -372,6 +387,11 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 			if (latched) return { state: "blocked", code: latched };
 			if (request && this.unchangedSinceReadback(session, identity)) return { state: "ready" };
 			if (request) this.frontier = undefined;
+			if (readback?.sourceHash && readback.leafId === session.getLeafId()) {
+				if (readback.sourceHash !== (branchHash ?? hashEntries(session.getBranch())))
+					throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				return { state: "ready" };
+			}
 			// Stock Pi allocates a path before its first user message. Empty persistent sessions may start normally.
 			const disk = readSession(identity, true);
 			if (!disk) {
@@ -379,8 +399,24 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 					throw new PreviewStoreError("CONTEXT_PREVIEW_SESSION_IO");
 			} else {
 				const leafId = session.getLeafId();
-				if (leafId !== null && hashEntries(branchAt(disk.entries, leafId)) !== hashEntries(session.getBranch()))
-					throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+				if (leafId !== null) {
+					const branch = branchAt(disk.entries, leafId);
+					if (serializedBranch) {
+						if (
+							branch.length !== serializedBranch.length ||
+							branch.some((entry, index) => JSON.stringify(entry) !== serializedBranch[index])
+						)
+							throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+					} else {
+						const sourceHash = hashEntries(branch);
+						if (sourceHash !== (branchHash ?? hashEntries(session.getBranch())))
+							throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+						if (readback) {
+							readback.leafId = leafId;
+							readback.sourceHash = sourceHash;
+						}
+					}
+				}
 				const file = fileIdentity(identity.file);
 				// Another writer between the read and this stat simply leaves no frontier.
 				if (request && file?.size === BigInt(disk.bytes)) {
@@ -429,8 +465,8 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 	}
 
 	/** Request guard. Full readback at a trust boundary, then only the length check until the next one. */
-	assertReady(session: PreviewSession): void {
-		const status = this.evaluate(session, true, true);
+	assertReady(session: PreviewSession, serializedBranch?: readonly string[]): void {
+		const status = this.evaluate(session, true, true, undefined, undefined, serializedBranch);
 		if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
 	}
 
@@ -439,12 +475,19 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		this.frontier = undefined;
 	}
 
-	begin(session: PreviewSession, explicitRetry = false): PreviewAttempt {
+	begin(
+		session: PreviewSession,
+		explicitRetry = false,
+		branchHash?: string,
+		readback: PreviewReadback = {},
+	): PreviewAttempt {
 		this.frontier = undefined;
 		try {
 			const identity = this.identity(session);
-			if (!explicitRetry) this.assertReady(session);
-			else {
+			if (!explicitRetry) {
+				const status = this.evaluate(session, true, false, branchHash, readback);
+				if (status.state !== "ready") throw new PreviewStoreError(status.code ?? "CONTEXT_BLOCKED");
+			} else {
 				try {
 					this.readMarker(identity);
 				} catch (error) {
@@ -461,10 +504,13 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				sessionId: identity.sessionId,
 				leafId,
 				lastCheckpointId: [...branch].reverse().find((entry) => entry.type === "compaction")?.id ?? null,
-				sourceHash: hashEntries(branch),
+				sourceHash: branchHash ?? hashEntries(branch),
 			};
-			if (hashEntries(branchAt(readSession(identity).entries, leafId)) !== attempt.sourceHash)
-				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
+			const diskHash =
+				readback.leafId === leafId
+					? readback.sourceHash
+					: hashEntries(branchAt(readSession(identity).entries, leafId));
+			if (diskHash !== attempt.sourceHash) throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			writeMarker(this.path(identity), {
 				version: 1,
 				state: "pending",
@@ -548,15 +594,20 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 		}
 	}
 
-	commit(session: PreviewSession, entry: CompactionEntry): void {
-		this.confirm(session, entry, false);
+	commit(session: PreviewSession, entry: CompactionEntry, branchHash?: string): void {
+		this.confirm(session, entry, false, branchHash);
 	}
 
-	recover(session: PreviewSession, entry: CompactionEntry): void {
-		this.confirm(session, entry, true);
+	recover(session: PreviewSession, entry: CompactionEntry, branchHash?: string): void {
+		this.confirm(session, entry, true, branchHash);
 	}
 
-	private confirm(session: PreviewSession, entry: CompactionEntry, explicitRecovery: boolean): void {
+	private confirm(
+		session: PreviewSession,
+		entry: CompactionEntry,
+		explicitRecovery: boolean,
+		branchHash?: string,
+	): void {
 		this.frontier = undefined;
 		let recoveryMarker: Marker | undefined;
 		try {
@@ -579,7 +630,10 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			// A previous cleanup error may also have prevented its blocked marker writeback.
 			// Explicit same-process recovery first restores that evidence durably, then rechecks everything.
-			if (!persisted) this.recordFailure(session, marker.code, marker);
+			if (!persisted) {
+				this.recordFailure(session, marker.code, marker);
+				branchHash = undefined;
+			}
 			this.assertCandidate(marker.attempt, entry);
 			const disk = readSession(identity).entries;
 			const stored = disk.get(entry.id);
@@ -591,12 +645,14 @@ export class PreviewFailureStore implements PreviewFailureStoreContract {
 				stored.parentId !== marker.attempt.leafId
 			)
 				throw new PreviewStoreError("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
-			const sources = branchAt(disk, marker.attempt.leafId);
+			const diskBranch = branchAt(disk, entry.id);
+			const sources = diskBranch.slice(0, -1);
+			const hashes = hashEntryPrefixes(diskBranch, [sources.length, diskBranch.length]);
 			if (
-				hashEntries(sources) !== marker.attempt.sourceHash ||
+				hashes.get(sources.length) !== marker.attempt.sourceHash ||
 				([...sources].reverse().find((item) => item.type === "compaction")?.id ?? null) !==
 					marker.attempt.lastCheckpointId ||
-				hashEntries(session.getBranch()) !== hashEntries(branchAt(disk, entry.id))
+				(branchHash ?? hashEntries(session.getBranch())) !== hashes.get(diskBranch.length)
 			)
 				throw new PreviewStoreError("CONTEXT_SOURCE_CHANGED");
 			this.assertCoverage(entry, sources, marker.attempt.sourceHash);

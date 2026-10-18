@@ -177,6 +177,96 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 			state: [{ text: "The service now uses port 4318.", sources: ["source-2"], supersedes: ["source-1"] }],
 		};
 	}
+	it.each(["working", "throwing", "absent"])("keeps footer state advisory with a %s UI", async (ui) => {
+		const setStatus = vi.fn((_key: string, _text: string | undefined) => {
+			if (ui === "throwing") throw new Error("Synthetic footer failure");
+		});
+		const display = { ...ctx, hasUI: ui !== "absent", ui: { ...ctx.ui, setStatus } };
+		const states: Array<string | undefined> = [];
+		controller.sessionStart(display);
+		states.push(setStatus.mock.lastCall?.[1]);
+		const pending = controller.compact(event(), display);
+		states.push(setStatus.mock.lastCall?.[1]);
+		const value = await pending;
+		expect(value.details?.note).toEqual(note());
+		states.push(setStatus.mock.lastCall?.[1]);
+		const entry = saved(session, value);
+		session.append(entry);
+		controller.committed(
+			{ type: "session_compact", compactionEntry: entry, fromExtension: true, reason: "manual", willRetry: false },
+			display,
+		);
+		states.push(setStatus.mock.lastCall?.[1]);
+		expect(store.inspect(session).state).toBe("ready");
+		appendRuling();
+		const wrong = note();
+		wrong.instructions[0].quote = "Fabricated deployment permission.";
+		output = wrong;
+		await expect(controller.compact(event(), display)).rejects.toThrow("CONTEXT_NOTE_QUOTE");
+		states.push(setStatus.mock.lastCall?.[1]);
+		expect(store.inspect(session)).toMatchObject({ state: "blocked", code: "CONTEXT_NOTE_QUOTE" });
+		output = note();
+		const retry = await controller.compact(event(), display);
+		const second = { ...saved(session, retry), id: "checkpoint-2" };
+		session.append(second);
+		controller.compactionFailed(
+			{
+				type: "session_compact_failed",
+				reason: "manual",
+				aborted: false,
+				willRetry: false,
+				fromExtension: true,
+			},
+			display,
+		);
+		states.push(setStatus.mock.lastCall?.[1]);
+		expect(store.inspect(session).state).toBe("blocked");
+		controller.recover(display);
+		states.push(setStatus.mock.lastCall?.[1]);
+		expect(store.inspect(session).state).toBe("ready");
+		expect(() => controller.recover(display)).toThrow("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
+		states.push(setStatus.mock.lastCall?.[1]);
+		controller.sessionStart(display);
+		states.push(setStatus.mock.lastCall?.[1]);
+		const other = { ...display, sessionManager: new SyntheticSession(root, "other-session") };
+		controller.sessionStart(other);
+		states.push(setStatus.mock.lastCall?.[1]);
+		controller.standAside(other, "image");
+		states.push(setStatus.mock.lastCall?.[1]);
+		if (ui === "absent") {
+			expect(setStatus).not.toHaveBeenCalled();
+		} else {
+			expect(setStatus.mock.calls.every(([key]) => key === "context-memory")).toBe(true);
+			expect(states).toEqual([
+				"compaction: on",
+				"compaction: writing note",
+				"compaction: writing note",
+				"compaction: 1 checkpoint",
+				"compaction: paused, see /compaction-doctor",
+				"compaction: paused, see /compaction-doctor",
+				"compaction: 2 checkpoints",
+				"compaction: 2 checkpoints",
+				"compaction: 2 checkpoints",
+				"compaction: on",
+				undefined,
+			]);
+		}
+		expect(ctx.abort).not.toHaveBeenCalled();
+	});
+	it.each(["pending", "blocked", "memory"])("shows a %s failure as paused when a session starts", (state) => {
+		if (state === "pending") store.begin(session);
+		else if (state === "blocked") store.fail(session, "CONTEXT_NOTE_QUOTE");
+		else {
+			vi.spyOn(store, "fail").mockImplementation(() => {
+				throw new Error("CONTEXT_PREVIEW_MARKER_IO");
+			});
+			controller.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		}
+		const setStatus = vi.fn();
+		controller.sessionStart({ ...ctx, hasUI: true, ui: { ...ctx.ui, setStatus } });
+		expect(setStatus).toHaveBeenLastCalledWith("context-memory", "compaction: paused, see /compaction-doctor");
+		expect(ctx.abort).toHaveBeenCalledOnce();
+	});
 	it("prepares without a pending marker, reuses full coverage with no foreground call, then requires disk confirmation", async () => {
 		await prepare();
 		expect(store.markerPresent(session)).toBe(false);
@@ -1488,6 +1578,49 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	it("clears an earlier footer when disabled, without installing compaction hooks", async () => {
+		fs.writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ enabled: false }));
+		const handlers = loadPreview();
+		const setStatus = vi.fn();
+		const ctx = context();
+		await emit(handlers, "session_start", {}, { ...ctx, hasUI: true, ui: { ...ctx.ui, setStatus } });
+		expect(setStatus).toHaveBeenCalledExactlyOnceWith("context-memory", undefined);
+		expect(handlers.has("session_before_compact")).toBe(false);
+		expect(fs.existsSync(markerPath())).toBe(false);
+	});
+	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {
+		const handlers = loadPreview();
+		const setStatus = vi.fn();
+		const base = context();
+		const ctx = { ...base, hasUI: true, ui: { ...base.ui, setStatus } };
+		await emit(handlers, "session_start", {}, ctx);
+		await emit(handlers, "context", { messages: messages() }, ctx);
+		setStatus.mockClear();
+		await emit(handlers, "context", { messages: messages() }, ctx);
+		await emit(handlers, "before_provider_request", { payload: { messages: [] } }, ctx);
+		expect(setStatus).not.toHaveBeenCalled();
+		await emit(handlers, "before_provider_request", { payload: { content: "x".repeat(600_000) } }, ctx);
+		expect(ctx.abort).toHaveBeenCalledOnce();
+		expect(setStatus).not.toHaveBeenCalled();
+		expect(fs.existsSync(markerPath())).toBe(false);
+		vi.mocked(ctx.abort).mockClear();
+		protect();
+		const first = session.getLeafId();
+		const next = candidate(session);
+		next.details!.build = "stock-preview+test";
+		session.append({ ...saved(session, next), id: "checkpoint-2" });
+		const read = vi.spyOn(fs, "readFileSync");
+		await emit(handlers, "session_tree", {}, ctx);
+		expect(setStatus).toHaveBeenLastCalledWith("context-memory", "compaction: 2 checkpoints");
+		session.leafId = first;
+		await emit(handlers, "session_tree", {}, ctx);
+		expect(setStatus).toHaveBeenLastCalledWith("context-memory", "compaction: 1 checkpoint");
+		session.leafId = "reply-1";
+		await emit(handlers, "session_tree", {}, ctx);
+		expect(setStatus).toHaveBeenLastCalledWith("context-memory", "compaction: on");
+		expect(read).not.toHaveBeenCalled();
+		expect(ctx.abort).not.toHaveBeenCalled();
+	});
 
 	it("classifies host, persistence and content it cannot check", () => {
 		expect(unsupportedReason(session)).toBeUndefined();
@@ -2079,7 +2212,7 @@ describe("preview work notes (arm B) commit without a writer and keep the user's
 	it("ignores notes from another branch and counterfeit notes written into the session", async () => {
 		noteTurn("other", { state: [{ text: "Sibling-branch observation.", sources: ["source-1"] }] });
 		session.leafId = "reply-1";
-		controller.branchChanged();
+		controller.branchChanged(ctx);
 		user("trace-1", trace);
 		reply("trace-reply-1");
 		session.append({

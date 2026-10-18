@@ -319,7 +319,7 @@ describe("preview request validation: full at trust boundaries, new entries betw
 		const validate = vi.spyOn(notes, "validateMemoryCheckpoints");
 		controller.assertReady(ctx);
 		session.append(user("descendant", "leaf"));
-		controller.branchChanged();
+		controller.branchChanged(ctx);
 		controller.assertReady(ctx);
 		expect(validate).toHaveBeenCalledTimes(2);
 	});

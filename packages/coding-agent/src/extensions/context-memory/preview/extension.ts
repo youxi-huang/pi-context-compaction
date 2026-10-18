@@ -8,6 +8,7 @@ import { PreviewFailureStore } from "./failure-store.ts";
 import { listHistory, previewHistorySchema } from "./history-view.ts";
 import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
+import { setStatusLine } from "./status-line.ts";
 import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
 
@@ -67,7 +68,10 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		},
 	});
 	// Explicitly disabling this package ends its protection. Invalid config never takes this path.
-	if (disabled) return;
+	if (disabled) {
+		pi.on("session_start", (_event, ctx) => setStatusLine(ctx, undefined));
+		return;
+	}
 
 	pi.registerCommand("compaction-recover", {
 		description: "Confirm an already saved, staged checkpoint after an interrupted commit observation",
@@ -154,7 +158,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
 	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
 	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-	pi.on("session_tree", () => controller.branchChanged());
+	pi.on("session_tree", (_event, ctx) => controller.branchChanged(ctx));
 	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
 	pi.on("session_shutdown", () => controller.shutdownPreparation());
 	pi.registerTool({

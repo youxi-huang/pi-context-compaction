@@ -605,7 +605,9 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 						tools: [],
 					},
 					{
-						...(writerEffort === "off" ? {} : { reasoning: writerEffort }),
+						// No reasoning: the repair rebinds at most five quotations. On DeepSeek V4.1 Flash it passed the
+						// repair cases as often as at `high`, with a quarter of the output, and cannot spend its budget
+						// reasoning, as one 0.5.0 repair did.
 						maxTokens,
 						signal: options.signal,
 						maxRetries: 0,

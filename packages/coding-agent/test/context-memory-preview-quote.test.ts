@@ -432,7 +432,7 @@ describe("preview writer quotation repair", () => {
 	});
 
 	it("records each call's requested effort, the reasoning its payload carries and how it ended", async () => {
-		// A repair that spends its whole output on reasoning ends at the length limit with no usable JSON.
+		// A repair cut off at the length limit returns no usable JSON; the record says so.
 		const answers = [response(misattributed()), { ...response('{"repairs":[{"sect'), stopReason: "length" as const }];
 		const reasoning = { ...model, reasoning: true };
 		const tools: { choice?: unknown; count: number }[] = [];
@@ -447,8 +447,10 @@ describe("preview writer quotation repair", () => {
 						{
 							model: "quote-writer",
 							messages: [{ role: "user", content: "not recorded" }],
-							thinking: { type: "enabled" },
-							reasoning_effort: options.reasoning === "medium" ? "high" : options.reasoning,
+							thinking: { type: options?.reasoning ? "enabled" : "disabled" },
+							...(options?.reasoning
+								? { reasoning_effort: options.reasoning === "medium" ? "high" : options.reasoning }
+								: {}),
 							max_tokens: options.maxTokens,
 						},
 						reasoning,
@@ -462,8 +464,10 @@ describe("preview writer quotation repair", () => {
 		const calls = test.progress.at(-1)?.writerCallDetails ?? [];
 		expect(calls).toMatchObject([
 			{ phase: "generate", effort: "medium", sent: { effort: "high", thinking: "enabled", maxTokens: 4096 } },
-			{ phase: "repair", effort: "medium", sent: { effort: "high", thinking: "enabled", maxTokens: 4096 } },
+			// The repair runs without reasoning, whatever the writer's effort.
+			{ phase: "repair", effort: "off", sent: { thinking: "disabled", maxTokens: 4096 } },
 		]);
+		expect(calls[1].sent).not.toHaveProperty("effort");
 		expect(calls.map((call) => call.stopReason)).toEqual(["stop", "length"]);
 		expect(JSON.stringify(calls)).not.toContain("not recorded");
 		// Like the session writer, the repair sets no tool choice; it offers no tools to choose from.

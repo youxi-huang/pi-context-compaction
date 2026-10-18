@@ -8,10 +8,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Added
 
-- `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer and repair send `reasoning_effort: "high"`.
+- `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer sends `reasoning_effort: "high"`.
 
 ### Changed
 
+- The quotation repair runs without reasoning, whatever the writer's effort. In v0.5.0 one repair at `high` spent 10,720 of its 11,962 output tokens reasoning and returned nothing usable. On DeepSeek V4.1 Flash over the 38 planted repair cases, two attempts each, the repair passed 76 of 76 without reasoning against 75 of 76 at `high` and at `low`, at a median of 65 output tokens and 1.4 s against 277 and 2.4 s at `high`, and none of the three levels lost a user's ruling. The size repair keeps the writer's effort; it was not measured.
 - The quotation and size repairs set no tool choice, as the session writer does. Their requests offer no tools, so the model sees the same request; they no longer send `tool_choice: "none"` without any tool to choose.
 
 ### Fixed

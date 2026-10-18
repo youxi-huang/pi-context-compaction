@@ -230,7 +230,9 @@ checked again. A failed quotation is a fault in the evidence, not a
 retraction: a repair that withdraws an instruction whose quoted text a user
 message contains refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, since a
 misquoted rule is still a rule. Re-citing it or dropping its quote remains
-possible. `noteRepair` governs this repair and the size repair, and a
+possible. Since 0.5.1 the quotation repair runs without reasoning, whatever the
+writer's effort: it rebinds at most five quotations, and on DeepSeek it passed
+as often without reasoning as at `high`, at a quarter of the output. `noteRepair` governs this repair and the size repair, and a
 compaction spends at most one of them. A second failure blocks as before. The
 extension never moves a quotation to another entry on its own: text found
 only in an assistant message or a tool output is not a user ruling.

@@ -146,6 +146,18 @@ The deliverable is one `validation.md` entry with the screens, every path replac
 
 V2's [terminal entry](validation.md#preview-interactive-terminal-on-official-pi-130-2026-10-18-utc) found what no synthetic check had: Pi's own errors after the preview's notices, and a notice that never shows. Like the second batch, these packages start from `main` and open their PRs against `main`.
 
+### X1 Hold input while paused
+
+Chosen by the maintainer on 2026-10-18 over keeping today's path. In a paused session, an interactive input that Pi would send as a prompt stops at Pi's `input` event, before any request. The preview shows the notice it shows today (the short repeat, or the full notice for a new code), returns `{ action: "handled" }`, and puts the typed text back in the editor with `ctx.ui.setEditorText`. Nothing typed is lost, no request starts, Pi prints no `This operation was aborted`, and the input is not recorded in the session.
+
+- Paused means what the footer calls paused: a failure the controller already holds in memory for this session. The handler reads no disk and calls neither `diagnose()` nor `status()`.
+- Only `source: "interactive"` with a UI, and only text. Input with images, RPC and print mode, input an extension sends, and a session that is not paused keep today's path.
+- Pi runs extension commands, `/compaction-*` included, before the `input` event, and `/compact` is Pi's own command, so neither reaches the handler. Confirm both on official Pi 1.3.0, 1.2.0 and 1.1.0.
+- The request guard does not change and stays the backstop: a request that still reaches it in a paused session is stopped as before. One notice per input stays the rule.
+- Regressions in `test/context-memory-preview.test.ts`: a paused interactive input is handled and its text restored; a session that is not paused, a non-interactive source and an input with images continue; the request guard still stops a request in a paused session.
+- Documents: the README's recovery section and the preview guide's failure section say that input typed while paused stays in the editor. One `Changed` line in `CHANGELOG.md`.
+- Evidence: steps 4 and 5 of the V2 driver at 80 columns, before and after, in the PR description, and CI green.
+
 ### X2 The off notice on reopen
 
 Reopening a session with a checkpoint from Pi's own compaction shows no `Source-linked compaction is off in this session`, although `/compaction-doctor` reports the session inactive (step 6 of the terminal entry). Find why on official Pi 1.3.0, 1.2.0 and 1.1.0 with the V2 driver from PR #61, and check whether the same cause hides the ready notice when a protected session reopens.
@@ -185,4 +197,5 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | U3 Where the time goes | Measured in #59; V1 takes up two of its proposals |
 | V1 Shorter pause, faster reopen | Done in #62: 44% less work around the writer and 37% less added to a reopen at 40 checkpoints |
 | V2 What the terminal shows | Done in #61 |
+| X1 Hold input while paused | open |
 | X2 The off notice on reopen | open |

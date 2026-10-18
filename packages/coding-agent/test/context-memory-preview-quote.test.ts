@@ -347,7 +347,12 @@ describe("preview writer quotation repair", () => {
 		const without = await writeMemory(withdrawn.options);
 		expect(without.note.reasons).toEqual([]);
 		expect(without.note.state).toEqual(absent.state);
-		expect(withdrawn.progress.at(-1)?.quotationRepair).toEqual({ requoted: 0, unquoted: 0, dropped: 1 });
+		expect(withdrawn.progress.at(-1)?.quotationRepair).toEqual({
+			requoted: 0,
+			unquoted: 0,
+			dropped: 1,
+			droppedFrom: { reasons: 1 },
+		});
 	});
 
 	it("blocks when the repaired note still fails, naming the repair in the message", async () => {
@@ -372,6 +377,58 @@ describe("preview writer quotation repair", () => {
 			repairOf({ text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317.", supersedes: ["u2"] }),
 		]);
 		await expect(writeMemory(supersedes.options)).rejects.toThrow("CONTEXT_NOTE_REPAIR_LOSS");
+	});
+
+	it("refuses a repair that withdraws an instruction whose quotation a user message contains", async () => {
+		// The port rule's quotation is in user entry u1. Withdrawing the rule would commit a note without it, so the
+		// note blocks instead; re-citing or dropping the quote stays available.
+		const test = quoteHarness([misattributed(), repairOf(null)]);
+		await expect(writeMemory(test.options)).rejects.toThrow(
+			"CONTEXT_NOTE_REPAIR_LOSS: a quotation repair may not withdraw an instruction whose quotation a user message contains",
+		);
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(test.progress.at(-1)?.quotationRepair).toBeUndefined();
+		// The same holds when the writer cited the assistant: the user's message still holds the ruling.
+		const cited = note({
+			instructions: [{ text: "Port rule.", sources: ["a1"], quote: "Keep the service on port 4317." }],
+		});
+		await expect(writeMemory(quoteHarness([cited, repairOf(null)]).options)).rejects.toThrow(
+			"CONTEXT_NOTE_REPAIR_LOSS",
+		);
+		const kept = quoteHarness([misattributed(), repairOf({ text: "Port rule.", sources: ["u3"] })]);
+		expect((await writeMemory(kept.options)).note.instructions).toEqual([{ text: "Port rule.", sources: ["u3"] }]);
+	});
+
+	it("withdraws an instruction no user message supports, and counts withdrawals by section", async () => {
+		// The quoted proposal is only in the assistant's entry a1, so it is no user ruling; the threshold quotation
+		// is in no entry. Both are the writer's to withdraw.
+		const proposal = note({
+			instructions: [
+				{
+					text: "Deploy only on Thursday.",
+					sources: ["u2"],
+					quote: "Understood: \u201Cdeploy only on Thursday\u201D is my proposal.",
+				},
+			],
+			reasons: [{ text: "Threshold raised.", sources: ["u3"], quote: "The threshold was raised to 15." }],
+		});
+		expect(diagnoseQuotes(proposal, branch).failures.map((failure) => [failure.kind, failure.foundIn])).toEqual([
+			["elsewhere", [{ entryId: "a1", role: "assistant" }]],
+			["absent", []],
+		]);
+		const test = quoteHarness([
+			proposal,
+			{ repairs: [...repairOf(null).repairs, ...repairOf(null, "reasons").repairs] },
+		]);
+		const result = await writeMemory(test.options);
+		expect(result.note.instructions).toEqual([]);
+		expect(result.note.reasons).toEqual([]);
+		expect(test.progress.at(-1)?.quotationRepair).toEqual({
+			requoted: 0,
+			unquoted: 0,
+			dropped: 2,
+			droppedFrom: { instructions: 1, reasons: 1 },
+		});
 	});
 
 	it("requires one answer for each failing fact and nothing else", () => {

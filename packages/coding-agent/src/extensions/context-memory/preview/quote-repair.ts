@@ -46,6 +46,8 @@ export interface QuoteRepairOutcome {
 	unquoted: number;
 	/** Facts the writer withdrew. */
 	dropped: number;
+	/** Withdrawn facts by section, present when any was withdrawn. */
+	droppedFrom?: Partial<Record<(typeof noteSections)[number], number>>;
 }
 
 export function quoteRepairEligible(diagnosis: QuoteDiagnosis): boolean {
@@ -125,7 +127,10 @@ function sameFact(before: NoteFact, after: NoteFact): boolean {
 
 /**
  * Splice the writer's replacements into the candidate. Every other fact stays byte for byte; the caller validates
- * the whole result again.
+ * the whole result again. A failed quotation is a fault in the evidence, not a retraction: an instruction whose
+ * quoted text a user message contains is never withdrawn here, and the note blocks instead. The user said it, and
+ * a misquoted rule is still a rule. Text found nowhere, or only in assistant or tool entries, leaves the decision
+ * to the writer.
  */
 export function applyQuoteRepair(
 	value: MemoryNote,
@@ -143,11 +148,21 @@ export function applyQuoteRepair(
 	const note = structuredClone(value);
 	const outcome: QuoteRepairOutcome = { requoted: 0, unquoted: 0, dropped: 0 };
 	const dropped = new Map<(typeof noteSections)[number], Set<number>>();
+	const userRuling = new Set(
+		failures.filter((failure) => failure.foundIn.some((location) => location.role === "user")).map(key),
+	);
 	for (const repair of repairs) {
 		const facts = note[repair.section];
 		const before = value[repair.section][repair.index];
 		if (repair.fact === null) {
+			if (repair.section === "instructions" && userRuling.has(key(repair)))
+				throw new Error(
+					"CONTEXT_NOTE_REPAIR_LOSS: a quotation repair may not withdraw an instruction whose quotation a user message contains; no checkpoint committed",
+				);
 			outcome.dropped++;
+			const from = outcome.droppedFrom ?? {};
+			from[repair.section] = (from[repair.section] ?? 0) + 1;
+			outcome.droppedFrom = from;
 			dropped.set(repair.section, (dropped.get(repair.section) ?? new Set()).add(repair.index));
 			continue;
 		}

@@ -323,8 +323,10 @@ the cause. Neither recovery command forces those cases through validation.
 Each failure and each blocked input produces one notice (v0.3.2 could repeat
 the same notice two to four times). The first explains what happened, whether
 requests are paused and what to do, with the controlled error code last.
-Later inputs blocked by the same code get a short reminder until a checkpoint
-or recovery is confirmed;
+Later inputs blocked by the same code get a short warning until a checkpoint
+or recovery is confirmed. After a refused `/compact`, Pi adds its own
+`Compaction cancelled` below the notice, and after a blocked input its own
+`This operation was aborted`. The notice above each says why, and
 `/compact` is suggested only where it can help. Pi's overflow recovery request
 is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
 `CONTEXT_PREVIEW_UNSUPPORTED`; before v0.4.0, threshold

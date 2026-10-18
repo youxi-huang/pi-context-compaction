@@ -142,6 +142,16 @@ Read only. Run official Pi 1.3.0 interactively in a pseudo-terminal, for example
 
 The deliverable is one `validation.md` entry with the screens, every path replaced by `<cwd>`, and a list of what reads wrong, wraps badly, is cut off or appears twice. Findings, not fixes. The driver goes in the PR description, not the repository, and no runtime, test or script file changes.
 
+## Third batch
+
+V2's [terminal entry](validation.md#preview-interactive-terminal-on-official-pi-130-2026-10-18-utc) found what no synthetic check had: Pi's own errors after the preview's notices, and a notice that never shows. Like the second batch, these packages start from `main` and open their PRs against `main`.
+
+### X2 The off notice on reopen
+
+Reopening a session with a checkpoint from Pi's own compaction shows no `Source-linked compaction is off in this session`, although `/compaction-doctor` reports the session inactive (step 6 of the terminal entry). Find why on official Pi 1.3.0, 1.2.0 and 1.1.0 with the V2 driver from PR #61, and check whether the same cause hides the ready notice when a protected session reopens.
+
+Fix it only if the existing notice can then appear once per session and process through the existing `notify()`, with no new setting, command, file or footer text. Showing it at a later event Pi already sends is acceptable. If no such fix exists, report the cause and stop. Evidence: the 80-column step 6 screen before and after in the PR description, a focused regression in `test/context-memory-preview.test.ts`, and CI green.
+
 ## Not accepted
 
 The review removes these, whatever the intent:
@@ -173,5 +183,6 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | U1 Footer state | Done in #58 |
 | U2 One voice | Done in #60 |
 | U3 Where the time goes | Measured in #59; V1 takes up two of its proposals |
-| V1 Shorter pause, faster reopen | open |
-| V2 What the terminal shows | open |
+| V1 Shorter pause, faster reopen | Done in #62: 44% less work around the writer and 37% less added to a reopen at 40 checkpoints |
+| V2 What the terminal shows | Done in #61 |
+| X2 The off notice on reopen | open |

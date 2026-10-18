@@ -1,5 +1,78 @@
 # Validation record
 
+## Y1 review-fix evidence: stopped at checkpoint-leaf recovery, 2026-10-18 UTC
+
+[Y1](ux-plan.md#y1-evidence-for-the-review-fixes) stops at step 1 on official Pi 1.3.0, 1.2.0 and 1.1.0. The checkpoint-leaf exception records the short retry input and the request guard blocks it, but the next `/compact` says `Nothing to compact (session too small)`. It saves no checkpoint and requests remain paused. Steps 2 and 3 are **not run**, following Y1's instruction to stop at the first discrepancy. No behavior or guide wording is changed here.
+
+Started from `main` at `f142f44`, preview `stock-preview+src.ab457ab9de588b77`. Synthetic only: Linux x86_64, Node 24.19.0, util-linux `script`, `@xterm/headless` 5.5.0, 80 columns and 40 rows. The driver adapts PR #61 as #64/#65 did: official bundled CLI, isolated agent directory, package copy outside any Node project, allowlisted environment, scripted loopback provider, no real credentials. Host and preview `keepRecentTokens` are 0; the session model writes notes, note repair and event logging are off, and native automatic compaction, cache warming and retries are off. The driver is in this PR's description, outside the repository.
+
+The fixture combines an actual successful preview checkpoint with the unstaged blocked-record shape used by `legacy-retry-marker` in the scenario runner. The synthetic failure code is `CONTEXT_NOTE_QUOTE`; neither `attempt` nor `candidateHash` is present. The session is reopened at that real checkpoint leaf. Its first `/compact` returns `Already compacted` without changing the file or reaching the writer. `Retry the local check.` then enters the session, leaves the editor empty and is stopped by the request guard, with no HTTP request. The following `/compact` is refused by Pi before `session_before_compact`, also without a writer request. Each version makes exactly two loopback requests in total: the seed turn and the initial successful checkpoint. Exactly one checkpoint remains, and the official host files checked by acceptance hash identically before and after.
+
+The 1.3.0 screen below is the settled viewport after that final refusal. Blank runs are collapsed, trailing spaces removed, and every displayed path replaced by `<cwd>`. It preserves the earlier `Already compacted`, the recorded retry input, Pi's abort error, the final refusal, the empty editor and the paused footer. The unsuccessful `fd` download is the same host setup noise seen in V2.
+
+```text
+[Extensions]
+  extension.js, input-trace.ts
+...
+ fd not found. Downloading...
+ Warning: Failed to download fd: The operation was aborted due to timeout
+
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note
+ doesn't match the message it cites. Requests stay paused, through /reload and
+ restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+...
+ [compaction]
+
+ Compacted from 130 tokens (ctrl+o to expand)
+...
+ Session compacted 1 time
+
+ Error: Compaction failed: Already compacted
+...
+ Retry the local check.
+...
+ Warning: Source-linked compaction: requests are still paused. Run /compact to
+ try again. (CONTEXT_NOTE_QUOTE)
+
+ Error: This operation was aborted
+
+ Error: Compaction failed: Nothing to compact (session too small)
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+| Step | Official Pi | Result |
+| --- | --- | --- |
+| 1. Checkpoint-leaf retry | 1.3.0 | Stopped: recorded and blocked; next `/compact` says `Nothing to compact`; still paused |
+| 1. Checkpoint-leaf retry | 1.2.0 | Same discrepancy |
+| 1. Checkpoint-leaf retry | 1.1.0 | Same discrepancy |
+| 2. Two messages during failing `/compact` | 1.3.0 | Not run: stopped at step 1 |
+| 2. Two messages during failing `/compact` | 1.2.0 | Not run: stopped at step 1 |
+| 2. Two messages during failing `/compact` | 1.1.0 | Not run: stopped at step 1 |
+| 3. Ready once; native off on first input | 1.3.0 | Not run: stopped at step 1 |
+| 3. Ready once; native off on first input | 1.2.0 | Not run: stopped at step 1 |
+| 3. Ready once; native off on first input | 1.1.0 | Not run: stopped at step 1 |
+
+| Command | Result | Exit |
+| --- | --- | ---: |
+| `node scripts/context-memory-ops.mjs doctor --verbose` | Readiness inventory completed | 0 |
+| `node scripts/context-memory-preview-stock-install.mjs --stock-root .artifacts/context-memory-preview-stock --version 1.3.0` | Official cohort, provenance and network-blocked SDK import passed | 0 |
+| Same installer with roots ending in `-1.2.0` / `-1.1.0` and the corresponding `--version` | Both official cohorts and SDK imports passed | 0 each |
+| `node scripts/context-memory-preview-build.mjs` | Built the independent package named above | 0 |
+| `node <scratch-Y1-driver> 1.3.0 1` | Captured step 1; expected recovery failed as shown | 1 |
+| `node <scratch-Y1-driver> 1.2.0 1` | Same discrepancy and unchanged-host assertions | 1 |
+| `node <scratch-Y1-driver> 1.1.0 1` | Same discrepancy and unchanged-host assertions | 1 |
+| `node scripts/context-memory-ops.mjs verify` | Build, 120 script tests, 448 focused tests and security regressions passed | 0 |
+| `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | No resident fingerprint change | 0 |
+
+The first 1.3.0 capture exited 1 after waiting for the missing second checkpoint; the driver then captured Pi's explicit refusal directly, and that run also exited 1. No runtime, test or script file changed. The required post-commit `node scripts/context-memory-ops.mjs preview` result is recorded in the PR. Real-provider tests and local evaluation: **not run**; `eval/` is unchanged.
+
 ## Preview pause and reopen after sharing reads and hashes, official Pi 1.3.0, 2026-10-18 UTC
 
 Synthetic and offline: a loopback provider with default settings, two runs per build at 1, 10 and 40 checkpoints on one Linux x86_64 machine with Node 24.19.0. Before is `main` at `c31ef54`, package `stock-preview+src.1f33b3e224cb30ab`; after is `a31af54`, package `stock-preview+src.c9d772c34f1ab237`.

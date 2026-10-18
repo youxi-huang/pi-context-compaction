@@ -1011,7 +1011,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.c6aefd74b04f4aaa";
+var PREVIEW_BUILD_ID = "stock-preview+src.a6732408742a34f4";
 
 // packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
 var SUPPORTED_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0"]);
@@ -1813,11 +1813,21 @@ function applyQuoteRepair(value, failures, response) {
   const note = structuredClone(value);
   const outcome = { requoted: 0, unquoted: 0, dropped: 0 };
   const dropped = /* @__PURE__ */ new Map();
+  const userRuling = new Set(
+    failures.filter((failure) => failure.foundIn.some((location) => location.role === "user")).map(key)
+  );
   for (const repair of repairs) {
     const facts3 = note[repair.section];
     const before = value[repair.section][repair.index];
     if (repair.fact === null) {
+      if (repair.section === "instructions" && userRuling.has(key(repair)))
+        throw new Error(
+          "CONTEXT_NOTE_REPAIR_LOSS: a quotation repair may not withdraw an instruction whose quotation a user message contains; no checkpoint committed"
+        );
       outcome.dropped++;
+      const from = outcome.droppedFrom ?? {};
+      from[repair.section] = (from[repair.section] ?? 0) + 1;
+      outcome.droppedFrom = from;
       dropped.set(repair.section, (dropped.get(repair.section) ?? /* @__PURE__ */ new Set()).add(repair.index));
       continue;
     }
@@ -1833,7 +1843,45 @@ function applyQuoteRepair(value, failures, response) {
   return { note, outcome };
 }
 
+// packages/coding-agent/src/extensions/context-memory/preview/scope-diagnostics.ts
+function diagnoseScope(note, branch) {
+  const byId = new Map(branch.map((entry) => [entry.id, entry]));
+  const missing2 = /* @__PURE__ */ new Set();
+  const unreadable = /* @__PURE__ */ new Set();
+  const superseding = /* @__PURE__ */ new Set();
+  const check = (id, supersedes) => {
+    const entry = byId.get(id);
+    if (entry && sourceText(entry)) return;
+    (entry ? unreadable : missing2).add(id);
+    if (supersedes) superseding.add(id);
+  };
+  for (const section2 of noteSections)
+    for (const item of note[section2]) {
+      for (const id of item.sources) check(id, false);
+      for (const id of item.supersedes ?? []) check(id, true);
+    }
+  const unreadableKinds = {};
+  for (const id of unreadable) {
+    const kind = sourceRole(byId.get(id));
+    unreadableKinds[kind] = (unreadableKinds[kind] ?? 0) + 1;
+  }
+  return { missing: missing2.size, unreadable: unreadable.size, inSupersedes: superseding.size, unreadableKinds };
+}
+
 // packages/coding-agent/src/extensions/context-memory/preview/writer.ts
+function sentReasoning(payload) {
+  if (!isRecord(payload)) return {};
+  const sent = {};
+  const effort = payload.reasoning_effort ?? (isRecord(payload.reasoning) ? payload.reasoning.effort : void 0);
+  if (typeof effort === "string") sent.effort = effort;
+  if (isRecord(payload.thinking)) {
+    if (typeof payload.thinking.type === "string") sent.thinking = payload.thinking.type;
+    if (typeof payload.thinking.budget_tokens === "number") sent.budgetTokens = payload.thinking.budget_tokens;
+  }
+  const cap = payload.max_tokens ?? payload.max_completion_tokens ?? payload.max_output_tokens;
+  if (typeof cap === "number") sent.maxTokens = cap;
+  return sent;
+}
 function* sourceChunks(entries, tokenBudget) {
   let chunk = [];
   let used = 0;
@@ -1984,6 +2032,7 @@ async function writeMemory(options) {
   let phase = "generate";
   const calls = [];
   let quotations;
+  let scope;
   let repairKind;
   let quotationRepair;
   let toolCallResponses = 0;
@@ -1997,6 +2046,7 @@ async function writeMemory(options) {
     writerCallDetails: structuredClone(calls),
     ...usages.length ? { usage: sumMemoryUsage(usages) } : {},
     ...quotations ? { quotations: { ...quotations } } : {},
+    ...scope ? { scope: structuredClone(scope) } : {},
     ...repairKind ? { repairKind } : {},
     ...quotationRepair ? { quotationRepair: { ...quotationRepair } } : {},
     ...toolCallResponses ? { toolCallResponses } : {},
@@ -2006,10 +2056,16 @@ async function writeMemory(options) {
     options.signal.throwIfAborted();
     const callIndex = writerCalls + 1;
     const callPhase = phase;
+    const effort = request?.reasoning ?? "off";
     const hooks = options.callHooks;
     let callId;
     if (hooks) {
-      callId = await hooks.beforeDispatch({ callIndex, phase: callPhase, model: modelName(selected), writerEffort });
+      callId = await hooks.beforeDispatch({
+        callIndex,
+        phase: callPhase,
+        model: modelName(selected),
+        writerEffort: effort
+      });
       if (typeof callId !== "string" || !callId)
         throw new Error("CONTEXT_WRITER_ACCOUNTING: dispatch reservation did not return an identity");
     }
@@ -2022,11 +2078,19 @@ async function writeMemory(options) {
     try {
       options.signal.throwIfAborted();
       writerCalls++;
-      call = { phase: callPhase };
-      calls.push(call);
+      const record = { phase: callPhase, effort };
+      call = record;
+      calls.push(record);
       if (!hooks) report();
       dispatched = true;
-      const stream = options.registry.streamSimple(selected, context, request);
+      const stream = options.registry.streamSimple(selected, context, {
+        ...request,
+        // Read, never changed: what reasoning the request carries after the host has mapped the level.
+        onPayload: (payload) => {
+          record.sent = sentReasoning(payload);
+          return void 0;
+        }
+      });
       if (hooks) {
         try {
           report();
@@ -2036,6 +2100,7 @@ async function writeMemory(options) {
         }
       }
       response = await stream.result();
+      record.stopReason = response.stopReason;
       if (response.content.some((block) => block.type === "toolCall")) toolCallResponses++;
       const usage = reportedUsage(response);
       if (usage) {
@@ -2088,6 +2153,11 @@ async function writeMemory(options) {
     try {
       return validateNoteContent(value, options.branch);
     } catch (error) {
+      if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_SCOPE")) {
+        scope ??= diagnoseScope(value, options.branch);
+        report();
+        throw error;
+      }
       if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
       const note = value;
       const diagnosis = diagnoseQuotes(note, options.branch);
@@ -2134,11 +2204,13 @@ async function writeMemory(options) {
             tools: []
           },
           {
-            ...writerEffort === "off" ? {} : { reasoning: writerEffort },
+            // No reasoning: the repair rebinds at most five quotations. On DeepSeek V4.1 Flash it passed the
+            // repair cases as often as at `high`, with a quarter of the output, and cannot spend its budget
+            // reasoning, as one 0.5.0 repair did.
             maxTokens,
             signal: options.signal,
             maxRetries: 0,
-            toolChoice: "none",
+            // No tool choice, as in the session writer's request; this one carries no tools to choose.
             transport: "sse",
             cacheRetention: "none"
           }
@@ -2227,7 +2299,7 @@ Preserve every existing source ID, supersedes ID and quote exactly somewhere in 
             maxTokens,
             signal: options.signal,
             maxRetries: 0,
-            toolChoice: "none",
+            // No tool choice, as in the session writer's request; this one carries no tools to choose.
             transport: "sse",
             cacheRetention: "none"
           }
@@ -3691,7 +3763,7 @@ var PreviewFailureStore = class {
 import { createHash as createHash5 } from "node:crypto";
 import { Type as Type5 } from "typebox";
 var HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"];
-var VIEW_VERSION = "view-v1";
+var VIEW_VERSION = "view-v2";
 var EXCERPT_CHARS2 = 400;
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["edit", "write"]);
 var previewHistorySchema = Type5.Object(
@@ -3753,7 +3825,7 @@ var matches = (text, terms) => {
 };
 function noteItems(entries, kind, terms) {
   const position = new Map(entries.map((entry, index) => [entry.id, index]));
-  const supersededBy = /* @__PURE__ */ new Map();
+  const distinct = /* @__PURE__ */ new Map();
   const recorded = /* @__PURE__ */ new Map();
   let latest = -1;
   entries.forEach((entry, index) => {
@@ -3770,17 +3842,13 @@ function noteItems(entries, kind, terms) {
         const sources = strings(fact3.sources)?.filter((id) => position.has(id));
         if (!sources?.length) continue;
         const supersedes = strings(fact3.supersedes) ?? [];
-        for (const old of supersedes) {
-          const set = supersededBy.get(old) ?? /* @__PURE__ */ new Set();
-          for (const id of sources) set.add(id);
-          supersededBy.set(old, set);
-        }
-        if (section2 !== kind) continue;
         const quote = typeof fact3.quote === "string" ? fact3.quote : void 0;
-        const base = JSON.stringify([[...sources].sort(), quote ?? ""]);
+        const base = JSON.stringify([section2, [...sources].sort(), quote ?? ""]);
         const occurrence = seen.get(base) ?? 0;
         seen.set(base, occurrence + 1);
         const key = `${base}#${occurrence}`;
+        distinct.set(key, { section: section2, sources, supersedes });
+        if (section2 !== kind) continue;
         const newest2 = sources.reduce((a, b) => position.get(a) >= position.get(b) ? a : b);
         recorded.set(key, {
           item: {
@@ -3801,12 +3869,38 @@ function noteItems(entries, kind, terms) {
       }
     }
   });
+  const revisions = /* @__PURE__ */ new Map();
+  const onSource = /* @__PURE__ */ new Map();
+  for (const fact3 of distinct.values()) {
+    for (const old of fact3.supersedes) {
+      const list = revisions.get(old);
+      if (list) list.push(fact3);
+      else revisions.set(old, [fact3]);
+    }
+    if (fact3.section === kind) {
+      for (const id of fact3.sources)
+        if (!fact3.supersedes.includes(id)) onSource.set(id, (onSource.get(id) ?? 0) + 1);
+    }
+  }
   return [...recorded.values()].map(({ item, lastSeen }) => {
     const own = new Set(item.sources.map((source) => source.entryId));
-    const later = [
-      ...new Set(item.sources.flatMap((source) => [...supersededBy.get(source.entryId) ?? []]))
-    ].filter((id) => !own.has(id));
-    return { ...item, ...later.length ? { supersededBy: later } : {}, inLatestCheckpoint: lastSeen === latest };
+    const replaced = /* @__PURE__ */ new Set();
+    const revised = /* @__PURE__ */ new Set();
+    for (const { entryId } of item.sources) {
+      const later = revisions.get(entryId) ?? [];
+      const same = later.filter((fact3) => fact3.section === kind);
+      const target = same.length && (onSource.get(entryId) ?? 0) <= same.length ? replaced : revised;
+      for (const fact3 of same) for (const id of fact3.sources) target.add(id);
+      for (const fact3 of later) if (fact3.section !== kind) for (const id of fact3.sources) revised.add(id);
+    }
+    const supersededBy = [...replaced].filter((id) => !own.has(id));
+    const sourceRevisedBy = [...revised].filter((id) => !own.has(id) && !replaced.has(id));
+    return {
+      ...item,
+      ...supersededBy.length ? { supersededBy } : {},
+      ...sourceRevisedBy.length ? { sourceRevisedBy } : {},
+      inLatestCheckpoint: lastSeen === latest
+    };
   });
 }
 function editItems(entries) {
@@ -4254,7 +4348,7 @@ function contextMemoryPreview(pi) {
   pi.registerTool({
     name: "context_history",
     label: "Context history",
-    description: "Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
+    description: "Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked; sourceRevisedBy means a later fact revised the item's source entry without saying which fact it replaced, so check the excerpt. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
     promptGuidelines: [
       "Search context_history for earlier decisions and evidence omitted by compaction, then read the matching original entry ID. Follow a cursor by repeating the same operation, query and entryId with that cursor.",
       "To see how a decision, constraint or setting changed, list its kind with a query; read the cited entry before relying on it."

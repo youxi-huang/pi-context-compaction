@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.0
+# Independent extension preview — v0.5.1
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.0 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.1 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.0 supports manual and completed-turn threshold compaction.** Optional
+**v0.5.1 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.0
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.0
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.1
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.0 lists
+Check that the installed preview lists the new Pi version first; v0.5.1 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.0)
+The [v0.5.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.1)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -104,7 +104,17 @@ also reports the first refused candidate's quotation failures by class
 (`quotations`), the kind of a repair that ran (`repairKind`), what a
 quotation repair changed (`quotationRepair`) and how many writer responses
 called a tool instead of writing the note (`toolCallResponses`), and whether
-one was declined (`toolCallDeclined`); all but the last are counts.
+one was declined (`toolCallDeclined`); all but the last are counts. Since
+0.5.1, each call under `writerCallDetails` also names the reasoning effort it
+asked for (`effort`), the reasoning settings and output cap its provider
+request carried (`sent`, read from the request Pi built, without its content)
+and how the response ended (`stopReason`), and `quotationRepair.droppedFrom`
+counts withdrawn facts by section. For the first candidate refused with
+`CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
+branch (`missing`) and those of entries without readable text (`unreadable`,
+with their kinds under `unreadableKinds`), and how many of either sit in
+`supersedes`; it never names the IDs. Pi maps a level the model does not declare
+to a supported one, so `sent` can differ from `effort`.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -187,7 +197,12 @@ committed checkpoints recorded, edits read from `edit` and `write` tool calls
 with their outcome, and errors from failed tool results and shell commands. A
 fact restated by several checkpoints appears once; one that a later fact
 supersedes is marked with what replaced it; every item names its original
-entries and carries an excerpt of one. The list is computed from the current
+entries and carries an excerpt of one. A note's `supersedes` names entries,
+not facts, so a revision marks only the facts of its own section on the entry
+it names, and only when they are no more than the revisions naming it. In any
+other case, such as a constraint stated in the same message as a value that
+was later revised, the item carries `sourceRevisedBy` instead: its source was
+revised, and the excerpt says whether the item was. The list is computed from the current
 branch on every call and stores nothing. It can miss what a writer left out, so
 search remains the way to check.
 
@@ -215,7 +230,13 @@ for at most five facts, the writer gets one repair request that names those
 facts, the entries they cite and the entries that do contain the quoted text,
 with their roles. A replacement may change only its sources and quote, or
 withdraw the fact; every other fact stays as written, and the whole note is
-checked again. `noteRepair` governs this repair and the size repair, and a
+checked again. A failed quotation is a fault in the evidence, not a
+retraction: a repair that withdraws an instruction whose quoted text a user
+message contains refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, since a
+misquoted rule is still a rule. Re-citing it or dropping its quote remains
+possible. Since 0.5.1 the quotation repair runs without reasoning, whatever the
+writer's effort: it rebinds at most five quotations, and on DeepSeek it passed
+as often without reasoning as at `high`, at a quarter of the output. `noteRepair` governs this repair and the size repair, and a
 compaction spends at most one of them. A second failure blocks as before. The
 extension never moves a quotation to another entry on its own: text found
 only in an assistant message or a tool output is not a user ruling.

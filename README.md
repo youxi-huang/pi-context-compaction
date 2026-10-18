@@ -45,7 +45,7 @@ The extension does not replace Pi's executable or copy its credentials. Authenti
 
 ## Your first session
 
-Start a **new, persistent, text-only** Pi session. Pi shows `Source-linked compaction is on.` Then enter:
+Start a **new, persistent, text-only** Pi session. Pi shows `Source-linked compaction is on.`, and its footer keeps the preview's state in view: `compaction: on`, the number of checkpoints on the current branch, `writing note` while it compacts, or `paused` when requests are held. Then enter:
 
 ```text
 /compaction-doctor

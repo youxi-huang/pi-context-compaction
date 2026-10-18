@@ -74,18 +74,19 @@ preserves Pi credentials, other package registrations and session files.
 
 ## First use
 
-The footer shows whether compaction is on, the checkpoint count on the current branch, `compaction: writing note` during compaction, or `compaction: paused, see /compaction-doctor` when requests are paused.
-
 Start a new, persistent, text-only session. After Pi starts or reloads its
-extensions, the preview shows `Source-linked compaction is on.` Then run:
+extensions, the preview shows `Source-linked compaction is on.` Pi's footer then
+shows `compaction: on`, the number of checkpoints on the current branch,
+`compaction: writing note` during a compaction, or
+`compaction: paused, see /compaction-doctor`. Then run:
 
 ```text
 /compaction-doctor
 ```
 
 It prints a short checklist: extension loaded, host version, session support,
-writer, manual `/compact` eligibility and whether requests are paused. It calls no model,
-writes no failure record and does not change the session. After a failed
+writer, manual `/compact` eligibility and whether requests are paused. It calls
+no model, writes no failure record and does not change the session. After a failed
 attempt, the manual `/compact` line says which way out applies: `retry` when a
 new `/compact` replaces the failed attempt, with `/compaction-recover` named
 first when Pi already saved the staged checkpoint; `blocked` only when

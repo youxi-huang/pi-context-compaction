@@ -8,11 +8,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Added
 
-- The independent preview shows its state in Pi's footer: on, the current branch's checkpoint count, writing a note, or paused with a pointer to `/compaction-doctor`.
+- The independent preview shows its state on Pi's footer line: on, the number of checkpoints on the current branch, writing a note, or paused with a pointer to `/compaction-doctor`. Before, a paused session showed only when an input was refused.
 
 ### Changed
 
-- The independent preview uses `Source-linked compaction` in notices, leads with the outcome and puts the code last. Repeated inputs blocked by the same code get a short reminder until a checkpoint or recovery is confirmed. `/compaction-doctor` uses shorter details and a `requests` line, and every code its notice paths can produce or restore has specific advice.
+- The independent preview's notices begin with `Source-linked compaction`, say what happened before why, and put the code last. A blocked session no longer repeats the whole notice on every input: later inputs blocked by the same code get one short line until a checkpoint or recovery is confirmed. `/compaction-doctor` reports a `requests` line instead of `durable block`, and every code a preview session can raise or restore has its own advice.
 
 ### Security
 

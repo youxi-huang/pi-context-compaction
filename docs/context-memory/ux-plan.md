@@ -123,6 +123,6 @@ Report each command with its result and exit code, as the [runbook](operations.m
 
 | Package | State |
 | --- | --- |
-| U1 Footer state | open |
-| U2 One voice | open |
-| U3 Where the time goes | open |
+| U1 Footer state | Done in #58 |
+| U2 One voice | Done in #60 |
+| U3 Where the time goes | Measured in #59. Its [proposals](validation.md#preview-reopen-and-compaction-overhead-on-official-pi-130-2026-10-18-utc) wait for the maintainer |

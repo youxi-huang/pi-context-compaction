@@ -1,5 +1,92 @@
 # Validation record
 
+## V1: shorter preview pause and reopen on official Pi 1.3.0, 2026-10-18 UTC
+
+Two runs per build at 1, 10 and 40 checkpoints on the same Linux x86_64 machine with Node 24.19.0. The baseline is main at `c31ef54`, package `stock-preview+src.1f33b3e224cb30ab`; the implementation is `a31af54`, package `stock-preview+src.c9d772c34f1ab237`. These are synthetic, offline loopback-provider measurements with default settings, not real-provider or terminal evidence.
+
+At 40 checkpoints, the mean work around the writer fell from 558.0 to 310.5 ms (44.4%), and the mean extra reopen time fell from 117.9 to 74.6 ms (36.7%). Both exceed V1's one-third target against the same-machine baseline and are below two thirds of U3's 674 ms and 135 ms references. Each reopen value below is the median of three warm reopens; the headline averages the two runs' medians. Small-session measurements vary and do not establish a uniform improvement.
+
+Build each checkout separately, with `variant` set to `before` or `after` and `scratch` pointing outside the checkout. Both use the same isolated official Pi 1.3.0 installation and the unchanged U3 runner:
+
+```sh
+node scripts/context-memory-preview-build.mjs --output-dir "$scratch/$variant-package"
+for run in 1 2; do
+  for n in 1 10 40; do
+    node scripts/context-memory-preview-scenarios.mjs \
+      --package-dir "$scratch/$variant-package" \
+      --stock-root .artifacts/context-memory-preview-stock \
+      --output-dir "$scratch/$variant-$run-$n" \
+      --only long-session-overhead --perf-checkpoints "$n"
+  done
+done
+```
+
+Both builds exited 0. All six baseline scenarios exited 0 with three checks passing. The final candidate's runs at 1 and 10 checkpoints exited 0; at 40, run 1 exited 1 on the request-growth check and run 2 exited 0. All checkpoints committed, and every run passed the 50 ms request-budget check. Preliminary candidates were measured while removing repetitions; the tables below use only the baseline and final implementation named above.
+
+| Checkpoints / run | Before reopen with / without preview, ms | After reopen with / without preview, ms | Before extra, ms | After extra, ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 / 1 | 13.7 / 8.4 | 14.6 / 8.5 | 5.3 | 6.1 |
+| 1 / 2 | 15.8 / 11.0 | 12.5 / 8.5 | 4.8 | 4.1 |
+| 10 / 1 | 47.4 / 14.8 | 38.9 / 18.2 | 32.7 | 20.8 |
+| 10 / 2 | 44.9 / 16.2 | 32.3 / 12.9 | 28.7 | 19.3 |
+| 40 / 1 | 154.8 / 33.4 | 102.6 / 32.0 | 121.4 | 70.6 |
+| 40 / 2 | 153.0 / 38.7 | 112.8 / 34.3 | 114.3 | 78.5 |
+
+The last compaction in each run is shown below. As in U3, writer time sums `lastWriter.writerCallDetails[].ms`; work before commit is `stageMs - writer`, and work after staging is `pauseMs - stageMs`, including Pi's append. Work around the writer is their sum.
+
+| Checkpoints / run | Before pause / writer, ms | After pause / writer, ms | Before work before commit / after staging, ms | After work before commit / after staging, ms | Before / after work around writer, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1 / 1 | 35 / 7 | 30 / 6 | 21 / 7 | 20 / 4 | 28 / 24 |
+| 1 / 2 | 39 / 8 | 30 / 7 | 23 / 8 | 19 / 4 | 31 / 23 |
+| 10 / 1 | 143 / 6 | 90 / 6 | 99 / 38 | 58 / 26 | 137 / 84 |
+| 10 / 2 | 150 / 5 | 86 / 5 | 104 / 41 | 56 / 25 | 145 / 81 |
+| 40 / 1 | 521 / 6 | 328 / 5 | 364 / 151 | 224 / 99 | 515 / 323 |
+| 40 / 2 | 607 / 6 | 303 / 5 | 421 / 180 | 214 / 84 | 601 / 298 |
+
+The failed request-growth check is retained: candidate run 1 measured 1 ms overhead at 10 checkpoints and 28 ms at 40. Its three 40-checkpoint prompt samples were 78.1, 9.0 and 31.3 ms, against 6.5, 3.1 and 2.6 ms for the disabled control. The planned second run measured 2 ms overhead at both milestones; the required profile measured 1 and 0 ms. The spike's cause is unestablished. No scenario, threshold, exception or check was changed, and the failed run was not replaced.
+
+One final 40-checkpoint worker ran under `node --cpu-prof`, with the runner's stripped environment and its package copied outside every Node project. The equivalent command, after making that isolated copy and the output directory, is:
+
+```sh
+env -i PATH="$PATH" LANG=C.UTF-8 CI=1 \
+  PI_CODING_AGENT_DIR="$scratch/profile/cases/long-session-overhead--extension/agent" \
+  PI_OFFLINE=0 PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1 \
+  node --cpu-prof --cpu-prof-dir="$scratch/profile" --cpu-prof-name=v1.cpuprofile \
+    scripts/context-memory-preview-scenarios.mjs \
+    --package-dir "$isolatedPackage" \
+    --stock-root .artifacts/context-memory-preview-stock \
+    --output-dir "$scratch/profile" --only long-session-overhead \
+    --perf-checkpoints 40 --worker long-session-overhead --variant extension
+```
+
+The profile exited 0 with all three checks passing and 12,624 samples over 13.7 seconds. Named bundle functions map to the source locations below, relative to `packages/coding-agent/src/extensions/context-memory/`. Inclusive rows include their callees and are not additive.
+
+| Window | Function and source | Sampled time, ms |
+| --- | --- | ---: |
+| Checkpoint 40, 321 ms | `hashEntries`, `identity.ts:15` | 133 inclusive, 93 self |
+| Same | `hashEntryPrefixes`, `identity.ts:22` | 93 inclusive, 56 self |
+| Same | `readSession`, `preview/failure-store.ts:166` | 56 inclusive |
+| Same | `stage`, `preview/failure-store.ts:576` | 74 inclusive |
+| Same | `confirm`, `preview/failure-store.ts:605` | 44 inclusive |
+| Same | `begin`, `preview/failure-store.ts:478` | 2 inclusive |
+| Three reopens, 334 ms | `sessionStart`, `preview/controller.ts:788` | 212 inclusive |
+| Same | `evaluate`, `preview/failure-store.ts:374` | 119 inclusive |
+| Same | `validateMemoryCheckpoints`, `notes.ts:259` | 91 inclusive |
+| Same | `readSession`, `preview/failure-store.ts:166` | 58 inclusive |
+| Same, official Pi | `loadEntriesFromFile`, `dist/core/session-manager.js:325` | 72 inclusive |
+
+Runtime changes are confined to `preview/`. Readiness compares the exact canonical entry strings already produced by full checkpoint validation against freshly serialized disk entries, including the final checkpoint. Compaction shares its validation hash with readiness and `begin`, and those two checks share one synchronous readback. After the writer, the current branch is hashed afresh against the attempt hash; regressions show the clone is unchanged. Commit and recovery reuse full validation's result and in-memory hash; their disk sources and full disk branch share one prefix-hashing pass. Recovery discards the supplied hash if it must restore a marker first. Staging and post-append confirmation keep fresh reads, and stored hash bytes and formats are unchanged.
+
+Verification:
+
+| Command | Result and exit code |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0: static/type checks, 120 script tests, 437 focused tests and all security regressions pass |
+| `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | Exit 0; also unchanged against main |
+| `node scripts/context-memory-ops.mjs preview` | Exit 0 on clean implementation commit `a31af54`: official Pi 1.3.0/1.2.0/1.1.0 acceptance, cross-version checkpoints, strict default scenarios, release checks and local prepare pass. The unchanged `memory-change`, `disk-change`, `checkpoint-write-failed` and `unobserved-commit` cases pass on all three hosts |
+
+During development, the new prefix and JSON-spacing fixtures initially failed; they were corrected. An initial `verify` exited 1 on a new test's TypeScript union inference; it was corrected before the passing verification above. Real-provider tests and V2 terminal work: not run.
+
 ## Preview reopen and compaction overhead on official Pi 1.3.0, 2026-10-18 UTC
 
 Synthetic and offline: a scripted loopback provider, default settings, no real provider and no interactive TUI. Measured at `2d3133f` on Linux x86_64 with Node 24.19.0 (CI uses Node 22), package `stock-preview+src.a6732408742a34f4`.

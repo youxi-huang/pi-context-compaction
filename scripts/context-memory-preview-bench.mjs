@@ -18,8 +18,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 //           times in all, so that recall is measured on committed notes; writer mode measures refusals.
 //           Each probe then runs on its own copy of the chain at its checkpoint, once with only context_history
 //           active and once with no tools. Reports typed-answer scores, retrieval calls and missed-entry probes.
+//   repair  For each quotation-repair case of eval/preview/repair.ts, the writer's first call is answered with the
+//           case's planted candidate and only the repair reaches the measured model. Reports scores by template
+//           and, for the repair calls, stop reasons, the reasoning settings sent, tokens and time.
 //
 // --provider loopback answers everything locally and never contacts a model service: it checks the harness.
+// --provider deepseek-local (repair mode only) builds the same requests from Pi's catalog model and answers them here.
 // --provider deepseek uses Pi's catalog model deepseek/deepseek-flash through the environment's network proxy and
 // requires --max-requests, --max-minutes and --max-cost-usd; the run stops before a unit that would start past any
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
@@ -39,7 +43,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke [--provider loopback|deepseek] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -166,13 +170,45 @@ async function worker() {
 	}
 	const stock = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js")).href);
 
-	// Loopback: the gold writer for scripted cuts and a fixed unknown answer for probes.
+	// Loopback: the gold writer for scripted cuts and a fixed unknown answer for probes. In repair mode the writer's
+	// first call gets the planted candidate, and only the quotation repair reaches the measured model: from here,
+	// so the request is the one official Pi built for that model. `deepseek-local` answers it with the case's
+	// scripted repair and never leaves this machine.
 	const { gold } = readFixture(action.fixture);
+	const repairSettings = [];
+	let forwarded = 0;
+	/** The catalog's address for the measured model, read before the bench moves it. */
+	let upstream;
 	const server = createServer(async (request, response) => {
 		let raw = "";
 		for await (const part of request) raw += part;
 		const payload = JSON.parse(raw);
 		const serialized = JSON.stringify(payload.messages ?? []);
+		if (action.type === "repair") {
+			const repair = serialized.includes("Correct the quotations of a memory candidate");
+			if (repair) repairSettings.push({ thinking: payload.thinking?.type ?? null, effort: payload.reasoning_effort ?? null, maxTokens: payload.max_tokens ?? payload.max_completion_tokens ?? null });
+			if (repair && action.provider === "deepseek") {
+				forwarded++;
+				try {
+					const answer = await fetch(`${upstream}${request.url}`, { method: "POST", headers: { "content-type": "application/json", authorization: request.headers.authorization ?? "" }, body: raw, signal: AbortSignal.timeout(600_000) });
+					response.writeHead(answer.status, { "content-type": answer.headers.get("content-type") ?? "text/event-stream", "cache-control": "no-cache" });
+					if (answer.body) for await (const part of answer.body) response.write(part);
+					response.end();
+				} catch (cause) {
+					if (!response.headersSent) response.writeHead(502, { "content-type": "application/json" });
+					response.end(JSON.stringify({ error: { message: `bench forward failed: ${String(cause?.message ?? cause).slice(0, 120)}` } }));
+				}
+				return;
+			}
+			// Local answers carry no usage: only the measured repair is counted.
+			const text = JSON.stringify(repair ? action.scripted : action.candidate);
+			const chunk = (delta, finish) => `data: ${JSON.stringify({ id: "bench", object: "chat.completion.chunk", created: 1, model: payload.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+			response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+			response.write(chunk({ role: "assistant", content: text }, null));
+			response.write(chunk({}, "stop"));
+			response.end("data: [DONE]\n\n");
+			return;
+		}
 		const writer = serialized.includes("Return ONLY one JSON object matching this schema");
 		const readable = new Set(
 			readLines(action.sessionFile)
@@ -198,6 +234,17 @@ async function worker() {
 	if (action.provider === "loopback") {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
 		runtime.registerProvider(model.provider, { api: model.api, apiKey: "bench-loopback-only", baseUrl: model.baseUrl, models: [model] });
+	} else if (action.type === "repair") {
+		// The catalog's own model, with its compatibility settings and level map; only the address moves here.
+		if (action.provider === "deepseek") {
+			const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
+			dispatcher.configureHttpDispatcher();
+		}
+		upstream = runtime.getModel(MEASURED.provider, MEASURED.id)?.baseUrl;
+		if (!upstream?.startsWith("https://")) throw new Error(`${MEASURED.provider}/${MEASURED.id} is not in this Pi's catalog`);
+		runtime.registerProvider(MEASURED.provider, { baseUrl: `http://127.0.0.1:${server.address().port}` });
+		model = runtime.getModel(MEASURED.provider, MEASURED.id);
+		if (!model?.baseUrl?.startsWith("http://127.0.0.1:")) throw new Error(`${MEASURED.provider}/${MEASURED.id} did not move to the bench's address`);
 	} else {
 		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
 		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
@@ -228,7 +275,7 @@ async function worker() {
 	};
 
 	let result;
-	if (action.type === "compact") {
+	if (action.type === "compact" || action.type === "repair") {
 		const contextBytes = condensedBytes(readLines(action.sessionFile));
 		const started = performance.now();
 		let error;
@@ -246,6 +293,8 @@ async function worker() {
 			ms: Math.round(performance.now() - started),
 			writerCalls: writer.writerCalls ?? 0,
 			phases: (writer.writerCallDetails ?? []).map((call) => call.phase),
+			// Per call: the effort asked for, the reasoning the request carried, how it ended and its output tokens.
+			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			quotationRepair: writer.quotationRepair ?? null,
@@ -257,7 +306,10 @@ async function worker() {
 		if (result.ok) {
 			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;
 			if (note) result.note = noteShape(note, contextBytes);
+			// Synthetic text, scored by the parent and never written to the run's files.
+			if (note && action.type === "repair") result.committedNote = note;
 		}
+		if (action.type === "repair") Object.assign(result, { repairSettings, forwarded });
 	} else {
 		// "session" keeps the session's own tools, so a warm-up request carries the writer's exact prefix.
 		if (action.condition !== "session") session.setActiveToolsByName(action.condition === "history" ? ["context_history"] : []);
@@ -318,6 +370,7 @@ async function worker() {
 async function parent() {
 	const { scoreProbe, summarizePreview } = await import(pathToFileURL(join(root, "eval", "preview", "scorer.ts")).href);
 	const { ANSWER_CONTRACT } = await import(pathToFileURL(join(root, "eval", "preview", "schema.ts")).href);
+	const { REPAIR_CASES_VERSION, repairCases, scoreRepair, summarizeRepairs } = await import(pathToFileURL(join(root, "eval", "preview", "repair.ts")).href);
 	const packageDir = resolve(argument("--package-dir"));
 	const stockRoot = resolve(argument("--stock-root"));
 	const outputDir = resolve(argument("--output-dir"));
@@ -330,11 +383,12 @@ async function parent() {
 	const chainAttempts = Number(argument("--chain-attempts", "4"));
 	const cache = argument("--cache", "warm");
 	const label = argument("--label", "run");
-	if (!["writer", "probes", "smoke"].includes(mode)) throw new Error("--mode must be writer, probes or smoke");
-	if (!["loopback", "deepseek"].includes(provider)) throw new Error("--provider must be loopback or deepseek");
+	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
+	if (!["loopback", "deepseek", "deepseek-local"].includes(provider)) throw new Error("--provider must be loopback, deepseek or deepseek-local");
+	if (provider === "deepseek-local" && mode !== "repair") throw new Error("--provider deepseek-local serves only --mode repair");
 	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
 	const limits =
-		provider === "loopback"
+		provider !== "deepseek"
 			? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
 			: { requests: Number(argument("--max-requests")), minutes: Number(argument("--max-minutes")), costUsd: Number(argument("--max-cost-usd")) };
 	for (const [name, value] of Object.entries(limits))
@@ -361,6 +415,8 @@ async function parent() {
 			PI_TELEMETRY: "0",
 			PI_SKIP_VERSION_CHECK: "1",
 		};
+		// Answered on this machine: Pi still needs a key to build the request, and gets one that opens nothing.
+		if (provider === "deepseek-local") value.DEEPSEEK_API_KEY = "bench-local-only";
 		if (provider === "deepseek") {
 			// The proxy injects the real key; Pi receives only a placeholder.
 			value.DEEPSEEK_API_KEY = "proxy-injected";
@@ -395,7 +451,7 @@ async function parent() {
 	function spend(result, measured) {
 		used.units++;
 		if (!measured) return;
-		used.requests += result.writerCalls ?? result.rounds ?? 0;
+		used.requests += result.forwarded ?? result.writerCalls ?? result.rounds ?? 0;
 		used.costUsd += result.usage?.cost?.total ?? result.usage?.cost ?? 0;
 	}
 
@@ -510,7 +566,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "deepseek" ? `${MEASURED.provider}/${MEASURED.id}` : LOOPBACK.id, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED.provider}/${MEASURED.id}`, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.
@@ -566,7 +622,7 @@ async function parent() {
 				toolCallsDeclined: list.filter((row) => row.toolCallDeclined).length,
 				repairedAndCommitted: list.filter((row) => row.repairKind && row.ok).length,
 				toolCallResponses: sum((row) => row.toolCalls),
-				repairOutcome: { requoted: sum((row) => row.quotationRepair?.requoted), unquoted: sum((row) => row.quotationRepair?.unquoted), dropped: sum((row) => row.quotationRepair?.dropped) },
+				repairOutcome: { requoted: sum((row) => row.quotationRepair?.requoted), unquoted: sum((row) => row.quotationRepair?.unquoted), dropped: sum((row) => row.quotationRepair?.dropped), droppedFrom: Object.fromEntries(NOTE_SECTIONS.map((section) => [section, sum((row) => row.quotationRepair?.droppedFrom?.[section])]).filter(([, count]) => count > 0)) },
 				writerCalls: sum((row) => row.writerCalls),
 				usage: { input: sum((row) => row.usage?.input), output: sum((row) => row.usage?.output), cacheRead: sum((row) => row.usage?.cacheRead), costUsd: Number(sum((row) => row.usage?.cost?.total).toFixed(4)) },
 				pauseMsMedian: pauses.length ? pauses[Math.floor(pauses.length / 2)] : null,
@@ -576,6 +632,59 @@ async function parent() {
 		report.writer = {
 			overall: group(rows),
 			byCut: Object.fromEntries([...new Set(rows.map((row) => `${row.fixture}-cut${row.cut}`))].map((key) => [key, group(rows.filter((row) => `${row.fixture}-cut${row.cut}` === key))])),
+		};
+	}
+
+	if (mode === "repair") {
+		// Every case at every cut, --attempts times: the planted candidate is the writer's first answer, and the
+		// measured model answers only the repair. Rows keep scores, codes and call settings, never note text.
+		const rows = [];
+		const scores = [];
+		const skipped = [];
+		for (const id of fixtures) {
+			const fixture = readFixture(id);
+			for (let k = 0; k < fixture.gold.checkpoints.length; k++) {
+				const baseFile = await base(fixture, k);
+				const branch = readLines(baseFile).slice(1);
+				const readable = new Set(branch.filter((entry) => entry.type === "message").map((entry) => entry.id));
+				const set = repairCases({ fixture: id, cut: k + 1, base: goldNote(fixture.gold, k, readable), branch });
+				for (const item of set.skipped) skipped.push({ fixture: id, cut: k + 1, ...item });
+				const units = set.cases.flatMap((repairCase) => Array.from({ length: attempts }, (_, attempt) => ({ repairCase, attempt })));
+				await pool(units, async ({ repairCase, attempt }) => {
+					const file = copy(baseFile, `${repairCase.id}-attempt${attempt + 1}`);
+					const result = await run({ type: "repair", provider, fixture: id, cutIndex: k, sessionFile: file, thinking, candidate: repairCase.candidate, scripted: repairCase.scripted });
+					spend(result, provider === "deepseek");
+					const score = scoreRepair(repairCase, { committed: result.ok === true, code: result.code ?? (result.crashed ? "CRASHED" : null), note: result.committedNote }, branch);
+					scores.push(score);
+					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
+					rows.push(row);
+					record("repairs.jsonl", row);
+				});
+			}
+		}
+		const repairCalls = rows.flatMap((row) => row.calls.filter((call) => call.phase === "repair"));
+		const ordered = (values) => values.filter((value) => typeof value === "number").sort((a, b) => a - b);
+		const at = (values, share) => (values.length ? values[Math.min(values.length - 1, Math.floor(values.length * share))] : null);
+		const stats = (values) => {
+			const sorted = ordered(values);
+			return { reported: sorted.length, median: at(sorted, 0.5), p90: at(sorted, 0.9), max: sorted.at(-1) ?? null };
+		};
+		const tally = (values) => values.reduce((counts, value) => ({ ...counts, [value]: (counts[value] ?? 0) + 1 }), {});
+		report.repair = {
+			cases: REPAIR_CASES_VERSION,
+			attemptsPerCase: attempts,
+			skipped,
+			scores: summarizeRepairs(scores),
+			repairCalls: {
+				calls: repairCalls.length,
+				stopReasons: tally(repairCalls.map((call) => call.stopReason ?? "unknown")),
+				requested: tally(repairCalls.map((call) => call.effort ?? "unknown")),
+				sent: tally(rows.flatMap((row) => row.repairSettings).map((item) => JSON.stringify(item))),
+				outputTokens: stats(repairCalls.map((call) => call.output)),
+				reasoningTokens: stats(repairCalls.map((call) => call.reasoning)),
+				ms: stats(repairCalls.map((call) => call.ms)),
+				costUsd: Number(rows.reduce((sum, row) => sum + (row.usage?.cost?.total ?? 0), 0).toFixed(4)),
+			},
 		};
 	}
 
@@ -603,7 +712,7 @@ async function parent() {
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});

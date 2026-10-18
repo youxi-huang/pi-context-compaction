@@ -40,6 +40,7 @@ import {
 	quoteRepairEligible,
 	quoteRepairPrompt,
 } from "./quote-repair.ts";
+import { diagnoseScope, type ScopeCounts } from "./scope-diagnostics.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -221,6 +222,8 @@ export interface WriterProgress {
 	writerCallDetails: PreviewWriterCallRecord[];
 	/** Quotation failures of the first refused candidate, by class; counts only. */
 	quotations?: QuoteCounts;
+	/** Citations of the first candidate refused on scope that name no entry or an unreadable one; counts only. */
+	scope?: ScopeCounts;
 	/** The compaction's one repair, when it ran: for note size or for quotations. */
 	repairKind?: "size" | "quotation";
 	/** What a quotation repair changed, as counts. */
@@ -415,6 +418,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let phase: WriterCallRecord["phase"] = "generate";
 	const calls: PreviewWriterCallRecord[] = [];
 	let quotations: QuoteCounts | undefined;
+	let scope: ScopeCounts | undefined;
 	let repairKind: WriterProgress["repairKind"];
 	let quotationRepair: QuoteRepairOutcome | undefined;
 	let toolCallResponses = 0;
@@ -429,6 +433,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			writerCallDetails: structuredClone(calls),
 			...(usages.length ? { usage: sumMemoryUsage(usages) } : {}),
 			...(quotations ? { quotations: { ...quotations } } : {}),
+			...(scope ? { scope: structuredClone(scope) } : {}),
 			...(repairKind ? { repairKind } : {}),
 			...(quotationRepair ? { quotationRepair: { ...quotationRepair } } : {}),
 			...(toolCallResponses ? { toolCallResponses } : {}),
@@ -553,8 +558,13 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		try {
 			return validateNoteContent(value, options.branch);
 		} catch (error) {
+			// The schema check precedes the scope and quotation checks, so the value is a complete note in both.
+			if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_SCOPE")) {
+				scope ??= diagnoseScope(value as MemoryNote, options.branch);
+				report();
+				throw error;
+			}
 			if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
-			// The schema check precedes every quotation check, so the value is a complete note here.
 			const note = value as MemoryNote;
 			const diagnosis = diagnoseQuotes(note, options.branch);
 			const counts = quoteCounts(diagnosis.failures);

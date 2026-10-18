@@ -1,6 +1,6 @@
 ---
 branch: claude/blissful-archimedes-v1glwi
-pr: see the kickoff line
+pr: 57
 head: 5095e02
 written: 2026-10-18, Claude Code, cloud
 ---

@@ -16,6 +16,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - The independent preview's notices begin with `Source-linked compaction`, say what happened before why, and put the code last. A blocked session no longer repeats the whole notice on every input: later inputs blocked by the same code get one short line until a checkpoint or recovery is confirmed. `/compaction-doctor` reports a `requests` line instead of `durable block`, and every code a preview session can raise or restore has its own advice.
 - The independent preview spends less of its own time around a compaction and when a long session reopens: at 40 checkpoints in a synthetic session, 311 ms instead of 558 ms around the writer and 75 ms instead of 118 ms added to a reopen. Within one synchronous step it now serializes, hashes and reads the session file once where it did so several times. Every source comparison runs at the same moments, and checkpoint hashes are byte-identical.
 
+### Fixed
+
+- When a session with a checkpoint reopens interactively, the independent preview shows its ready or off notice on the first input, once per session and process. Pi's startup compaction status previously replaced the notice.
+
 ### Security
 
 - Remove the unused upstream Gondolin micro-VM example and its workspace dependency chain, which included `node-forge` affected by GHSA-86w9-cpqp-85rv. Remove its standalone lockfile and the obsolete audit exception, and update the example index and isolation guide. The documented agent maintenance commands, resident compaction runtime and independent extension do not use this example.

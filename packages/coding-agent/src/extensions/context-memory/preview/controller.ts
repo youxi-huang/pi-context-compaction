@@ -369,6 +369,7 @@ export class PreviewMemoryController {
 	/** Per session, like every other state here, so status never mixes one session's calls with another's metrics. */
 	private readonly lastProgress = new Map<string, WriterProgress>();
 	private verified?: VerifiedBranch;
+	private pendingSessionNotice?: { sessionId: string; key: string; text: string };
 	readonly notices = new NoticeGate();
 	private readonly preparation?: PreviewPreparation;
 	private readonly journal?: CallJournal;
@@ -756,6 +757,7 @@ export class PreviewMemoryController {
 
 	input(event: InputEvent, ctx: ExtensionContext): InputEventResult | undefined {
 		this.notices.nextEpisode();
+		this.showSessionNotice(ctx);
 		if (event.source !== "interactive" || !ctx.hasUI || event.images?.length) return;
 		const code = this.stickyFailures.get(ctx.sessionManager.getSessionId());
 		if (!code) return;
@@ -766,6 +768,7 @@ export class PreviewMemoryController {
 
 	/** In-process stickiness covers a marker write that failed before it could reach disk. */
 	fail(ctx: ExtensionContext, code: string): void {
+		this.pendingSessionNotice = undefined;
 		this.forgetVerified();
 		const sessionId = ctx.sessionManager.getSessionId();
 		this.observedFailures.set(sessionId, code);
@@ -798,25 +801,48 @@ export class PreviewMemoryController {
 
 	/** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
 	sessionStart(ctx: ExtensionContext): void {
+		this.pendingSessionNotice = undefined;
 		this.forgetVerified();
 		this.preparation?.activate(ctx.sessionManager.getSessionId());
+		// Pi's startup compaction status overwrites informational notices, including earlier rows.
+		const deferNotice = ctx.hasUI && ctx.sessionManager.getEntries().some((entry) => entry.type === "compaction");
 		const reason = this.safeInactive(ctx);
 		if (reason) {
-			this.standAside(ctx, reason);
+			this.standAside(ctx, reason, deferNotice);
 			return;
 		}
 		if (this.guard(ctx, () => this.assertReady(ctx))) {
 			this.readyStatus(ctx);
-			if (this.notices.once("ready")) notify(ctx, readyNotice(), "info");
+			this.sessionNotice(ctx, `ready:${ctx.sessionManager.getSessionId()}`, readyNotice(), deferNotice);
+		}
+	}
+
+	private sessionNotice(ctx: ExtensionContext, key: string, text: string, defer = false): void {
+		if (defer) {
+			this.pendingSessionNotice = { sessionId: ctx.sessionManager.getSessionId(), key, text };
+		} else if (this.notices.once(key)) {
+			notify(ctx, text, "info");
+		}
+	}
+
+	/** The first input arrives after Pi has rendered the reopened session. */
+	showSessionNotice(ctx: ExtensionContext): void {
+		const pending = this.pendingSessionNotice;
+		this.pendingSessionNotice = undefined;
+		if (pending?.sessionId === ctx.sessionManager.getSessionId()) {
+			this.sessionNotice(ctx, pending.key, pending.text);
 		}
 	}
 
 	/** The preview leaves this session to Pi; say so once per session and process. */
-	standAside(ctx: ExtensionContext, reason: InactiveReason): void {
+	standAside(ctx: ExtensionContext, reason: InactiveReason, deferNotice = false): void {
 		setStatusLine(ctx, undefined);
-		if (this.notices.once(`inactive:${ctx.sessionManager.getSessionId()}:${reason}`)) {
-			notify(ctx, inactiveNotice(reason, this.hostVersion), "info");
-		}
+		this.sessionNotice(
+			ctx,
+			`inactive:${ctx.sessionManager.getSessionId()}:${reason}`,
+			inactiveNotice(reason, this.hostVersion),
+			deferNotice,
+		);
 	}
 
 	/**

@@ -111,7 +111,10 @@ and `keptUnsupported` counts an order no user gave kept without a quotation. A r
 nothing silently. Each case's scripted repair passes, which `repair.test.ts` checks against the preview's own repair
 and validator.
 
-The repair request carries no session prefix, so `--cache` does not affect it. The session writer's effort follows
+The repair request carries no session prefix, so `--cache` does not affect it, but every repair request opens with
+the same rules, about 70% of a typical request. The run's first unit goes alone, so that a provider that caches
+prefixes holds the rules before the rest arrive concurrently; `cacheReadShare` reports the share of the repair calls'
+input read from cache. The session writer's effort follows
 the session's thinking level, and Pi clamps that level to the model's declared levels before the writer sees it: on
 `deepseek-flash`, whose map declares no `medium`, a session at `medium` already runs at `high`.
 

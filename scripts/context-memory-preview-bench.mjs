@@ -186,7 +186,7 @@ async function worker() {
 		const serialized = JSON.stringify(payload.messages ?? []);
 		if (action.type === "repair") {
 			const repair = serialized.includes("Correct the quotations of a memory candidate");
-			if (repair) repairSettings.push({ thinking: payload.thinking?.type ?? null, effort: payload.reasoning_effort ?? null, maxTokens: payload.max_tokens ?? payload.max_completion_tokens ?? null });
+			if (repair) repairSettings.push({ thinking: payload.thinking?.type ?? null, effort: payload.reasoning_effort ?? null, maxTokens: payload.max_tokens ?? payload.max_completion_tokens ?? null, toolChoice: payload.tool_choice ?? null, tools: Array.isArray(payload.tools) ? payload.tools.length : 0 });
 			if (repair && action.provider === "deepseek") {
 				forwarded++;
 				try {
@@ -294,7 +294,7 @@ async function worker() {
 			writerCalls: writer.writerCalls ?? 0,
 			phases: (writer.writerCallDetails ?? []).map((call) => call.phase),
 			// Per call: the effort asked for, the reasoning the request carried, how it ended and its output tokens.
-			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
+			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			quotationRepair: writer.quotationRepair ?? null,
@@ -641,6 +641,9 @@ async function parent() {
 		const rows = [];
 		const scores = [];
 		const skipped = [];
+		// The repair carries no session prefix, but every repair request opens with the same rules. The run's first
+		// unit goes alone, so that a provider that caches prefixes has them before the rest arrive concurrently.
+		let primed = false;
 		for (const id of fixtures) {
 			const fixture = readFixture(id);
 			for (let k = 0; k < fixture.gold.checkpoints.length; k++) {
@@ -650,7 +653,7 @@ async function parent() {
 				const set = repairCases({ fixture: id, cut: k + 1, base: goldNote(fixture.gold, k, readable), branch });
 				for (const item of set.skipped) skipped.push({ fixture: id, cut: k + 1, ...item });
 				const units = set.cases.flatMap((repairCase) => Array.from({ length: attempts }, (_, attempt) => ({ repairCase, attempt })));
-				await pool(units, async ({ repairCase, attempt }) => {
+				const work = async ({ repairCase, attempt }) => {
 					const file = copy(baseFile, `${repairCase.id}-attempt${attempt + 1}`);
 					const result = await run({ type: "repair", provider, fixture: id, cutIndex: k, sessionFile: file, thinking, candidate: repairCase.candidate, scripted: repairCase.scripted });
 					spend(result, provider === "deepseek");
@@ -659,7 +662,12 @@ async function parent() {
 					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
 					rows.push(row);
 					record("repairs.jsonl", row);
-				});
+				};
+				if (!primed && units.length) {
+					primed = true;
+					await work(units.shift());
+				}
+				await pool(units, work);
 			}
 		}
 		const repairCalls = rows.flatMap((row) => row.calls.filter((call) => call.phase === "repair"));
@@ -683,6 +691,12 @@ async function parent() {
 				outputTokens: stats(repairCalls.map((call) => call.output)),
 				reasoningTokens: stats(repairCalls.map((call) => call.reasoning)),
 				ms: stats(repairCalls.map((call) => call.ms)),
+				// Share of the repair calls' input the provider reported as read from its cache.
+				cacheReadShare: (() => {
+					const read = repairCalls.reduce((sum, call) => sum + (call.cacheRead ?? 0), 0);
+					const total = read + repairCalls.reduce((sum, call) => sum + (call.input ?? 0), 0);
+					return total ? Number((read / total).toFixed(4)) : null;
+				})(),
 				costUsd: Number(rows.reduce((sum, row) => sum + (row.usage?.cost?.total ?? 0), 0).toFixed(4)),
 			},
 		};

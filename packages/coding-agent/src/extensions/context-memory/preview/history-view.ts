@@ -11,7 +11,7 @@ export const HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"] as const;
 export type HistoryViewKind = (typeof HISTORY_VIEW_KINDS)[number];
 type NoteKind = (typeof noteSections)[number];
 /** Part of every cursor signature: a cursor indexes this version's ordering. */
-const VIEW_VERSION = "view-v1";
+const VIEW_VERSION = "view-v2";
 const EXCERPT_CHARS = 400;
 const EDIT_TOOLS = new Set(["edit", "write"]);
 
@@ -72,8 +72,16 @@ export interface NoteViewItem {
 	quote?: string;
 	sources: Located[];
 	supersedes?: string[];
-	/** Sources of later facts whose `supersedes` names one of this fact's sources. */
+	/**
+	 * Sources of later facts in this section whose `supersedes` names one of this fact's sources, when they account
+	 * for every fact of the section on that source.
+	 */
 	supersededBy?: string[];
+	/**
+	 * Sources of later facts that name one of this fact's sources in `supersedes` without saying which fact they
+	 * replace: they sit in another section, or the section holds more facts on that source than revisions naming it.
+	 */
+	sourceRevisedBy?: string[];
 	/** Branch position of the first checkpoint that recorded the fact. */
 	recordedAt: number;
 	/** The newest checkpoint restates the fact, so the current note already carries it. */
@@ -149,7 +157,9 @@ const matches = (text: string, terms: readonly string[]) => {
  */
 function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: readonly string[]): NoteViewItem[] {
 	const position = new Map(entries.map((entry, index) => [entry.id, index]));
-	const supersededBy = new Map<string, Set<string>>();
+	// Every section's distinct facts, in their latest restatement, so a revision can be matched to the facts it
+	// may replace.
+	const distinct = new Map<string, { section: NoteKind; sources: string[]; supersedes: string[] }>();
 	const recorded = new Map<string, { item: Omit<NoteViewItem, "inLatestCheckpoint">; lastSeen: number }>();
 	let latest = -1;
 	entries.forEach((entry, index) => {
@@ -166,19 +176,15 @@ function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: read
 				const sources = strings(fact.sources)?.filter((id) => position.has(id));
 				if (!sources?.length) continue;
 				const supersedes = strings(fact.supersedes) ?? [];
-				for (const old of supersedes) {
-					const set = supersededBy.get(old) ?? new Set<string>();
-					for (const id of sources) set.add(id);
-					supersededBy.set(old, set);
-				}
-				if (section !== kind) continue;
 				const quote = typeof fact.quote === "string" ? fact.quote : undefined;
 				// A restated fact keeps its sources and quotation while its wording may change. Facts sharing both
 				// within one checkpoint are told apart by order, so the n-th meets the n-th of the next checkpoint.
-				const base = JSON.stringify([[...sources].sort(), quote ?? ""]);
+				const base = JSON.stringify([section, [...sources].sort(), quote ?? ""]);
 				const occurrence = seen.get(base) ?? 0;
 				seen.set(base, occurrence + 1);
 				const key = `${base}#${occurrence}`;
+				distinct.set(key, { section, sources, supersedes });
+				if (section !== kind) continue;
 				const newest = sources.reduce((a, b) => (position.get(a)! >= position.get(b)! ? a : b));
 				recorded.set(key, {
 					item: {
@@ -199,12 +205,40 @@ function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: read
 			}
 		}
 	});
+	// `supersedes` names entries, not facts. Revisions replace the facts of their own section on the entry they name
+	// when those facts are no more than the revisions, the count `mergeWorkNotes` checks before it drops any.
+	// Otherwise, and for revisions in other sections, the view says only that the source was revised.
+	const revisions = new Map<string, { section: NoteKind; sources: string[] }[]>();
+	const onSource = new Map<string, number>();
+	for (const fact of distinct.values()) {
+		for (const old of fact.supersedes) {
+			const list = revisions.get(old);
+			if (list) list.push(fact);
+			else revisions.set(old, [fact]);
+		}
+		if (fact.section === kind)
+			for (const id of fact.sources)
+				if (!fact.supersedes.includes(id)) onSource.set(id, (onSource.get(id) ?? 0) + 1);
+	}
 	return [...recorded.values()].map(({ item, lastSeen }) => {
 		const own = new Set(item.sources.map((source) => source.entryId));
-		const later = [
-			...new Set(item.sources.flatMap((source) => [...(supersededBy.get(source.entryId) ?? [])])),
-		].filter((id) => !own.has(id));
-		return { ...item, ...(later.length ? { supersededBy: later } : {}), inLatestCheckpoint: lastSeen === latest };
+		const replaced = new Set<string>();
+		const revised = new Set<string>();
+		for (const { entryId } of item.sources) {
+			const later = revisions.get(entryId) ?? [];
+			const same = later.filter((fact) => fact.section === kind);
+			const target = same.length && (onSource.get(entryId) ?? 0) <= same.length ? replaced : revised;
+			for (const fact of same) for (const id of fact.sources) target.add(id);
+			for (const fact of later) if (fact.section !== kind) for (const id of fact.sources) revised.add(id);
+		}
+		const supersededBy = [...replaced].filter((id) => !own.has(id));
+		const sourceRevisedBy = [...revised].filter((id) => !own.has(id) && !replaced.has(id));
+		return {
+			...item,
+			...(supersededBy.length ? { supersededBy } : {}),
+			...(sourceRevisedBy.length ? { sourceRevisedBy } : {}),
+			inLatestCheckpoint: lastSeen === latest,
+		};
 	});
 }
 

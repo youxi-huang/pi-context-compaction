@@ -69,7 +69,13 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | `writer` | For each checkpoint, earlier cuts are compacted by a loopback writer that builds faithful notes from the gold files; the measured writer then compacts the cut on `--attempts` fresh copies. Reports refusals by code and quotation class, repairs, writer calls, usage and pause. For each committed note it also reports its size against the bytes it condenses (the previous note and every later message) and how many gold answers it cites, split into answers first asked at this cut and answers carried from earlier cuts |
 | `probes` | The measured writer compacts each fixture cut after cut; a refused cut is retried, as a user retries `/compact`, up to `--chain-attempts` attempts in all (default 4), so that recall is measured on committed notes while `writer` mode measures refusals. A cut still refused blocks its probes and every later one. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites |
 
+| `repair` | For each case of `repair.ts` at each cut, the writer's first call gets the case's planted candidate and only the quotation repair reaches the measured model, `--attempts` times per case. Reports scores by template, refusals by code, and for the repair calls their stop reasons, the effort asked for and the reasoning settings each request carried, output and reasoning tokens, time and cost |
+
 `--provider loopback`, the default, answers locally and never contacts a model service; it checks the harness.
+In `repair` mode, `--provider deepseek-local` loads Pi's catalog model `deepseek/deepseek-flash` with its own
+compatibility settings and level map, moves only its address to the bench, and answers the repair with the case's
+scripted repair: it shows what official Pi sends for each `--thinking` level without any request leaving the
+machine.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
 `--max-cost-usd` and starts no unit once any limit is reached; with `--concurrency N`, up to N units already running
@@ -83,6 +89,34 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
   --output-dir "$OUTPUT_DIR" --label candidate-writer --mode writer --provider deepseek \
   --concurrency 6 --max-requests 50 --max-minutes 20 --max-cost-usd 0.5
 ```
+
+### Quotation-repair cases
+
+`repair.ts` (cases `0.5.1-repair-cases.1`) plants one to three failing quotations in a faithful note for each
+fixture cut, chosen deterministically from the cut's own entries:
+
+| Template | Planted instruction | Passes when the committed note |
+| --- | --- | --- |
+| `misattributed` | A user's sentence cited to another entry | Keeps it, quoted from a user entry or unquoted |
+| `spacing` | A user's sentence with one space doubled | The same |
+| `echoed` | A user's ruling the assistant or a tool repeated, cited to another user entry | The same; a quotation cited only to the echo fails |
+| `toolOnly` | An order only a tool or the assistant wrote, cited to a user entry | Has withdrawn it |
+| `paraphrase` | A user's sentence quoted in other words that no entry holds | Keeps it, quoted from a user entry or unquoted |
+| `combined` | A misattribution, a spacing fault and a paraphrase in one note | Passes all three |
+
+A case is kept only when the preview's own diagnosis classifies each planted quotation as intended; templates a cut
+cannot carry are listed as skipped. The fixtures yield 38 cases. Scoring needs no judge: `silentLoss` counts
+committed notes without a ruling a user gave, `promoted` counts instructions quoted only from assistant or tool text,
+and `keptUnsupported` counts an order no user gave kept without a quotation. A refused note passes nothing and loses
+nothing silently. Each case's scripted repair passes, which `repair.test.ts` checks against the preview's own repair
+and validator.
+
+The repair request carries no session prefix, so `--cache` does not affect it, but every repair request opens with
+the same rules, about 70% of a typical request. The run's first unit goes alone, so that a provider that caches
+prefixes holds the rules before the rest arrive concurrently; `cacheReadShare` reports the share of the repair calls'
+input read from cache. The session writer's effort follows
+the session's thinking level, and Pi clamps that level to the model's declared levels before the writer sees it: on
+`deepseek-flash`, whose map declares no `medium`, a session at `medium` already runs at `high`.
 
 ### Prompt cache
 

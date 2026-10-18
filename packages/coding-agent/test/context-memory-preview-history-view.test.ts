@@ -180,6 +180,10 @@ describe("typed history view", () => {
 		expect(u2.excerpt).toEqual({ entryId: "u2", offset: 0, text: "Raise the timeout to 200 ms." });
 		expect(items.at(-1)).toMatchObject({ quote: "Set the request timeout to 100 ms.", recordedAt: 4 });
 		expect(page.cursor).toBeUndefined();
+		// The vendor rule shares entry u1 with the first timeout; the revision of u1 sits in another section.
+		const [vendor] = listHistory(branch.snapshot(), { kind: "instructions" }).items as NoteViewItem[];
+		expect(vendor.supersededBy).toBeUndefined();
+		expect(vendor.sourceRevisedBy).toEqual(["u2"]);
 	});
 
 	it("filters by query terms over summaries and sources, including Chinese bigrams", () => {
@@ -263,6 +267,65 @@ describe("typed history view", () => {
 		expect(items.map((item) => [item.summary, item.recordedAt, item.inLatestCheckpoint])).toEqual([
 			["Port is 4317.", 2, true],
 			["Do not modify vendor/.", 2, true],
+		]);
+	});
+
+	it("marks a revision only on the facts it replaces when their source supports others too", () => {
+		const branch = new Branch();
+		branch.user("a", "Do not modify vendor/. Set the timeout to 100 ms.");
+		branch.assistant("a1", "Noted.");
+		branch.checkpoint("cp1", {
+			instructions: [fact("Do not modify vendor/.", ["a"], { quote: "Do not modify vendor/." })],
+			reasons: [fact("Timeout is 100 ms.", ["a"])],
+		});
+		branch.user("b", "Raise the timeout to 200 ms; the other rules stand.");
+		branch.assistant("b1", "Raised.");
+		branch.checkpoint("cp2", {
+			instructions: [fact("Do not modify vendor/.", ["a"], { quote: "Do not modify vendor/." })],
+			reasons: [fact("Timeout raised to 200 ms.", ["b"], { supersedes: ["a"] })],
+		});
+		const instructions = listHistory(branch.snapshot(), { kind: "instructions" }).items as NoteViewItem[];
+		// The revision names entry a, which also carries the vendor rule; it does not replace that rule.
+		expect(instructions).toHaveLength(1);
+		expect(instructions[0].supersededBy).toBeUndefined();
+		expect(instructions[0].sourceRevisedBy).toEqual(["b"]);
+		expect(instructions[0].inLatestCheckpoint).toBe(true);
+		const reasons = listHistory(branch.snapshot(), { kind: "reasons" }).items as NoteViewItem[];
+		expect(reasons.map((item) => [item.summary, item.supersededBy ?? [], item.sourceRevisedBy ?? []])).toEqual([
+			["Timeout raised to 200 ms.", [], []],
+			["Timeout is 100 ms.", ["b"], []],
+		]);
+	});
+
+	it("does not guess which of several facts on one source a single revision replaces", () => {
+		const branch = new Branch();
+		branch.user("a", "Set the timeout to 100 ms and the retry count to 3.");
+		branch.assistant("a1", "Noted.");
+		branch.checkpoint("cp1", { state: [fact("Timeout 100 ms.", ["a"]), fact("Retries 3.", ["a"])] });
+		branch.user("b", "Raise the timeout to 200 ms.");
+		branch.assistant("b1", "Raised.");
+		branch.checkpoint("cp2", { state: [fact("Timeout 200 ms.", ["b"], { supersedes: ["a"] })] });
+		const ambiguous = listHistory(branch.snapshot(), { kind: "state" }).items as NoteViewItem[];
+		expect(ambiguous.map((item) => [item.summary, item.supersededBy ?? [], item.sourceRevisedBy ?? []])).toEqual([
+			["Timeout 200 ms.", [], []],
+			["Timeout 100 ms.", [], ["b"]],
+			["Retries 3.", [], ["b"]],
+		]);
+		// Two revisions that name the entry account for both facts on it.
+		branch.user("c", "Set retries to 5.");
+		branch.assistant("c1", "Set.");
+		branch.checkpoint("cp3", {
+			state: [
+				fact("Timeout 200 ms.", ["b"], { supersedes: ["a"] }),
+				fact("Retries 5.", ["c"], { supersedes: ["a"] }),
+			],
+		});
+		const counted = listHistory(branch.snapshot(), { kind: "state" }).items as NoteViewItem[];
+		expect(counted.map((item) => [item.summary, item.supersededBy ?? [], item.sourceRevisedBy ?? []])).toEqual([
+			["Retries 5.", [], []],
+			["Timeout 200 ms.", [], []],
+			["Timeout 100 ms.", ["b", "c"], []],
+			["Retries 3.", ["b", "c"], []],
 		]);
 	});
 

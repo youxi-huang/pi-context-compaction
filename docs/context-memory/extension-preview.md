@@ -104,7 +104,13 @@ also reports the first refused candidate's quotation failures by class
 (`quotations`), the kind of a repair that ran (`repairKind`), what a
 quotation repair changed (`quotationRepair`) and how many writer responses
 called a tool instead of writing the note (`toolCallResponses`), and whether
-one was declined (`toolCallDeclined`); all but the last are counts.
+one was declined (`toolCallDeclined`); all but the last are counts. Since
+0.5.1, each call under `writerCallDetails` also names the reasoning effort it
+asked for (`effort`), the reasoning settings and output cap its provider
+request carried (`sent`, read from the request Pi built, without its content)
+and how the response ended (`stopReason`), and `quotationRepair.droppedFrom`
+counts withdrawn facts by section. Pi maps a level the model does not declare
+to a supported one, so `sent` can differ from `effort`.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -187,7 +193,12 @@ committed checkpoints recorded, edits read from `edit` and `write` tool calls
 with their outcome, and errors from failed tool results and shell commands. A
 fact restated by several checkpoints appears once; one that a later fact
 supersedes is marked with what replaced it; every item names its original
-entries and carries an excerpt of one. The list is computed from the current
+entries and carries an excerpt of one. A note's `supersedes` names entries,
+not facts, so a revision marks only the facts of its own section on the entry
+it names, and only when they are no more than the revisions naming it. In any
+other case, such as a constraint stated in the same message as a value that
+was later revised, the item carries `sourceRevisedBy` instead: its source was
+revised, and the excerpt says whether the item was. The list is computed from the current
 branch on every call and stores nothing. It can miss what a writer left out, so
 search remains the way to check.
 
@@ -215,7 +226,13 @@ for at most five facts, the writer gets one repair request that names those
 facts, the entries they cite and the entries that do contain the quoted text,
 with their roles. A replacement may change only its sources and quote, or
 withdraw the fact; every other fact stays as written, and the whole note is
-checked again. `noteRepair` governs this repair and the size repair, and a
+checked again. A failed quotation is a fault in the evidence, not a
+retraction: a repair that withdraws an instruction whose quoted text a user
+message contains refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, since a
+misquoted rule is still a rule. Re-citing it or dropping its quote remains
+possible. Since 0.5.1 the quotation repair runs without reasoning, whatever the
+writer's effort: it rebinds at most five quotations, and on DeepSeek it passed
+as often without reasoning as at `high`, at a quarter of the output. `noteRepair` governs this repair and the size repair, and a
 compaction spends at most one of them. A second failure blocks as before. The
 extension never moves a quotation to another entry on its own: text found
 only in an assistant message or a tool output is not a user ruling.

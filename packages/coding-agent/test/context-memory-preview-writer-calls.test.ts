@@ -361,6 +361,10 @@ describe("preview writer provider-call reservations and settlements", () => {
 			usageReports: dispatched,
 			repairUsed: true,
 		});
+		// The size repair offers no tools and, like the session writer, sets no tool choice.
+		const [, repairContext, repairOptions] = test.requests.mock.calls[1];
+		expect(repairContext.tools).toEqual([]);
+		expect(repairOptions).not.toHaveProperty("toolChoice");
 	});
 
 	it("a refused repair preserves the first paid generation and does not send the repair", async () => {
@@ -514,7 +518,10 @@ describe("preview writer provider-call reservations and settlements", () => {
 				content: [{ type: "text", text: TOOL_CALL_DECLINED }],
 			});
 			expect(second.tools).toEqual(prefix.tools);
-			expect(test.requests.mock.calls[1][2]).toEqual(test.requests.mock.calls[0][2]);
+			// Each call observes its own payload; every setting the provider receives is the same.
+			const [firstOptions, secondOptions] = test.requests.mock.calls.map((call) => call[2]);
+			expect(typeof secondOptions?.onPayload).toBe("function");
+			expect({ ...secondOptions, onPayload: undefined }).toEqual({ ...firstOptions, onPayload: undefined });
 			expect(test.progress.at(-1)).toMatchObject({
 				writerCalls: 2,
 				repairUsed: false,

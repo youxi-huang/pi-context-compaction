@@ -1,5 +1,54 @@
 # Validation record
 
+## Unreleased: quotation-repair cases and the reasoning each writer call sends, 2026-10-18 UTC
+
+Offline, scripted and loopback evidence only; no request left the machine. It
+prepares the 0.5.1 repair-budget measurement, whose provider run waits for the
+maintainer's limits.
+
+**Typed view.** In the timeline fixture of the history-view test, the constraint
+"Leave vendor/ unchanged." cites the same entry as the first timeout, and the
+revision that raised the timeout names that entry. Before `fa11be0` the list
+marked the constraint `supersededBy: ["u2"]`; the test counted the constraint
+but did not check the field. The three new regressions failed on the previous
+view and pass now.
+
+**Repair guard.** A repair that answers `null` for the port rule, whose
+quotation sits in a user entry, committed a note without the rule before
+`f57e5b7` ("promise resolved instead of rejecting") and refuses it now with
+`CONTEXT_NOTE_REPAIR_LOSS`.
+
+**What Pi sends.** `--mode repair --provider deepseek-local` on P1, 16 cases
+for each level, with `stock-preview+src.58592bb676b92a5a`, the build CI checked
+below. Each official host
+lists `deepseek/deepseek-flash` with `thinkingLevelMap` `{minimal: null, low:
+"low", medium: null, high: "high", max: "max"}`, compatibility
+`thinkingFormat: "deepseek"`, and catalog prices of $0.30, $1.20 and $0.006
+per million input, output and cache-read tokens. The three hosts gave the same
+result, and the settings read through `onPayload` matched the request the
+bench received:
+
+| Session thinking level | Effort the writer asked for | Repair request on Pi 1.3.0, 1.2.0 and 1.1.0 |
+| --- | --- | --- |
+| `high` | `high` | `thinking: enabled`, `reasoning_effort: "high"`, `max_tokens: 8000` |
+| `medium` | `high` | the same as `high` |
+| `low` | `low` | `thinking: enabled`, `reasoning_effort: "low"`, `max_tokens: 8000` |
+| `off` | `off` | `thinking: disabled`, no effort, `max_tokens: 8000` |
+
+Pi clamps the session's level before the writer sees it, so on this model a
+session at `medium` runs its writer and its repair at `high`. P2 and P3 at
+`high` sent the same settings; every P cut gives the repair 8,000 output tokens,
+fewer than the 11,962 the release-build repair spent without a usable answer.
+
+**Harness.** `--mode repair --provider loopback` on Pi 1.3.0, one attempt per
+case: 38 of 38 committed and passed with each case's scripted repair, no silent
+loss, no promoted instruction. The 38 repair requests are 2,310 to 4,487 bytes,
+median 2,750.
+
+| Command | Result |
+| --- | --- |
+| `context-memory-ops.mjs ci` on clean `fc28cb3` | Exit 0, 20 of 20 steps. Fingerprint unchanged; `context-memory-check.mjs` 120 script and 373 runtime checks; security regressions 111 and 3; acceptance 32/32, 28/28 and 28/28 on Pi 1.3.0, 1.2.0 and 1.1.0 for `stock-preview+src.58592bb676b92a5a`; strict scenarios 148 passed, no known gaps; release checks 31 passed; `--prepare` produced the package; full offline evaluation 103 tests, with the five new repair-case tests; no `EVAL_FROZEN_INPUT_CHANGED` |
+
 ## v0.5.0: corrected candidate on P1 to P3 with DeepSeek V4.1 Flash, 2026-10-16 to 17 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { getInitialSystemMessage, type Tool } from "@earendil-works/pi-ai";
 import {
@@ -38,6 +39,7 @@ import type {
 	PreviewCompaction,
 	PreviewDiagnosis,
 	PreviewFailureStoreContract,
+	PreviewReadback,
 	PreviewSession,
 } from "./contracts.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
@@ -309,13 +311,22 @@ export function assertPreviewSession(
 	session: PreviewSession,
 	version: string = VERSION,
 	branch?: readonly SessionEntry[],
+	onSerializedEntry?: (index: number, serialized: string) => void,
 ): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
 	const sources = branch ?? session.getBranch();
-	const latest = validateMemoryCheckpoints(sources);
+	const latest = validateMemoryCheckpoints(sources, onSerializedEntry);
 	assertUserMessages(sources);
 	return latest;
+}
+
+function assertHashedPreviewSession(session: PreviewSession, version: string, branch?: readonly SessionEntry[]) {
+	const hash = createHash("sha256");
+	const checkpoint = assertPreviewSession(session, version, branch, (_index, serialized) => {
+		hash.update(serialized).update("\n");
+	});
+	return { checkpoint, sourceHash: hash.digest("hex") };
 }
 
 /** What the last full source validation proved, reused only while the same entry objects extend it. */
@@ -679,15 +690,18 @@ export class PreviewMemoryController {
 		const session = ctx.sessionManager;
 		const branch = session.getBranch();
 		let checkpoint: ReturnType<typeof latestMemory>;
+		let serializedBranch: string[] | undefined;
 		if (this.verified && this.extendsVerified(this.verified, session, branch)) {
 			checkpoint = this.verified.checkpoint;
 		} else {
 			this.verified = undefined;
-			checkpoint = assertPreviewSession(session, this.hostVersion, branch);
+			const serialized: string[] = [];
+			checkpoint = assertPreviewSession(session, this.hostVersion, branch, (_index, text) => serialized.push(text));
+			serializedBranch = serialized;
 		}
 		const sticky = this.stickyFailures.get(session.getSessionId());
 		if (sticky) throw new Error(sticky);
-		this.store.assertReady(session);
+		this.store.assertReady(session, serializedBranch);
 		this.verified = {
 			session,
 			sessionId: session.getSessionId(),
@@ -887,20 +901,25 @@ export class PreviewMemoryController {
 		setStatusLine(ctx, "writing");
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-			assertPreviewSession(ctx.sessionManager, this.hostVersion);
+			const branch = structuredClone(ctx.sessionManager.getBranch());
+			const { checkpoint: previous, sourceHash: branchHash } = assertHashedPreviewSession(
+				ctx.sessionManager,
+				this.hostVersion,
+				branch,
+			);
 			// Pi's threshold compaction runs after a completed turn, exactly where /compact may run.
 			if (!(event.reason === "manual" || event.reason === "threshold") || event.willRetry) {
 				throw new Error("CONTEXT_PREVIEW_COMPACT_REQUIRED: overflow recovery needs an explicit /compact");
 			}
 			event.signal.throwIfAborted();
-			const branch = structuredClone(ctx.sessionManager.getBranch());
 			const projection = ctx.sessionManager.buildSessionProjection();
 			assertToolPairs(projection.messages);
 			const last = [...projection.messages].reverse().find((message) => message.role !== "system");
 			const completed = last?.role === "assistant" && (last.stopReason === "stop" || last.stopReason === "length");
+			const readback: PreviewReadback = {};
 			const recovering =
 				this.stickyFailures.has(ctx.sessionManager.getSessionId()) ||
-				this.store.status(ctx.sessionManager).state !== "ready";
+				this.store.status(ctx.sessionManager, branchHash, readback).state !== "ready";
 			const terminated =
 				last?.role === "user" ||
 				(last?.role === "assistant" && (last.stopReason === "error" || last.stopReason === "aborted"));
@@ -909,7 +928,7 @@ export class PreviewMemoryController {
 			}
 			if (!ctx.model || !ctx.sessionManager.getLeafId()) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			// Only an explicit manual retry replaces blocked/pending with a new durable pending attempt.
-			const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual");
+			const attempt = this.store.begin(ctx.sessionManager, event.reason === "manual", branchHash, readback);
 			this.observedFailures.delete(attempt.sessionId);
 			const snapshot = {
 				sessionId: attempt.sessionId,
@@ -931,7 +950,6 @@ export class PreviewMemoryController {
 			assertToolPairs(kept);
 			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
 			let coveredIndex = branch.length - 1;
-			const previous = latestMemory(branch);
 			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
 			const notes = workNotes(branch, previous?.memory.coveredThrough);
 			const increments = notes.map((item) => item.note);
@@ -1073,7 +1091,7 @@ export class PreviewMemoryController {
 			if (
 				snapshot.sessionId !== ctx.sessionManager.getSessionId() ||
 				snapshot.leafId !== ctx.sessionManager.getLeafId() ||
-				hashEntries(branch) !== hashEntries(ctx.sessionManager.getBranch())
+				attempt.sourceHash !== hashEntries(ctx.sessionManager.getBranch())
 			) {
 				throw new Error("CONTEXT_SOURCE_CHANGED: discard the generated candidate");
 			}
@@ -1152,13 +1170,12 @@ export class PreviewMemoryController {
 			return;
 		}
 		try {
-			assertPreviewSession(ctx.sessionManager, this.hostVersion);
-			const memory = latestMemory(ctx.sessionManager.getBranch());
+			const { checkpoint: memory, sourceHash } = assertHashedPreviewSession(ctx.sessionManager, this.hostVersion);
 			if (!event.fromExtension || memory?.entry.id !== event.compactionEntry.id) {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
 			// The marker owner reads the exact checkpoint and sources back from persistent JSONL.
-			this.store.commit(ctx.sessionManager, event.compactionEntry);
+			this.store.commit(ctx.sessionManager, event.compactionEntry, sourceHash);
 			const started = this.compactionStartedAt.get(ctx.sessionManager.getSessionId());
 			this.compactionStartedAt.delete(ctx.sessionManager.getSessionId());
 			const last = this.lastCompaction.get(ctx.sessionManager.getSessionId());
@@ -1188,9 +1205,8 @@ export class PreviewMemoryController {
 		this.forgetVerified();
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
-			assertPreviewSession(ctx.sessionManager, this.hostVersion);
+			const { checkpoint: memory, sourceHash } = assertHashedPreviewSession(ctx.sessionManager, this.hostVersion);
 			const leaf = ctx.sessionManager.getLeafEntry();
-			const memory = latestMemory(ctx.sessionManager.getBranch());
 			if (
 				leaf?.type !== "compaction" ||
 				memory?.entry.id !== leaf.id ||
@@ -1198,7 +1214,7 @@ export class PreviewMemoryController {
 			) {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
-			this.store.recover(ctx.sessionManager, leaf);
+			this.store.recover(ctx.sessionManager, leaf, sourceHash);
 			this.preparation?.committed();
 			this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());

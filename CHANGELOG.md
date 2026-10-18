@@ -13,6 +13,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Changed
 
 - The independent preview's notices begin with `Source-linked compaction`, say what happened before why, and put the code last. A blocked session no longer repeats the whole notice on every input: later inputs blocked by the same code get one short line until a checkpoint or recovery is confirmed. `/compaction-doctor` reports a `requests` line instead of `durable block`, and every code a preview session can raise or restore has its own advice.
+- The independent preview reopens long sessions and saves checkpoints faster by sharing repeated serialization, hashes and reads within synchronous operations. Checkpoint source hashes and validation boundaries are unchanged.
 
 ### Security
 

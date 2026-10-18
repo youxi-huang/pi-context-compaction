@@ -120,6 +120,13 @@ real-provider evidence; report failures as they occurred. Commit messages use
 `type: summary`, with a lowercase start: `build`, `fix`, `feat`, `test`, `docs`,
 `security`, `deps`, `eval`, or `scripts`.
 
+A provider comparison between two builds runs them side by side: started
+together on the same day, with the same bench settings and script, and at
+least two runs of each build. One run per build is not evidence of a
+difference. On 2026-10-18 the same release build refused twice at two P cuts
+where it had not refused the day before, and two runs of one candidate
+committed 58 and 63 of 64 notes.
+
 ## Two agents, one repository
 
 Before starting, inspect open PRs and branches to avoid duplicate work. Use one

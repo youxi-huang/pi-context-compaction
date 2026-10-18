@@ -45,6 +45,8 @@ The extension does not replace Pi's executable or copy its credentials. Authenti
 
 ## Your first session
 
+The footer shows whether compaction is on, how many checkpoints are on the current branch, when it is writing a note, or when requests are paused with a pointer to `/compaction-doctor`.
+
 Start a **new, persistent, text-only** Pi session. Pi shows one short line saying the preview is active. Then enter:
 
 ```text

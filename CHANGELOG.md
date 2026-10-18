@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- The independent preview shows its state in Pi's footer: on, the current branch's checkpoint count, writing a note, or paused with a pointer to `/compaction-doctor`.
+
 ### Security
 
 - Remove the unused upstream Gondolin micro-VM example and its workspace dependency chain, which included `node-forge` affected by GHSA-86w9-cpqp-85rv. Remove its standalone lockfile and the obsolete audit exception, and update the example index and isolation guide. The documented agent maintenance commands, resident compaction runtime and independent extension do not use this example.

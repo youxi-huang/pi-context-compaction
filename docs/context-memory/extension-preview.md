@@ -74,6 +74,8 @@ preserves Pi credentials, other package registrations and session files.
 
 ## First use
 
+The footer shows whether compaction is on, the checkpoint count on the current branch, `compaction: writing note` during compaction, or `compaction: paused, see /compaction-doctor` when requests are paused.
+
 Start a new, persistent, text-only session. After Pi starts or reloads its
 extensions, the preview shows one short line saying it is active. Then run:
 

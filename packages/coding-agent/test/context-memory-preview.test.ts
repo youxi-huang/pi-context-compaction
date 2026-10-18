@@ -1727,6 +1727,91 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	it("holds paused interactive text in the editor without disk access or recording input", async () => {
+		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		const handlers = loadPreview();
+		const base = context();
+		const setEditorText = vi.fn();
+		const ctx = { ...base, hasUI: true, ui: { ...base.ui, setEditorText } };
+		await emit(handlers, "session_start", {}, ctx);
+		vi.mocked(ctx.ui.notify).mockClear();
+		vi.mocked(ctx.abort).mockClear();
+		const entries = structuredClone(session.entries);
+		const read = vi.spyOn(fs, "readFileSync");
+		const write = vi.spyOn(fs, "writeFileSync");
+		const diagnose = vi.spyOn(PreviewMemoryController.prototype, "diagnose");
+		const status = vi.spyOn(PreviewMemoryController.prototype, "status");
+		const text = "Continue checking port 4317.\nKeep deployment unauthorized.";
+		expect(await emit(handlers, "input", { type: "input", source: "interactive", text }, ctx)).toEqual({
+			action: "handled",
+		});
+		expect(setEditorText).toHaveBeenCalledExactlyOnceWith(text);
+		expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+			"Source-linked compaction: requests are still paused. Run /compact to try again. (CONTEXT_NOTE_QUOTE)",
+			"warning",
+		);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		expect(session.entries).toEqual(entries);
+		expect(read).not.toHaveBeenCalled();
+		expect(write).not.toHaveBeenCalled();
+		expect(diagnose).not.toHaveBeenCalled();
+		expect(status).not.toHaveBeenCalled();
+		// A request that bypasses the UI boundary still reaches the unchanged guard.
+		await emit(handlers, "before_provider_request", { payload: { messages: [] } }, ctx);
+		expect(ctx.abort).toHaveBeenCalledOnce();
+		expect(ctx.ui.notify).toHaveBeenCalledOnce();
+	});
+	it.each([
+		{ source: "interactive", paused: false, hasUI: true },
+		{ source: "interactive", paused: true, hasUI: false },
+		{ source: "rpc", paused: true, hasUI: true },
+		{ source: "extension", paused: true, hasUI: true },
+		{
+			source: "interactive",
+			paused: true,
+			hasUI: true,
+			images: [{ type: "image", data: "synthetic", mimeType: "image/png" }],
+		},
+	])("leaves input on its existing path for %j", async ({ source, paused, hasUI, images }) => {
+		if (paused) new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		const handlers = loadPreview();
+		const base = context();
+		const setEditorText = vi.fn();
+		const ctx = { ...base, hasUI, ui: { ...base.ui, setEditorText } };
+		await emit(handlers, "session_start", {}, ctx);
+		vi.mocked(ctx.ui.notify).mockClear();
+		vi.mocked(ctx.abort).mockClear();
+		expect(await emit(handlers, "input", { type: "input", source, text: "Continue.", images }, ctx)).toBeUndefined();
+		expect(setEditorText).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+		expect(ctx.abort).not.toHaveBeenCalled();
+		if (paused) {
+			await emit(handlers, "before_provider_request", { payload: { messages: [] } }, ctx);
+			expect(ctx.abort).toHaveBeenCalledOnce();
+		}
+	});
+	it("uses the current session's failure and resumes input after recovery", () => {
+		const preview = controller();
+		const base = context();
+		const ctx = { ...base, hasUI: true, ui: { ...base.ui, setEditorText: vi.fn() } };
+		const input = { type: "input" as const, source: "interactive" as const, text: "Continue.", images: [] };
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("A quotation in the note"), "error");
+		preview.fail(ctx, "CONTEXT_NOTE_SCOPE");
+		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("The note cites a message"), "error");
+		const other = { ...ctx, sessionManager: new SyntheticSession(root, "other-session") };
+		expect(preview.input(input, other)).toBeUndefined();
+		const store = new PreviewFailureStore(agentDir);
+		const attempt = store.begin(session, true);
+		const value = candidate(session);
+		value.details!.build = "stock-preview+test";
+		store.stage(session, attempt, value);
+		session.append(saved(session, value));
+		preview.recover(ctx);
+		expect(preview.input(input, ctx)).toBeUndefined();
+	});
 	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {
 		const handlers = loadPreview();
 		const setStatus = vi.fn();

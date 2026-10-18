@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.5.2] — 2026-10-18
+
+v0.5.2 makes the independent extension quiet when it works and specific when it has to stop. Pi's footer now shows whether compaction is on, how many checkpoints the branch holds, when a note is being written and when requests are paused. Notices say what happened before why and end with the code, and a blocked session gets a one-line reminder instead of the whole notice on every input. Text typed while requests are paused goes back to the editor instead of into a request Pi then aborts. A session that reopens with a checkpoint shows its ready or off notice at the first input, where Pi's own status line used to overwrite it. Around a compaction the extension spends 44% less of its own time, with every check in place. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged. Each change was walked through in an 80-column terminal on official Pi 1.3.0, 1.2.0 and 1.1.0 with synthetic responses; no real-provider run is part of this release. The source tree also drops an unused upstream example that pulled in a vulnerable `node-forge`.
+
 ### Added
 
 - The independent preview shows its state on Pi's footer line: on, the number of checkpoints on the current branch, writing a note, or paused with a pointer to `/compaction-doctor`. Before, a paused session showed only when an input was refused.

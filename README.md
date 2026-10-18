@@ -8,7 +8,7 @@ Pi Context Compaction explores a more traceable handover for [Pi](https://github
 
 The goal is **continuity with a route back to the source**, not perfect memory.
 
-**Current release:** [v0.5.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.1) is an **independent extension preview** for unmodified official **Pi 1.3.0, 1.2.0 and 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
+**Current release:** [v0.5.2](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.2) is an **independent extension preview** for unmodified official **Pi 1.3.0, 1.2.0 and 1.1.0**. It supports `/compact` and Pi's threshold compaction after completed turns in persistent, text-only sessions, and leaves sessions it cannot check to Pi.
 
 **Before updating Pi:** check that the preview lists the new version. On an unlisted Pi, a session the preview already protects stays blocked until it is reopened with a listed version; see [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
 
@@ -32,14 +32,14 @@ You need:
 Install the pinned package from your terminal:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.1
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.2
 ```
 
 Preparation and work notes remain off until explicitly configured. The [extension guide](docs/context-memory/extension-preview.md) describes their limits and configuration.
 
 That is the whole installation. You don't need to clone this repository, rebuild Pi or configure a second model. Restart Pi afterwards.
 
-**Why `extension-v0.5.1` and not `v0.5.1`?** They are different Git tags. `extension-v0.5.1` holds the small installable package. `v0.5.1` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
+**Why `extension-v0.5.2` and not `v0.5.2`?** They are different Git tags. `extension-v0.5.2` holds the small installable package. `v0.5.2` marks the development source tree, which is not a Pi package. The repository's default branch is the source tree too, so install by package tag (or by the `extension-preview` branch described [below](#update-or-remove)).
 
 The extension does not replace Pi's executable or copy its credentials. Authentication stays in Pi's own configuration.
 
@@ -108,7 +108,7 @@ The [architecture](docs/context-memory/architecture.md) covers the note format, 
 
 The scope is deliberately narrow, so that its behavior can be tested and explained.
 
-**Supported in v0.5.1**
+**Supported in v0.5.2**
 
 - Official Pi **1.3.0, 1.2.0 or 1.1.0**, with the extension installed independently of Pi.
 - Persistent, text-only sessions, either new or already handled by this preview, with one Pi process writing each session.
@@ -146,7 +146,7 @@ A protected session that gained old checkpoints from another compactor, image co
 
 Pi records one source per package repository. Installing the same repository with a different tag or branch **replaces** the recorded source; it never adds a second copy. Restart Pi after any install or update.
 
-The installation above is **pinned** to `extension-v0.5.1` and stays there until you install a different package tag.
+The installation above is **pinned** to `extension-v0.5.2` and stays there until you install a different package tag.
 
 To follow later previews automatically instead, install the **moving `extension-preview` branch**, which replaces the pinned tag:
 
@@ -160,7 +160,7 @@ To update only this package when you follow the branch:
 pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
 ```
 
-A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.5.1 targets Pi 1.3.0, 1.2.0 and 1.1.0, so check the supported version [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
+A pinned tag does not move when updated. A plain `pi update` updates **Pi itself**, and `pi update --all` updates Pi and every package. v0.5.2 targets Pi 1.3.0, 1.2.0 and 1.1.0, so check the supported version [before updating Pi](docs/context-memory/extension-preview.md#before-updating-pi).
 
 To remove the package, whichever tag or branch you installed:
 
@@ -170,11 +170,11 @@ pi remove git:github.com/youxi-huang/pi-context-compaction
 
 Updating or removing the package does not migrate, rewrite or delete sessions, and it leaves other packages and Pi's credentials alone.
 
-The [v0.5.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.1) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
+The [v0.5.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.2) also carries the extension archive, a source archive, checksums, provenance and exact-package scenario evidence. The preview is distributed through Git, not npm.
 
 ## What has been tested
 
-The project publishes failures and limits next to the passing checks. v0.5.1 requires these gates on the final source and package:
+The project publishes failures and limits next to the passing checks. v0.5.2 requires these gates on the final source and package:
 
 | Evidence | Scope |
 | --- | --- |
@@ -184,7 +184,7 @@ The project publishes failures and limits next to the passing checks. v0.5.1 req
 | Stock-Pi package and lifecycle acceptance | Install, update, removal, the read-only self-check, checkpoint validation, failure and recovery on isolated official Pi 1.3.0, 1.2.0 and 1.1.0, including cross-version checkpoints |
 | Full default-settings scenarios, strict profile | Pi 1.3.0 stock controls, Pi 1.0.4 refusal, A and B paths, and both long-session overhead checks; no performance waiver or known gap |
 
-None of this shows better recovery than native Pi. The preview's acceptance and scenario runs use isolated synthetic and loopback services; they say nothing about real-provider latency, interactive TUI behavior or everyday robustness. Earlier live results belong to the resident build. Bounded provider runs of the preview with DeepSeek V4.1 Flash on Pi 1.3.0 are recorded separately: for v0.5.0, a writer bench and recovery probes on three synthetic sessions. On the two sessions both writers ran, v0.5.0 builds committed 37 to 40 of 40 notes against 32 for the v0.4.3 writer, and on the session built for retrieval every probe passed. For v0.5.1, the quotation repair without reasoning passed 76 of 76 attempts on 38 planted cases against 75 of 76 at `high`, and in writer benches beside a same-day run of the v0.5.0 release build the candidate committed 121 of 128 notes against 62 of 64. One model on synthetic sessions measures neither a general failure rate nor a benefit over native Pi.
+None of this shows better recovery than native Pi. The preview's acceptance and scenario runs use isolated synthetic and loopback services; they say nothing about real-provider latency, interactive TUI behavior or everyday robustness. For v0.5.2 the interactive terminal was checked separately, in a scripted 80-column pseudo-terminal on all three hosts with synthetic responses. Earlier live results belong to the resident build. Bounded provider runs of the preview with DeepSeek V4.1 Flash on Pi 1.3.0 are recorded separately: for v0.5.0, a writer bench and recovery probes on three synthetic sessions. On the two sessions both writers ran, v0.5.0 builds committed 37 to 40 of 40 notes against 32 for the v0.4.3 writer, and on the session built for retrieval every probe passed. For v0.5.1, the quotation repair without reasoning passed 76 of 76 attempts on 38 planted cases against 75 of 76 at `high`, and in writer benches beside a same-day run of the v0.5.0 release build the candidate committed 121 of 128 notes against 62 of 64. One model on synthetic sessions measures neither a general failure rate nor a benefit over native Pi.
 
 The [validation record](docs/context-memory/validation.md) has the scenarios, methods, failed attempts and measured costs. The [roadmap](docs/context-memory/roadmap.md) says what remains open, and the [changelog](CHANGELOG.md) lists each release.
 

@@ -13,7 +13,7 @@ import { estimateTokens, type ModelRegistry, type SessionEntry } from "@earendil
 
 import { MAX_NOTE_TOKENS, type MemoryConfig, SESSION_WRITER, textTokens } from "../config.ts";
 import { summarizeUsage, type WriterCallRecord } from "../events.ts";
-import { hashEntries } from "../identity.ts";
+import { hashEntries, isRecord } from "../identity.ts";
 import {
 	type MemoryNote,
 	NoteBudgetError,
@@ -55,7 +55,48 @@ export interface WriterDispatchRequest {
 	readonly phase: WriterCallRecord["phase"];
 	/** `provider/model` actually selected for this call. */
 	readonly model: string;
+	/** Reasoning effort requested for this call, or `off`. */
 	readonly writerEffort: ThinkingLevel | "off";
+}
+
+/**
+ * The reasoning settings and output cap of a provider request as the host built it, read from its payload. Pi
+ * clamps a level the model does not declare to a supported one, so the request can differ from what was asked.
+ */
+export interface SentReasoning {
+	/** `reasoning_effort`, or `reasoning.effort`. */
+	effort?: string;
+	/** `thinking.type`, such as `enabled` or `disabled`. */
+	thinking?: string;
+	/** `thinking.budget_tokens`. */
+	budgetTokens?: number;
+	/** `max_tokens`, `max_completion_tokens` or `max_output_tokens`. */
+	maxTokens?: number;
+}
+
+/** One writer call as status reports it: the shared record, plus what was asked for, what was sent and how it ended. */
+export interface PreviewWriterCallRecord extends WriterCallRecord {
+	/** Reasoning effort requested for this call, or `off`. */
+	effort?: ThinkingLevel | "off";
+	/** Absent when the host did not show the writer its payload. */
+	sent?: SentReasoning;
+	/** How the provider ended the response, as Pi reports it. */
+	stopReason?: AssistantMessage["stopReason"];
+}
+
+/** Settings only, never content: the payload carries the whole request. */
+function sentReasoning(payload: unknown): SentReasoning {
+	if (!isRecord(payload)) return {};
+	const sent: SentReasoning = {};
+	const effort = payload.reasoning_effort ?? (isRecord(payload.reasoning) ? payload.reasoning.effort : undefined);
+	if (typeof effort === "string") sent.effort = effort;
+	if (isRecord(payload.thinking)) {
+		if (typeof payload.thinking.type === "string") sent.thinking = payload.thinking.type;
+		if (typeof payload.thinking.budget_tokens === "number") sent.budgetTokens = payload.thinking.budget_tokens;
+	}
+	const cap = payload.max_tokens ?? payload.max_completion_tokens ?? payload.max_output_tokens;
+	if (typeof cap === "number") sent.maxTokens = cap;
+	return sent;
 }
 
 /** Provider-call settlement precedes note parsing. A malformed note can still have a successful paid call. */
@@ -177,7 +218,7 @@ export interface WriterProgress {
 	usageReports: number;
 	usage?: Usage;
 	repairUsed: boolean;
-	writerCallDetails: WriterCallRecord[];
+	writerCallDetails: PreviewWriterCallRecord[];
 	/** Quotation failures of the first refused candidate, by class; counts only. */
 	quotations?: QuoteCounts;
 	/** The compaction's one repair, when it ran: for note size or for quotations. */
@@ -372,7 +413,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	let writerCalls = 0;
 	let repairUsed = false;
 	let phase: WriterCallRecord["phase"] = "generate";
-	const calls: WriterCallRecord[] = [];
+	const calls: PreviewWriterCallRecord[] = [];
 	let quotations: QuoteCounts | undefined;
 	let repairKind: WriterProgress["repairKind"];
 	let quotationRepair: QuoteRepairOutcome | undefined;
@@ -397,28 +438,42 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		options.signal.throwIfAborted();
 		const callIndex = writerCalls + 1;
 		const callPhase = phase;
+		const effort = request?.reasoning ?? "off";
 		const hooks = options.callHooks;
 		let callId: string | undefined;
 		if (hooks) {
-			callId = await hooks.beforeDispatch({ callIndex, phase: callPhase, model: modelName(selected), writerEffort });
+			callId = await hooks.beforeDispatch({
+				callIndex,
+				phase: callPhase,
+				model: modelName(selected),
+				writerEffort: effort,
+			});
 			if (typeof callId !== "string" || !callId)
 				throw new Error("CONTEXT_WRITER_ACCOUNTING: dispatch reservation did not return an identity");
 		}
 		const started = performance.now();
 		let dispatched = false;
-		let call: WriterCallRecord | undefined;
+		let call: PreviewWriterCallRecord | undefined;
 		let response: AssistantMessage | undefined;
 		let failure: unknown;
 		let failed = false;
 		try {
 			options.signal.throwIfAborted();
 			writerCalls++;
-			call = { phase: callPhase };
-			calls.push(call);
+			const record: PreviewWriterCallRecord = { phase: callPhase, effort };
+			call = record;
+			calls.push(record);
 			// The legacy progress callback retains its pre-call notification when no lifecycle hooks are installed.
 			if (!hooks) report();
 			dispatched = true;
-			const stream = options.registry.streamSimple(selected, context, request);
+			const stream = options.registry.streamSimple(selected, context, {
+				...request,
+				// Read, never changed: what reasoning the request carries after the host has mapped the level.
+				onPayload: (payload) => {
+					record.sent = sentReasoning(payload);
+					return undefined;
+				},
+			});
 			if (hooks) {
 				try {
 					report();
@@ -429,6 +484,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 				}
 			}
 			response = await stream.result();
+			record.stopReason = response.stopReason;
 			if (response.content.some((block) => block.type === "toolCall")) toolCallResponses++;
 			const usage = reportedUsage(response);
 			if (usage) {

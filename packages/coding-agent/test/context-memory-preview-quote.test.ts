@@ -431,6 +431,41 @@ describe("preview writer quotation repair", () => {
 		});
 	});
 
+	it("records each call's requested effort, the reasoning its payload carries and how it ended", async () => {
+		// A repair that spends its whole output on reasoning ends at the length limit with no usable JSON.
+		const answers = [response(misattributed()), { ...response('{"repairs":[{"sect'), stopReason: "length" as const }];
+		const reasoning = { ...model, reasoning: true };
+		const test = quoteHarness([], {
+			registry: {
+				find: () => reasoning,
+				hasConfiguredAuth: () => true,
+				streamSimple: (_model, _context, options) => {
+					// What a DeepSeek-style adapter builds; the writer reads these fields and nothing else.
+					void options?.onPayload?.(
+						{
+							model: "quote-writer",
+							messages: [{ role: "user", content: "not recorded" }],
+							thinking: { type: "enabled" },
+							reasoning_effort: options.reasoning === "medium" ? "high" : options.reasoning,
+							max_tokens: options.maxTokens,
+						},
+						reasoning,
+					);
+					return stream(answers.shift()!);
+				},
+			},
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-quote-test/quote-writer", writerEffort: "medium" },
+		});
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_WRITER_FAILED: length");
+		const calls = test.progress.at(-1)?.writerCallDetails ?? [];
+		expect(calls).toMatchObject([
+			{ phase: "generate", effort: "medium", sent: { effort: "high", thinking: "enabled", maxTokens: 4096 } },
+			{ phase: "repair", effort: "medium", sent: { effort: "high", thinking: "enabled", maxTokens: 4096 } },
+		]);
+		expect(calls.map((call) => call.stopReason)).toEqual(["stop", "length"]);
+		expect(JSON.stringify(calls)).not.toContain("not recorded");
+	});
+
 	it("requires one answer for each failing fact and nothing else", () => {
 		const failures = diagnoseQuotes(misattributed(), branch).failures;
 		const fact = { text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." };

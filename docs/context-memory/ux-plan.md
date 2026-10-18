@@ -164,6 +164,44 @@ Reopening a session with a checkpoint from Pi's own compaction shows no `Source-
 
 Fix it only if the existing notice can then appear once per session and process through the existing `notify()`, with no new setting, command, file or footer text. Showing it at a later event Pi already sends is acceptable. If no such fix exists, report the cause and stop. Evidence: the 80-column step 6 screen before and after in the PR description, a focused regression in `test/context-memory-preview.test.ts`, and CI green.
 
+## Fourth batch
+
+The last round adds no behavior. Y1 puts on screen what #66 proved only in unit tests. Y2 walks a new user's whole path and smooths the words on it. Both start from `main`, open their PRs against `main`, and can run in parallel. Each adds one entry at the top of `validation.md`; the merge resolves that.
+
+The evaluation test that failed once on #64 (`eval/live/live.test.ts:666`) passed on #66 and is not scheduled. If it fails on Y1 or Y2, report the run and leave `eval/` alone.
+
+### Y1 Evidence for the review fixes
+
+#66 changed two behaviors of X1 and kept one of X2, each covered only by unit tests. Show them on official Pi 1.3.0, 1.2.0 and 1.1.0 at 80 columns, with the V2 driver from PR #61 as #64 and #65 adapted it:
+
+1. **A paused session whose branch ends at a checkpoint, with nothing staged.** `/compact` gets Pi's own `Already compacted`. A short text input is recorded and stopped by the request guard, not held in the editor. The next `/compact` writes a checkpoint and requests resume. This is the path the preview guide describes after `Already compacted`. Build the state with fixtures the acceptance and scenario scripts already use; if none reaches it on a real host, say so for this step.
+2. **Messages typed during a failing `/compact`.** While a `/compact` whose note fails is running, type two messages. Pi queues them; after the failure both are in the editor, in the order typed, under one notice. Nothing is recorded and no request starts.
+3. **The ready notice once per process.** After `/new` in the same process, no second ready notice. Reopening a session with Pi's own checkpoint still shows the off notice at the first input.
+
+The deliverable is one `validation.md` entry of at most 120 lines: the 1.3.0 screens for each step, every path replaced by `<cwd>`, and one row per step and version with the result. The driver goes in the PR description, not the repository. No runtime, test or script file changes. If a step does not behave as described here or in the guide, stop at that step and report its screen.
+
+### Y2 One pass, start to finish
+
+On official Pi 1.3.0, 1.2.0 and 1.1.0 at 80 columns, walk the path a new user takes, with the same driver:
+
+1. Install the built package into a clean agent directory as the README says, and start Pi.
+2. A fresh session: the ready notice and the footer.
+3. `/compaction-doctor`.
+4. `/compact` before there is enough history.
+5. Work until `/compact` can run, then a successful `/compact`.
+6. A `/compact` whose note fails its quotation check.
+7. Text typed while paused.
+8. A successful `/compact`, and the next request.
+9. `/reload`; then quit, reopen the session and send one input.
+10. A session with a checkpoint from Pi's own compaction, and its first input.
+11. `/new`.
+
+List every rough edge you see: a line that reads wrong, wraps badly at 80 columns, is cut off, repeats, or contradicts another line. Give each its version, step and screen excerpt, and mark it fixed here or left for the maintainer, with the reason.
+
+Only words may change: the user-facing strings in `preview/notices.ts`, `preview/extension.ts` and `preview/status-line.ts`, the test, scenario and acceptance lines that quote them, and the document sentences that quote them. Each change keeps D1's prefix, the outcome first and the code last, and footer texts stay short. When and whether a notice appears, every check, Pi's own lines and anything listed in D5 stay as they are; report those instead. At most ten wording changes; list any further ones for the maintainer. One `Changed` line in `CHANGELOG.md` if any wording changes.
+
+Evidence: each changed line before and after, on 1.3.0, in the PR description; one `validation.md` entry of at most 150 lines with the 1.3.0 walk trimmed to the lines that matter and one row per step and version; CI green.
+
 ## Not accepted
 
 The review removes these, whatever the intent:
@@ -199,3 +237,5 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | V2 What the terminal shows | Done in #61 |
 | X1 Hold input while paused | Done in #65: paused text returns to the editor; at a checkpoint leaf it is still recorded so `/compact` can run |
 | X2 The off notice on reopen | Done in #64: Pi's `Session compacted` status rewrote the notice; it now appears with the first input |
+| Y1 Evidence for the review fixes | open |
+| Y2 One pass, start to finish | open |

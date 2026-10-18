@@ -1727,12 +1727,18 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	function withEditor(base: ExtensionContext, hasUI = true) {
+		let text = "";
+		const setEditorText = vi.fn((value: string) => {
+			text = value;
+		});
+		return { ...base, hasUI, ui: { ...base.ui, getEditorText: () => text, setEditorText } };
+	}
 	it("holds paused interactive text in the editor without disk access or recording input", async () => {
 		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
 		const handlers = loadPreview();
-		const base = context();
-		const setEditorText = vi.fn();
-		const ctx = { ...base, hasUI: true, ui: { ...base.ui, setEditorText } };
+		const ctx = withEditor(context());
+		const { setEditorText } = ctx.ui;
 		await emit(handlers, "session_start", {}, ctx);
 		vi.mocked(ctx.ui.notify).mockClear();
 		vi.mocked(ctx.abort).mockClear();
@@ -1775,9 +1781,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 	])("leaves input on its existing path for %j", async ({ source, paused, hasUI, images }) => {
 		if (paused) new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
 		const handlers = loadPreview();
-		const base = context();
-		const setEditorText = vi.fn();
-		const ctx = { ...base, hasUI, ui: { ...base.ui, setEditorText } };
+		const ctx = withEditor(context(), hasUI);
+		const { setEditorText } = ctx.ui;
 		await emit(handlers, "session_start", {}, ctx);
 		vi.mocked(ctx.ui.notify).mockClear();
 		vi.mocked(ctx.abort).mockClear();
@@ -1792,8 +1797,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 	});
 	it("uses the current session's failure and resumes input after recovery", () => {
 		const preview = controller();
-		const base = context();
-		const ctx = { ...base, hasUI: true, ui: { ...base.ui, setEditorText: vi.fn() } };
+		const ctx = withEditor(context());
 		const input = { type: "input" as const, source: "interactive" as const, text: "Continue.", images: [] };
 		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
 		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
@@ -1812,8 +1816,22 @@ describe("independent extension preview: sessions it does not protect", () => {
 		preview.recover(ctx);
 		expect(preview.input(input, ctx)).toBeUndefined();
 	});
+	it("keeps every held message, and records input at a checkpoint leaf for Pi's retry", () => {
+		const preview = controller();
+		const ctx = withEditor(context());
+		const input = (text: string) => ({ type: "input" as const, source: "interactive" as const, text });
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		// Pi delivers messages queued during a failed compaction one input event at a time.
+		expect(preview.input(input("First."), ctx)).toEqual({ action: "handled" });
+		expect(preview.input(input("Second."), ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
+		// At a checkpoint leaf Pi answers /compact with "Already compacted" until an input is recorded.
+		protect();
+		expect(preview.input(input("Retry."), ctx)).toBeUndefined();
+		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
+	});
 	it.each(["native", "protected"])(
-		"keeps the %s reopen notice after Pi's startup status, once per session",
+		"shows the %s reopen notice at the first input, after Pi's startup status",
 		async (kind) => {
 			if (kind === "native") addNativeCheckpoint();
 			else protect();
@@ -1844,7 +1862,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 			const next = { ...ctx, sessionManager: session } as unknown as ExtensionContext;
 			await emit(handlers, "session_start", {}, next);
 			await emit(handlers, "input", { text: "Another session", source: "interactive" }, next);
-			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(2);
+			// The off notice is per session; the ready notice stays once per process.
+			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(kind === "native" ? 2 : 1);
 		},
 	);
 	it("does not deliver a deferred ready notice after a failure or into another session", () => {
@@ -1853,15 +1872,16 @@ describe("independent extension preview: sessions it does not protect", () => {
 		const base = context();
 		const notify = vi.fn();
 		const ctx = { ...base, hasUI: true, ui: { ...base.ui, notify, setStatus: vi.fn() } };
+		const input = { type: "input" as const, source: "rpc" as const, text: "Continue." };
 		preview.sessionStart(ctx);
-		preview.showSessionNotice({
+		preview.input(input, {
 			...ctx,
 			sessionManager: new SyntheticSession(root, "other-session"),
 		} as unknown as ExtensionContext);
 		expect(notify).not.toHaveBeenCalled();
 		preview.sessionStart(ctx);
 		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
-		preview.showSessionNotice(ctx);
+		preview.input(input, ctx);
 		expect(notify).not.toHaveBeenCalled();
 	});
 	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {

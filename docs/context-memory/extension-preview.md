@@ -314,8 +314,9 @@ block that only a successful `/compact` cleared.
 
 If a blocked session ends exactly at an older successful checkpoint without a
 staged attempt, stock Pi may report `Already compacted` before invoking the
-extension. Interactive text stays in the editor while paused, so it cannot add
-the history Pi needs for that retry; keep the session file and continue in a new session.
+extension. Add a short text retry request; at a checkpoint the preview lets
+it through to the request guard, so it remains blocked and is preserved as
+unfinished input. Then use `/compact`. Recovery keeps that whole input turn.
 Initialization failures before any completed source turn, unsupported session
 formats and incompatible hosts require a fresh supported session after fixing
 the cause. Neither recovery command forces those cases through validation.
@@ -324,11 +325,12 @@ Each failure and each blocked input produces one notice (v0.3.2 could repeat
 the same notice two to four times). The first explains what happened, whether
 requests are paused and what to do, with the controlled error code last.
 Later inputs blocked by the same code get a short warning until a checkpoint
-or recovery is confirmed. Text typed while paused stays in the interactive editor,
-without starting a request or entering the session history. After a refused `/compact`,
-Pi adds its own `Compaction cancelled` below the notice. Inputs from RPC, print mode,
-other extensions or with images still reach the request guard, where Pi can add
-`This operation was aborted`. The notice says why, and
+or recovery is confirmed. Text typed in Pi's interactive editor while paused
+goes back to the editor: no request starts and nothing enters the session,
+except at a checkpoint as described above. After a refused `/compact`, Pi adds
+its own `Compaction cancelled` below the notice. Inputs from RPC, print mode or
+other extensions, and inputs with images, still reach the request guard, where
+Pi adds `This operation was aborted`. The notice says why, and
 `/compact` is suggested only where it can help. Pi's overflow recovery request
 is reported as `CONTEXT_PREVIEW_COMPACT_REQUIRED` (earlier
 `CONTEXT_PREVIEW_UNSUPPORTED`; before v0.4.0, threshold

@@ -197,5 +197,5 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | U3 Where the time goes | Measured in #59; V1 takes up two of its proposals |
 | V1 Shorter pause, faster reopen | Done in #62: 44% less work around the writer and 37% less added to a reopen at 40 checkpoints |
 | V2 What the terminal shows | Done in #61 |
-| X1 Hold input while paused | open |
-| X2 The off notice on reopen | open |
+| X1 Hold input while paused | Done in #65: paused text returns to the editor; at a checkpoint leaf it is still recorded so `/compact` can run |
+| X2 The off notice on reopen | Done in #64: Pi's `Session compacted` status rewrote the notice; it now appears with the first input |

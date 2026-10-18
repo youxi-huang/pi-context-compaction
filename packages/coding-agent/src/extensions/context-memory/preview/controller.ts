@@ -755,14 +755,18 @@ export class PreviewMemoryController {
 		setStatusLine(ctx, ctx.sessionManager.getBranch().filter(isPreviewCheckpoint).length);
 	}
 
+	/** Text typed while paused goes back to the editor instead of into the session. */
 	input(event: InputEvent, ctx: ExtensionContext): InputEventResult | undefined {
 		this.notices.nextEpisode();
 		this.showSessionNotice(ctx);
 		if (event.source !== "interactive" || !ctx.hasUI || event.images?.length) return;
 		const code = this.stickyFailures.get(ctx.sessionManager.getSessionId());
-		if (!code) return;
+		// At a checkpoint leaf Pi refuses /compact as "Already compacted"; the recorded input lets the retry run.
+		if (!code || ctx.sessionManager.getLeafEntry()?.type === "compaction") return;
 		this.reportBlocked(ctx, code);
-		ctx.ui.setEditorText(event.text);
+		// Messages Pi queued during a compaction arrive one at a time; keep every one.
+		const draft = ctx.ui.getEditorText();
+		ctx.ui.setEditorText(draft.trim() ? `${draft}\n\n${event.text}` : event.text);
 		return { action: "handled" };
 	}
 
@@ -804,7 +808,7 @@ export class PreviewMemoryController {
 		this.pendingSessionNotice = undefined;
 		this.forgetVerified();
 		this.preparation?.activate(ctx.sessionManager.getSessionId());
-		// Pi's startup compaction status overwrites informational notices, including earlier rows.
+		// Pi shows "Session compacted" after session_start, and that status rewrites info notices not yet drawn.
 		const deferNotice = ctx.hasUI && ctx.sessionManager.getEntries().some((entry) => entry.type === "compaction");
 		const reason = this.safeInactive(ctx);
 		if (reason) {
@@ -813,7 +817,7 @@ export class PreviewMemoryController {
 		}
 		if (this.guard(ctx, () => this.assertReady(ctx))) {
 			this.readyStatus(ctx);
-			this.sessionNotice(ctx, `ready:${ctx.sessionManager.getSessionId()}`, readyNotice(), deferNotice);
+			this.sessionNotice(ctx, "ready", readyNotice(), deferNotice);
 		}
 	}
 
@@ -825,8 +829,8 @@ export class PreviewMemoryController {
 		}
 	}
 
-	/** The first input arrives after Pi has rendered the reopened session. */
-	showSessionNotice(ctx: ExtensionContext): void {
+	/** The first input arrives after Pi has drawn the reopened session. */
+	private showSessionNotice(ctx: ExtensionContext): void {
 		const pending = this.pendingSessionNotice;
 		this.pendingSessionNotice = undefined;
 		if (pending?.sessionId === ctx.sessionManager.getSessionId()) {

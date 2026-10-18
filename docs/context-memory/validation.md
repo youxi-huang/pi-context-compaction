@@ -7,46 +7,56 @@ ran the writer bench on official Pi 1.3.0 with `deepseek/deepseek-flash` at
 thinking level `high`, with `stock-preview+src.e43e9a25250475ee` from `892d91c`,
 in which the quotation repair runs without reasoning. Settings matched the
 v0.5.0 release-build bench: eight cuts, eight attempts each, `--cache warm`, six
-units at a time. The maintainer approved 120 requests, 30 minutes and $0.80 at
-catalog prices before the first request; the run used 92 requests, including 8
-warm-ups, $0.247 and 3.2 minutes.
+units at a time, all with the current bench script.
 
-| | v0.5.0 release build `c6aefd74` | Candidate `e43e9a25` |
-| --- | ---: | ---: |
-| Committed | 62 of 64 | 58 of 64: 21 of 24 on P1, 15 of 16 on P2, 22 of 24 on P3 |
-| Refused | 1 `CONTEXT_NOTE_INVALID`, 1 `CONTEXT_WRITER_FAILED` from a quotation repair call | 4 `CONTEXT_NOTE_SCOPE`, 1 `CONTEXT_NOTE_QUOTE` after a repair, 1 `CONTEXT_NOTE_INVALID` |
-| First passes with a failed quotation | not recorded by class | 19: 4 found in other entries, 12 differing in spacing or punctuation, 7 found nowhere |
-| Quotation repairs | 16, 15 committed | 19, 18 committed |
-| Repair output tokens, median and maximum | not recorded per call | 102 and 186, no reasoning, every repair ended normally |
-| Repair time, median | not recorded per call | 1.3 s |
-| Responses that called a tool | 1, declined, then committed | 1, declined; that attempt is the refused quotation |
-| Writer input read from cache | 95.5% | 94.2% |
-| Catalog writer cost | $0.307 for 81 calls | $0.181 for 84 calls |
-| Median pause | 13.9 s | 7.6 s |
-| Note size, median, against the bytes it condenses | 4,251 bytes, 5.4% | 4,298 bytes, 5.5% |
-| Gold answers cited, first asked at the cut and carried | 499 of 527, 379 of 423 | 465 of 498, 359 of 433 |
+The first candidate run committed 58 of 64, with four first-pass
+`CONTEXT_NOTE_SCOPE` refusals at the first cuts of P1 and P3. To tell a change
+in this build from variation on the day, the maintainer approved a second pair
+of runs, started together: the v0.5.0 release build, rebuilt from `ea80ca8` with
+the same `stock-preview+src.c6aefd74b04f4aaa`, and the candidate again. The
+limits were 120 requests, 30 minutes and $0.80 for the first run and 240
+requests, 60 minutes and $1.60 for the pair; the three runs used 265 requests,
+24 of them warm-ups, and $0.78 at catalog prices.
 
-**The repair.** Every repair ran without reasoning and ended normally; 18 of 19
-committed. The one refusal followed a declined tool call: its repair rebound one
-of two failing quotations and left the other, so the note blocked as before. One
-repair withdrew a `state` fact; none touched an instruction.
+| | Release build, same day | Candidate, first run | Candidate, second run |
+| --- | ---: | ---: | ---: |
+| Committed | 62 of 64 | 58 of 64 | 63 of 64 |
+| Refused | 2 `CONTEXT_NOTE_SCOPE` | 4 `CONTEXT_NOTE_SCOPE`, 1 `CONTEXT_NOTE_QUOTE` after a repair, 1 `CONTEXT_NOTE_INVALID` | 1 `CONTEXT_NOTE_QUOTE` after a repair |
+| `CONTEXT_NOTE_SCOPE` at | P1 and P3, first cut | P1 and P3, first cut, two each | none |
+| First passes with a failed quotation: elsewhere, format, absent | 11: 2, 6, 3 | 19: 4, 12, 7 | 17: 12, 7, 7 |
+| Quotation repairs committed | 11 of 11 | 18 of 19 | 16 of 17 |
+| Repair output tokens, median and maximum | reasoning at `high`, not recorded | 102 and 186, no reasoning | 97 and 320, no reasoning |
+| Responses that called a tool | 1, declined | 1, declined | 0 |
+| Writer input read from cache | 93.6% | 94.2% | 93.9% |
+| Catalog writer cost | $0.219 for 76 calls | $0.181 for 84 calls | $0.184 for 81 calls |
+| Median pause | 8.2 s | 7.6 s | 8.0 s |
+| Note size, median, against the bytes it condenses | 4,415 bytes, 5.7% | 4,298 bytes, 5.5% | 4,491 bytes, 5.9% |
+| Gold answers cited, first asked at the cut and carried | 508 of 529, 381 of 440 | 465 of 498, 359 of 433 | 515 of 537, 398 of 440 |
 
-**The refusals that rose.** All four `CONTEXT_NOTE_SCOPE` refusals are first
-passes at the first cut, two on P1 and two on P3: the note cited an entry that
-is unreadable or not on the branch, so no repair was eligible. The release-build
-bench had none in 64 and the first v0.5.0 candidate run one in 40. The only
-change this build makes to the writer's first request is one added clause in
-the `context_history` tool description, which the request carries with the
-session's tools. Whether the difference comes from that clause or from run-to-run
-variation is not established by this run; a same-day run of the release build on
-the same cuts would separate them. The bench does not keep refused notes, so the
-cited IDs are not known. The lower median pause and the smaller share of carried
-answers cited are also within what one run on one day cannot attribute.
+The release-build bench of 2026-10-17 committed 62 of 64 with none of these
+refusals, a median pause of 13.9 s and 95.5% of input from cache.
 
-**What this shows.** The quotation repair without reasoning commits as often as
-the v0.5.0 repair and costs about a tenth of its tokens. The candidate's commit
-rate on this run is lower than the release build's, for a reason outside the
-repair that is still open.
+**The scope refusals.** The release build refused at the same two first cuts on
+the same day, and the candidate's second run had none, so the four of the first
+run come from those cuts, not from this build. A scope refusal is a first pass
+that cites an entry that is unreadable or not on the branch; no repair is
+eligible. The preview does not store a refused note, and `--keep-sessions` keeps
+only the session copies, so the IDs those notes cited are not known.
+
+**The repair.** Every repair of the candidate ran without reasoning and ended
+normally, at a median of 102 and 97 output tokens and 1.3 s in the two runs. Across
+both runs 34 of 36 committed. Each refusal was a note whose repair left a
+quotation it was asked to rebind: in the first run one of two after a declined
+tool call, in the second the only one. The release build's repairs, which reason
+at `high`, committed 11 of 11 the same day and 15 of 16 the day before, the one
+failure being the call that ran out. At these counts the two cannot be told
+apart. One repair withdrew a `state` fact; none touched an instruction.
+
+**What this shows.** On the same day and the same cuts, the candidate commits
+as often as the release build, 121 of 128 over two runs against 62 of 64, and
+its quotation repair costs about a tenth of the tokens without the failure that
+ran out of output. One model and synthetic sessions: it does not establish a
+refusal rate. Session copies and notes stayed on the local machine.
 
 ## v0.5.1 candidate: quotation-repair effort on DeepSeek V4.1 Flash, 2026-10-18 UTC
 

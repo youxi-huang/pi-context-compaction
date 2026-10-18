@@ -6,6 +6,19 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer and repair send `reasoning_effort: "high"`.
+
+### Fixed
+
+- `context_history`'s list no longer marks a still-valid fact as superseded because a revision names the entry it shares with a revised fact. A note's `supersedes` names entries, not facts: a constraint stated in the same message as a timeout that was later raised was listed as replaced by the new timeout. A revision now marks only the facts of its own section on that entry, and only when they are no more than the revisions naming it; other facts on a revised entry carry `sourceRevisedBy`, and the tool description says what it means.
+- A quotation repair can no longer withdraw an instruction whose quoted text a user message contains. Such a repair committed a note without the rule; it now refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, and re-citing the rule or dropping its quote remains possible. Withdrawing a fact no user message supports is unchanged.
+
+### Maintenance
+
+- The preview writer bench has a `repair` mode over 38 deterministic quotation-repair cases planted in the P fixtures: misattributed, misspaced, echoed and paraphrased rulings, and an order only a tool wrote. Only the repair reaches the measured model, and scoring counts lost rulings and instructions quoted from assistant or tool text without a judge. `--provider deepseek-local` builds the requests from Pi's DeepSeek catalog model and answers them locally.
+
 ## [v0.5.0] — 2026-10-17
 
 v0.5.0 makes the independent extension's notes harder to lose and its history quicker to search. The session writer sees every uncovered user message in full beside its entry ID, a note that fails only on its quotations gets one targeted repair, and `context_history` lists constraints, decisions, failed approaches, files, edits and errors directly. The writer also reuses the session's prompt cache, which cut its cost by about 70% on DeepSeek. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged, and a v0.5.0 checkpoint reopens under v0.4.3. Two bounded runs with DeepSeek V4.1 Flash on Pi 1.3.0 are in the validation record: on the two synthetic sessions both writers ran, v0.5.0 builds committed 37 to 40 of 40 notes against 32 for the v0.4.3 writer, and on the session built for retrieval every probe passed with fewer calls than the baseline. They cover one model and synthetic tasks, not a general failure rate.

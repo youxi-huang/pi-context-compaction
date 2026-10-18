@@ -1803,6 +1803,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
 		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("A quotation in the note"), "error");
 		preview.fail(ctx, "CONTEXT_NOTE_SCOPE");
+		// Submitting the restored text clears Pi's editor before the input event.
+		ctx.ui.setEditorText("");
 		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
 		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("The note cites a message"), "error");
 		const other = { ...ctx, sessionManager: new SyntheticSession(root, "other-session") };
@@ -1816,19 +1818,19 @@ describe("independent extension preview: sessions it does not protect", () => {
 		preview.recover(ctx);
 		expect(preview.input(input, ctx)).toBeUndefined();
 	});
-	it("keeps every held message, and records input at a checkpoint leaf for Pi's retry", () => {
+	it("keeps every held message under one notice, at a checkpoint leaf too", () => {
 		const preview = controller();
 		const ctx = withEditor(context());
 		const input = (text: string) => ({ type: "input" as const, source: "interactive" as const, text });
 		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		protect();
 		// Pi delivers messages queued during a failed compaction one input event at a time.
 		expect(preview.input(input("First."), ctx)).toEqual({ action: "handled" });
 		expect(preview.input(input("Second."), ctx)).toEqual({ action: "handled" });
 		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
-		// At a checkpoint leaf Pi answers /compact with "Already compacted" until an input is recorded.
-		protect();
-		expect(preview.input(input("Retry."), ctx)).toBeUndefined();
-		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
+		// Pi reports the failed compaction after the queued messages; that report joins their notice.
+		preview.reportBlocked(ctx, "CONTEXT_NOTE_QUOTE");
+		expect(ctx.ui.notify).toHaveBeenCalledOnce();
 	});
 	it.each(["native", "protected"])(
 		"shows the %s reopen notice at the first input, after Pi's startup status",
@@ -2217,8 +2219,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const label of ["extension: ok", "host: ok", "session: ok", "writer: ok", "requests: ok - not paused"])
 			expect(report).toContain(label);
 		expect(report).toMatch(/manual \/compact: unknown/);
-		expect(report).toContain("Pi needs older history beyond 20,000 recent tokens by default.");
-		expect(report).toContain("Result: ready for requests. /compact still needs enough history.");
+		expect(report).toContain("Pi compacts only history older than its latest 20,000 tokens by default.");
+		expect(report).toContain("Result: ready for requests. Run /compact once the conversation grows.");
 	});
 	it("the doctor offers a manual retry after a retryable failure instead of calling /compact blocked", () => {
 		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_WRITER_FAILED");

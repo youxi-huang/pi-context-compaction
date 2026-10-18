@@ -1,8 +1,8 @@
 # Validation record
 
-## Y1 review-fix evidence: stopped at checkpoint-leaf recovery, 2026-10-18 UTC
+## Y1 review-fix evidence on official Pi 1.3.0, 1.2.0 and 1.1.0, 2026-10-18 UTC
 
-[Y1](ux-plan.md#y1-evidence-for-the-review-fixes) stops at step 1 on official Pi 1.3.0, 1.2.0 and 1.1.0. The checkpoint-leaf exception records the short retry input and the request guard blocks it, but the next `/compact` says `Nothing to compact (session too small)`. It saves no checkpoint and requests remain paused. Steps 2 and 3 are **not run**, following Y1's instruction to stop at the first discrepancy. No behavior or guide wording is changed here.
+[Y1](ux-plan.md#y1-evidence-for-the-review-fixes) stops at step 1 on official Pi 1.3.0, 1.2.0 and 1.1.0. The checkpoint-leaf exception records the short retry input and the request guard blocks it, but the next `/compact` says `Nothing to compact (session too small)`. It saves no checkpoint and requests remain paused. Y1 did not run steps 2 and 3, following its instruction to stop at the first discrepancy, and changed no behavior or guide wording. The review ran them and acted on step 1; see [In review](#in-review).
 
 Started from `main` at `f142f44`, preview `stock-preview+src.ab457ab9de588b77`. Synthetic only: Linux x86_64, Node 24.19.0, util-linux `script`, `@xterm/headless` 5.5.0, 80 columns and 40 rows. The driver adapts PR #61 as #64/#65 did: official bundled CLI, isolated agent directory, package copy outside any Node project, allowlisted environment, scripted loopback provider, no real credentials. Host and preview `keepRecentTokens` are 0; the session model writes notes, note repair and event logging are off, and native automatic compaction, cache warming and retries are off. The driver is in this PR's description, outside the repository.
 
@@ -52,12 +52,9 @@ compaction: paused, see /compaction-doctor
 | 1. Checkpoint-leaf retry | 1.3.0 | Stopped: recorded and blocked; next `/compact` says `Nothing to compact`; still paused |
 | 1. Checkpoint-leaf retry | 1.2.0 | Same discrepancy |
 | 1. Checkpoint-leaf retry | 1.1.0 | Same discrepancy |
-| 2. Two messages during failing `/compact` | 1.3.0 | Not run: stopped at step 1 |
-| 2. Two messages during failing `/compact` | 1.2.0 | Not run: stopped at step 1 |
-| 2. Two messages during failing `/compact` | 1.1.0 | Not run: stopped at step 1 |
-| 3. Ready once; native off on first input | 1.3.0 | Not run: stopped at step 1 |
-| 3. Ready once; native off on first input | 1.2.0 | Not run: stopped at step 1 |
-| 3. Ready once; native off on first input | 1.1.0 | Not run: stopped at step 1 |
+| 2. Two messages during failing `/compact` | 1.3.0, 1.2.0, 1.1.0 | Run in review: both in the editor in typed order, no session entry or request, no abort error, one notice |
+| 3. Ready once after `/new` | 1.3.0, 1.2.0, 1.1.0 | Run in review: the new session shows its own ready notice, because Pi's CLI starts a new extension instance per session |
+| 3. Off notice on first input | 1.3.0, 1.2.0, 1.1.0 | Covered by the Y2 walkthrough below, step 10 |
 
 | Command | Result | Exit |
 | --- | --- | ---: |
@@ -72,6 +69,32 @@ compaction: paused, see /compaction-doctor
 | `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | No resident fingerprint change | 0 |
 
 The first 1.3.0 capture exited 1 after waiting for the missing second checkpoint; the driver then captured Pi's explicit refusal directly, and that run also exited 1. No runtime, test or script file changed. The required post-commit `node scripts/context-memory-ops.mjs preview` result is recorded in the PR. Real-provider tests and local evaluation: **not run**; `eval/` is unchanged.
+
+### In review
+
+**Step 1 is a dead end with or without the exception.** Called directly with Pi's default `keepRecentTokens` of 20,000 on 1.3.0 and 1.1.0, Pi's `prepareCompaction` refuses a branch that ends at a checkpoint keeping about 10,000, 18,000 or 20,000 tokens, and still refuses it after one short user message, because Pi summarizes only history older than its latest 20,000 tokens. The same synthetic history compacts without the checkpoint, and again after about 24,000 new tokens. A paused session gets no replies, so it cannot add that much. The guide's text-retry advice never worked. The checkpoint-leaf exception from #66 is removed, text typed at a checkpoint leaf is held like any other, and the guide says to keep the session file and continue in a new session.
+
+**Steps 2 and 3** ran with this entry's driver adapted for them, on preview `stock-preview+src.2e829c91b1d4d85e`, with the same isolation and unchanged-host assertions. The first step-2 run showed the short warning twice. Pi delivers queued messages before `session_compact_failed`, and each held message started a new notice episode, so the preview's failure handler reported again. A held message now starts an episode only when the editor is empty, and messages that join it share its notice. The 1.3.0 screen after the failure:
+
+```text
+ Queued message for after compaction
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note
+ doesn't match the message it cites. Requests stay paused, through /reload and
+ restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+ Error: Compaction cancelled
+ Warning: Source-linked compaction: requests are still paused. Run /compact to
+ try again. (CONTEXT_NOTE_QUOTE)
+────────────────────────────────────────────────────────────────────────────────
+First queued message.
+Second queued message.
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑100 ↓30 0.1%/128k                                             synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+In step 3, `/new` clears the chat, and the new session shows the ready notice once. The once-per-process gate holds within one extension instance; in the CLI it amounts to once per session.
 
 ## Preview first-use walkthrough, official Pi 1.3.0, 1.2.0 and 1.1.0, 2026-10-18 UTC
 
@@ -183,8 +206,8 @@ Every rough edge observed is below; each applies to 1.3.0, 1.2.0 and 1.1.0. No f
 
 | Step | Screen excerpt / rough edge | Disposition and reason |
 | --- | --- | --- |
-| 3 | `manual /compact: unknown ... compaction.keepRecentTokens ... Nothing to compact ...` takes three lines | Fixed here: the default-history explanation now takes two lines with the eligibility advice. The setting and Pi's exact refusal remain in the guides. |
-| 3–4 | `Result: ready. Keep working ...` above `Error: Compaction failed` can imply `/compact` is ready | Fixed here: `Result: ready for requests. /compact still needs enough history.` |
+| 3 | `manual /compact: unknown ... compaction.keepRecentTokens ... Nothing to compact ...` takes three lines | Fixed here: the default-history explanation now takes two lines with the eligibility advice. The setting and Pi's exact refusal remain in the guides. Reworded in review to `Pi compacts only history older than its latest 20,000 tokens by default.` |
+| 3–4 | `Result: ready. Keep working ...` above `Error: Compaction failed` can imply `/compact` is ready | Fixed here as `Result: ready for requests.`; the second sentence became `Run /compact once the conversation grows.` in review, since a long session may already have enough history |
 | 2, 9 | `fd not found. Downloading...` / `Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com` | Left for the maintainer: Pi's optional helper setup in this environment; outside preview wording. |
 | 2→3 | The ready notice is replaced by `Source-linked compaction doctor ...` | Left for the maintainer: Pi reuses its informational status renderer; changing notice timing or delivery is outside Y2. |
 | 4 | `Error: Compaction failed: Nothing to compact (session too small)` sounds like a failure during installation | Left for the maintainer: Pi's own text. The doctor now distinguishes request readiness. |

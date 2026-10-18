@@ -232,10 +232,10 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | --- | --- |
 | U1 Footer state | Done in #58 |
 | U2 One voice | Done in #60 |
-| U3 Where the time goes | Measured in #59; V1 takes up two of its proposals |
+| U3 Where the time goes | Measured in #59; V1 takes up two of its proposals. The third, batching in `identity.ts`, is set aside by the maintainer: it crosses both gates for tens of milliseconds |
 | V1 Shorter pause, faster reopen | Done in #62: 44% less work around the writer and 37% less added to a reopen at 40 checkpoints |
 | V2 What the terminal shows | Done in #61 |
-| X1 Hold input while paused | Done in #65: paused text returns to the editor; at a checkpoint leaf it is still recorded so `/compact` can run |
+| X1 Hold input while paused | Done in #65: paused text returns to the editor. #66's checkpoint-leaf exception was removed after Y1 showed that path never ran |
 | X2 The off notice on reopen | Done in #64: Pi's `Session compacted` status rewrote the notice; it now appears with the first input |
-| Y1 Evidence for the review fixes | open |
-| Y2 One pass, start to finish | open |
+| Y1 Evidence for the review fixes | Done in #68, steps 2 and 3 completed in review |
+| Y2 One pass, start to finish | Done in #69: two doctor strings reworded; the other rough edges are Pi's own |

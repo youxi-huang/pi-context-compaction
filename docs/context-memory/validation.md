@@ -1,5 +1,61 @@
 # Validation record
 
+## Preview reopen and compaction overhead on official Pi 1.3.0, 2026-10-18 UTC
+
+Synthetic and offline: a scripted loopback provider, default settings, no real provider and no interactive TUI. Measured at `2d3133f` on Linux x86_64 with Node 24.19.0 (CI uses Node 22), package `stock-preview+src.a6732408742a34f4`.
+
+With 40 checkpoints in a 12 MB session, reopening took 175 ms against 40 ms without the extension, and 674 ms of a 680 ms compaction pause was the extension's own work around a 6 ms scripted writer call. Source hashing and repeated serialization dominate both. Nothing was optimized; the proposals at the end wait for the maintainer.
+
+```sh
+node scripts/context-memory-preview-build.mjs
+for n in 1 10 40; do
+  node scripts/context-memory-preview-scenarios.mjs \
+    --package-dir .artifacts/context-memory-preview-package \
+    --stock-root .artifacts/context-memory-preview-stock \
+    --output-dir .artifacts/u3-$n \
+    --only long-session-overhead --perf-checkpoints "$n"
+done
+```
+
+Each run exited 0 with its three checks passing under the strict profile. A run records each compaction's `/compaction-status` timing and three warm reopens of its final session file, with the extension and then without it. A reopen covers `SessionManager.open` through extension binding. At `2d3133f` the reopens ran at each milestone inside the loop; the runner now takes them after the last compaction, so the request-overhead probe runs as before.
+
+| Checkpoints, session size | Reopen median with / without the extension, ms | Extra, ms |
+| --- | ---: | ---: |
+| 1, 0.3 MB | 18.6 / 10.8 | 7.8 |
+| 10, 3.0 MB | 50.8 / 17.3 | 33.5 |
+| 40, 12.0 MB | 175.5 / 40.3 | 135.2 |
+
+For each run's last compaction, writer time is the sum of `lastWriter.writerCallDetails[].ms`, the time before commit is `lastCompaction.stageMs` less the writer time, and the time after staging is `pauseMs - stageMs`, which also contains Pi's own append.
+
+| Checkpoint | Pause, ms | Writer, ms | Before commit, ms | After staging, ms |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 48 | 9 | 31 | 8 |
+| 10 | 181 | 6 | 126 | 49 |
+| 40 | 680 | 6 | 481 | 193 |
+
+The request-overhead check still measured 1 ms at each run's final target.
+
+The profile ran the runner's worker directly under `node --cpu-prof` at 40 checkpoints (`--worker long-session-overhead --variant extension`), with the runner's environment and a package copy outside the repository. It exited 0 with 24,978 samples, and profiling raised the last pause to 897 ms. Paths are relative to `packages/coding-agent/src/extensions/context-memory/`; inclusive rows contain their callees.
+
+| Window | Function | Sampled time, ms |
+| --- | --- | ---: |
+| Three reopens at 40 checkpoints, 1,082 ms | `sessionStart`, `preview/controller.ts:756` | 670 inclusive |
+| Same | `PreviewFailureStore.evaluate`, `preview/failure-store.ts:366` | 448 inclusive |
+| Same | `assertPreviewSession`, `preview/controller.ts:306`, through `validateMemoryCheckpoints`, `notes.ts:259` | 221 inclusive |
+| Same, in official Pi | `loadEntriesFromFile`, `dist/core/session-manager.js:325` | 281; 100 of 150 without the extension |
+| Compaction at checkpoint 40, 901 ms | `hashEntries`, `identity.ts:15` | 440 self |
+| Same | Node's `Hash.update`, under the hashing functions | 180 self |
+| Same | `readSession`, `preview/failure-store.ts:160` | 132 inclusive |
+| Same | `begin`, `stage`, `confirm`, `preview/failure-store.ts:442`, `:530`, `:559` | 174, 100, 129 inclusive |
+
+Across all 40 compactions, hashing accounts for 71% of self samples.
+
+Proposals, not implemented:
+
+- **Preview only, at a trust boundary.** Within one synchronous branch snapshot in `compact` and `committed`, reuse the `assertPreviewSession` result instead of validating again. Every check and readback across the writer call and Pi's append stays.
+- **Preview only, at a trust boundary.** Serve the readiness check and `begin` from one fresh read of the session file, keeping their marker, identity and source comparisons. Staging and the confirmation after Pi's append keep their own reads, since they check different moments.
+- **Fingerprinted file, at a trust boundary.** Batch serialization in `hashEntries` and `hashEntryPrefixes` (`identity.ts:15`, `:22`) while keeping the exact byte stream and the hashes of older checkpoints. This needs the maintainer's approval of a new fingerprint and compatibility evidence.
+
 ## v0.5.1 candidate: writer bench on DeepSeek V4.1 Flash, 2026-10-18 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

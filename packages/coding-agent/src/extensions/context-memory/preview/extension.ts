@@ -6,7 +6,7 @@ import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
 import { listHistory, previewHistorySchema } from "./history-view.ts";
-import { doctorReport, inactiveNotice, notify, recoverRefusedNotice } from "./notices.ts";
+import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
 import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
@@ -44,7 +44,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
-		description: "Show the context-memory preview's writer, checkpoint, protection and request state as JSON",
+		description: "Show source-linked compaction's writer, checkpoint and request state as JSON",
 		handler: async (_args, ctx) => {
 			try {
 				show(ctx, JSON.stringify(controller.status(ctx), null, 2));
@@ -54,7 +54,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		},
 	});
 	pi.registerCommand("compaction-doctor", {
-		description: "Check whether the context-memory preview is loaded and usable here, without calling a model",
+		description: "Check source-linked compaction in this session without calling a model",
 		handler: async (_args, ctx) => {
 			try {
 				show(
@@ -70,7 +70,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	if (disabled) return;
 
 	pi.registerCommand("compaction-recover", {
-		description: "Confirm an already saved, staged checkpoint after an interrupted commit observation",
+		description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
 		handler: async (_args, ctx) => {
 			await ctx.waitForIdle();
 			const reason = controller.safeInactive(ctx);
@@ -80,7 +80,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			}
 			try {
 				controller.recover(ctx);
-				show(ctx, "context-memory preview: the staged checkpoint and its original sources were confirmed on disk.");
+				show(ctx, `${NOTICE_PREFIX}: checkpoint confirmed on disk. Requests resume.`);
 			} catch (error) {
 				const code = previewErrorCode(error);
 				show(
@@ -121,7 +121,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 				if (controller.notices.once("writer"))
 					notify(
 						ctx,
-						`context-memory preview: ${previewErrorCode(error)}. The fixed writer in pi-context-memory.json is not available; correct it and restart Pi before /compact.`,
+						`${NOTICE_PREFIX}: /compact can't write a checkpoint yet. The fixed writer in pi-context-memory.json isn't available. Correct writerModel and restart Pi. (${previewErrorCode(error)})`,
 						"warning",
 					);
 			}
@@ -154,7 +154,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
 	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
 	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-	pi.on("session_tree", () => controller.branchChanged());
+	pi.on("session_tree", (_event, ctx) => controller.branchChanged(ctx));
 	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
 	pi.on("session_shutdown", () => controller.shutdownPreparation());
 	pi.registerTool({

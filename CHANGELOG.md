@@ -6,6 +6,14 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- The independent preview shows its state on Pi's footer line: on, the number of checkpoints on the current branch, writing a note, or paused with a pointer to `/compaction-doctor`. Before, a paused session showed only when an input was refused.
+
+### Changed
+
+- The independent preview's notices begin with `Source-linked compaction`, say what happened before why, and put the code last. A blocked session no longer repeats the whole notice on every input: later inputs blocked by the same code get one short line until a checkpoint or recovery is confirmed. `/compaction-doctor` reports a `requests` line instead of `durable block`, and every code a preview session can raise or restore has its own advice.
+
 ### Security
 
 - Remove the unused upstream Gondolin micro-VM example and its workspace dependency chain, which included `node-forge` affected by GHSA-86w9-cpqp-85rv. Remove its standalone lockfile and the obsolete audit exception, and update the example index and isolation guide. The documented agent maintenance commands, resident compaction runtime and independent extension do not use this example.

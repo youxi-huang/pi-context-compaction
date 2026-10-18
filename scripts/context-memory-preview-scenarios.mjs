@@ -97,7 +97,7 @@ async function worker() {
 		console[level] = (...parts) => {
 			const text = parts.map(String).join(" ");
 			if (commandOutput) commandOutput.push(text);
-			else if (text.includes("context-memory preview")) notices.push(text);
+			else if (text.includes("Source-linked compaction")) notices.push(text);
 			else original(...parts);
 		};
 	}
@@ -365,7 +365,7 @@ async function worker() {
 				check(
 					"doctor-separates-checks",
 					"The self-check reports extension, host, session, writer, manual-compaction and durable-block lines",
-					["extension", "host", "session", "writer", "manual /compact", "durable block"].every((label) => doctor.output.includes(label)),
+					["extension", "host", "session", "writer", "manual /compact", "requests"].every((label) => doctor.output.includes(label)),
 					doctor.output,
 				);
 				check("doctor-eligibility-unknown", "The self-check does not promise /compact will run; Pi's own history gate is reported as unknown", /manual \/compact[^\n]*unknown/.test(doctor.output), doctor.output);
@@ -917,20 +917,31 @@ async function worker() {
 				for (let cycle = 1; cycle <= target; cycle++) {
 					await prompt(`Cycle ${cycle}: keep checking.`);
 					await prompt(`Trace batch ${cycle}:\n${chunk}`);
+					observe("compaction begin", { checkpoints: cycle, beginUs: Number(process.hrtime.bigint() / 1000n) });
 					const result = await compact();
 					if (!result.ok) {
 						observe(`compaction failed at checkpoint ${cycle}`, result);
 						break;
 					}
 					completed = cycle;
+					observe("compaction timing", { checkpoints: cycle, endUs: Number(process.hrtime.bigint() / 1000n), status: JSON.parse((await command("/compaction-status")).output) });
 					if (milestones.includes(cycle)) {
 						measured.push({ checkpoints: cycle, sessionMB: Number((statSync(manager.getSessionFile()).size / 1e6).toFixed(1)), extensionMs: Math.round(await probe(cycle)) });
 					}
 				}
 				check("compactions-succeed", `All ${target} manual compactions succeed`, completed === target, completed);
 				const file = manager.getSessionFile();
+				// Three warm reopens of the final file, with the extension and then without it.
+				async function reopen(label) {
+					for (let sample = 1; sample <= 3; sample++) {
+						const beginUs = Number(process.hrtime.bigint() / 1000n);
+						const opened = await open(stock.SessionManager.open(file));
+						observe(label, { checkpoints: completed, sample, beginUs, endUs: Number(process.hrtime.bigint() / 1000n), opened });
+					}
+				}
+				await reopen("session reopen with extension");
 				writeSettings(false);
-				await open(stock.SessionManager.open(file));
+				await reopen("session reopen disabled control");
 				const baselineMs = Math.round(await probe("disabled-control"));
 				const rows = measured.map((row) => ({ ...row, baselineMs, overheadMs: Math.max(0, row.extensionMs - baselineMs) }));
 				observe("overhead per model request", { rows });

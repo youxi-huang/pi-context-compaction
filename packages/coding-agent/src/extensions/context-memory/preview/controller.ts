@@ -43,6 +43,7 @@ import type {
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
+import { setStatusLine } from "./status-line.ts";
 import {
 	assertUserMessages,
 	carriedUserMessages,
@@ -90,8 +91,9 @@ export function reportPreviewError(
 	durable = true,
 	reason?: InactiveReason,
 	version = VERSION,
+	repeated = false,
 ): void {
-	notify(ctx, blockedNotice(code, durable, reason, version), "error");
+	notify(ctx, blockedNotice(code, durable, reason, version, repeated), "error");
 }
 
 export function assertToolPairs(messages: readonly AgentMessage[]): void {
@@ -719,8 +721,21 @@ export class PreviewMemoryController {
 	}
 
 	/** Tree navigation is a trust boundary, even when the selected branch extends the previous one. */
-	branchChanged(): void {
+	branchChanged(ctx: ExtensionContext): void {
 		this.forgetVerified();
+		if (this.stickyFailures.has(ctx.sessionManager.getSessionId())) {
+			setStatusLine(ctx, "paused");
+		} else if (unsupportedReason(ctx.sessionManager, this.hostVersion)) {
+			setStatusLine(ctx, ctx.sessionManager.getEntries().some(isPreviewCheckpoint) ? "paused" : undefined);
+		} else if (this.configError || !this.config) {
+			setStatusLine(ctx, undefined);
+		} else {
+			this.readyStatus(ctx);
+		}
+	}
+
+	private readyStatus(ctx: ExtensionContext): void {
+		setStatusLine(ctx, ctx.sessionManager.getBranch().filter(isPreviewCheckpoint).length);
 	}
 
 	/** In-process stickiness covers a marker write that failed before it could reach disk. */
@@ -729,6 +744,7 @@ export class PreviewMemoryController {
 		const sessionId = ctx.sessionManager.getSessionId();
 		this.observedFailures.set(sessionId, code);
 		this.stickyFailures.set(sessionId, code);
+		setStatusLine(ctx, "paused");
 		try {
 			this.store.fail(ctx.sessionManager, code);
 		} catch (error) {
@@ -739,13 +755,15 @@ export class PreviewMemoryController {
 	/** At most one blocking notice per session for each user input or manual compaction attempt. */
 	reportBlocked(ctx: ExtensionContext, code: string, durable = true): void {
 		try {
-			if (!this.notices.blockedOnce(ctx.sessionManager.getSessionId())) return;
+			const sessionId = ctx.sessionManager.getSessionId();
+			if (!this.notices.blockedOnce(sessionId)) return;
 			reportPreviewError(
 				ctx,
 				code,
 				durable,
 				unsupportedReason(ctx.sessionManager, this.hostVersion),
 				this.hostVersion,
+				durable && this.notices.repeated(sessionId, code),
 			);
 		} catch {
 			// Notices are advisory; the abort and any marker have already taken effect.
@@ -761,13 +779,15 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return;
 		}
-		if (this.guard(ctx, () => this.assertReady(ctx)) && this.notices.once("ready")) {
-			notify(ctx, readyNotice(PREVIEW_BUILD_ID), "info");
+		if (this.guard(ctx, () => this.assertReady(ctx))) {
+			this.readyStatus(ctx);
+			if (this.notices.once("ready")) notify(ctx, readyNotice(), "info");
 		}
 	}
 
 	/** The preview leaves this session to Pi; say so once per session and process. */
 	standAside(ctx: ExtensionContext, reason: InactiveReason): void {
+		setStatusLine(ctx, undefined);
 		if (this.notices.once(`inactive:${ctx.sessionManager.getSessionId()}:${reason}`)) {
 			notify(ctx, inactiveNotice(reason, this.hostVersion), "info");
 		}
@@ -864,6 +884,7 @@ export class PreviewMemoryController {
 		this.preparation?.cancel("compaction");
 		this.activeCompactions.add(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
+		setStatusLine(ctx, "writing");
 		try {
 			if (this.configError || !this.config) throw new Error(this.configError ?? "CONTEXT_CONFIG");
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
@@ -1126,7 +1147,10 @@ export class PreviewMemoryController {
 		const ours = this.activeCompactions.delete(ctx.sessionManager.getSessionId());
 		this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 		// Pi's own compaction of a session this preview does not protect is not a commit of this package.
-		if (!ours && !this.protected(ctx)) return;
+		if (!ours && !this.protected(ctx)) {
+			setStatusLine(ctx, undefined);
+			return;
+		}
 		try {
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			const memory = latestMemory(ctx.sessionManager.getBranch());
@@ -1145,6 +1169,8 @@ export class PreviewMemoryController {
 			this.preparation?.committed();
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
+			this.readyStatus(ctx);
+			this.notices.confirmed(ctx.sessionManager.getSessionId());
 		} catch (error) {
 			const code = previewErrorCode(error);
 			this.fail(ctx, code);
@@ -1177,6 +1203,8 @@ export class PreviewMemoryController {
 			this.stagedCompactions.delete(ctx.sessionManager.getSessionId());
 			this.stickyFailures.delete(ctx.sessionManager.getSessionId());
 			this.observedFailures.delete(ctx.sessionManager.getSessionId());
+			this.readyStatus(ctx);
+			this.notices.confirmed(ctx.sessionManager.getSessionId());
 		} catch (error) {
 			throw new Error(previewErrorCode(error));
 		}

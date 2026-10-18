@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.5.1] — 2026-10-18
+
+v0.5.1 makes the independent extension's quotation repair cheaper and its failures easier to diagnose. The repair now runs without reasoning, whatever the writer's effort: in v0.5.0 one repair at `high` spent its output on reasoning and returned nothing usable. `/compaction-status` names what each writer call asked for, what its request carried and how it ended, and counts the citations behind a scope refusal. A repair can no longer withdraw a ruling a user stated, and `context_history`'s list no longer marks a still-valid fact as superseded. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged. Two bounded runs with DeepSeek V4.1 Flash on Pi 1.3.0 are in the validation record: over 38 planted repair cases, two attempts each, the repair passed 76 of 76 without reasoning against 75 of 76 at `high`, and in writer benches beside a same-day run of the v0.5.0 release build the candidate committed 121 of 128 notes against 62 of 64. They cover one model and synthetic tasks, not a general failure rate.
+
 ### Added
 
 - `/compaction-status` reports for each writer call the reasoning effort it asked for, the reasoning settings and output cap its provider request carried, read from the request Pi built without its content, and how the response ended; a quotation repair's withdrawn facts are also counted by section. In v0.5.0 a repair that spent its output on reasoning could not be told apart from other failed calls. On official Pi 1.1.0 to 1.3.0, a DeepSeek Flash session at thinking level `medium` already runs at `high`, because the model declares no `medium`, so its writer sends `reasoning_effort: "high"`.

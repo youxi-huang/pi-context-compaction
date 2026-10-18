@@ -95,6 +95,53 @@ Answer three questions on official Pi 1.3.0 with scripted providers, offline:
 
 The only changes allowed are `observe()` rows inside the existing `long-session-overhead` case and one entry at the top of `validation.md`, with commands, numbers, exit codes and the hot spots by file and line. No new checks, gates, scripts, runtime changes or `CHANGELOG.md` line. The entry ends with proposals, each marked preview-only or fingerprinted file, and whether it touches a check at a trust boundary. The maintainer chooses among them later.
 
+## Second batch
+
+U3 showed where the extension's own time goes ([validation](validation.md#preview-reopen-and-compaction-overhead-on-official-pi-130-2026-10-18-utc)). V1 shortens those waits without changing what is compared. V2 looks at Pi's interactive terminal, which no check has covered yet. Both start from `main` and open their PRs against `main`, so CI runs on each; the review reads the diff and the CI result.
+
+The third U3 proposal, batching in `identity.ts`, waits. It would reach both gates, and V1 can remove most of the repeated hashing without it.
+
+### V1 Shorter pause, faster reopen
+
+At 40 checkpoints, cut by at least a third both the extension's work around a compaction (674 ms) and its share of a reopen (135 ms). If that needs any comparison below to go, stop and report: time never buys a check.
+
+The method is to produce the same bytes fewer times. A hash or a disk read may be shared only between uses inside one synchronous stretch, with no `await`, write or Pi append between them, and nothing outlives the call that computed it.
+
+These comparisons stay, at the same moments:
+
+| Where | Comparison |
+| --- | --- |
+| Readiness, `evaluate` in `failure-store.ts` | The disk branch at the leaf matches the in-memory branch |
+| `begin` | The attempt's source hash comes from the branch and matches the disk branch at the leaf |
+| `compact`, before the writer | The cloned branch matches the attempt's source hash |
+| `compact`, after the writer | The same session and leaf, and the current branch matches the snapshot |
+| `stage` | The current branch and the disk branch at the leaf match the attempt's source hash |
+| Commit and recovery confirmation | The entry on disk equals the committed one, its sources match the marker's hash, and the in-memory branch matches the disk branch |
+| Session start | Full checkpoint validation in `assertPreviewSession`, and the readiness readback |
+
+Candidates from the profile:
+
+- `begin` and the readiness check inside it share one fresh read of the session file.
+- After the writer, `compact` compares the current branch with `attempt.sourceHash` instead of hashing its clone again, once a test shows the clone is never changed.
+- At session start, the readiness readback and checkpoint validation serialize the same branch once between them.
+
+Beyond Not accepted: no file outside `preview/` changes, `identity.ts` included. No cache is keyed by entry objects, because an entry changed in place must still be found. Hashes stay byte-identical, so existing checkpoints open unchanged. Each shared read or hash gets a focused regression showing that a change inside the window it covered is still refused, and the acceptance cases `memory-change`, `disk-change`, `checkpoint-write-failed` and `unobserved-commit` pass unchanged.
+
+Evidence: a new `validation.md` entry with before and after side by side, from the same machine and the U3 commands, two runs of each at 1, 10 and 40 checkpoints, and one profile at 40. The PR description names each repetition removed, by file and line.
+
+### V2 What the terminal shows
+
+Read only. Run official Pi 1.3.0 interactively in a pseudo-terminal, for example `script` driven through `@xterm/headless` from the repository's dependencies. Use the acceptance runner's isolated agent directory, loopback provider and scripted responses. Capture the screen as text at 120 and 80 columns after each step:
+
+1. A fresh session starts: the ready notice and the footer.
+2. `/compaction-doctor`.
+3. A `/compact` whose note fails its quotation check: the notice, Pi's own `Compaction cancelled`, the footer.
+4. The next input: the short repeat.
+5. A successful `/compact`: the footer count and the summary Pi renders.
+6. A session the preview leaves to Pi, such as one with a checkpoint from Pi's own compaction.
+
+The deliverable is one `validation.md` entry with the screens, every path replaced by `<cwd>`, and a list of what reads wrong, wraps badly, is cut off or appears twice. Findings, not fixes. The driver goes in the PR description, not the repository, and no runtime, test or script file changes.
+
 ## Not accepted
 
 The review removes these, whatever the intent:
@@ -125,4 +172,6 @@ Report each command with its result and exit code, as the [runbook](operations.m
 | --- | --- |
 | U1 Footer state | Done in #58 |
 | U2 One voice | Done in #60 |
-| U3 Where the time goes | Measured in #59. Its [proposals](validation.md#preview-reopen-and-compaction-overhead-on-official-pi-130-2026-10-18-utc) wait for the maintainer |
+| U3 Where the time goes | Measured in #59; V1 takes up two of its proposals |
+| V1 Shorter pause, faster reopen | open |
+| V2 What the terminal shows | open |

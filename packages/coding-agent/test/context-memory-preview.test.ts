@@ -1727,6 +1727,163 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	function withEditor(base: ExtensionContext, hasUI = true) {
+		let text = "";
+		const setEditorText = vi.fn((value: string) => {
+			text = value;
+		});
+		return { ...base, hasUI, ui: { ...base.ui, getEditorText: () => text, setEditorText } };
+	}
+	it("holds paused interactive text in the editor without disk access or recording input", async () => {
+		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		const handlers = loadPreview();
+		const ctx = withEditor(context());
+		const { setEditorText } = ctx.ui;
+		await emit(handlers, "session_start", {}, ctx);
+		vi.mocked(ctx.ui.notify).mockClear();
+		vi.mocked(ctx.abort).mockClear();
+		const entries = structuredClone(session.entries);
+		const read = vi.spyOn(fs, "readFileSync");
+		const write = vi.spyOn(fs, "writeFileSync");
+		const diagnose = vi.spyOn(PreviewMemoryController.prototype, "diagnose");
+		const status = vi.spyOn(PreviewMemoryController.prototype, "status");
+		const text = "Continue checking port 4317.\nKeep deployment unauthorized.";
+		expect(await emit(handlers, "input", { type: "input", source: "interactive", text }, ctx)).toEqual({
+			action: "handled",
+		});
+		expect(setEditorText).toHaveBeenCalledExactlyOnceWith(text);
+		expect(ctx.ui.notify).toHaveBeenCalledExactlyOnceWith(
+			"Source-linked compaction: requests are still paused. Run /compact to try again. (CONTEXT_NOTE_QUOTE)",
+			"warning",
+		);
+		expect(ctx.abort).not.toHaveBeenCalled();
+		expect(session.entries).toEqual(entries);
+		expect(read).not.toHaveBeenCalled();
+		expect(write).not.toHaveBeenCalled();
+		expect(diagnose).not.toHaveBeenCalled();
+		expect(status).not.toHaveBeenCalled();
+		// A request that bypasses the UI boundary still reaches the unchanged guard.
+		await emit(handlers, "before_provider_request", { payload: { messages: [] } }, ctx);
+		expect(ctx.abort).toHaveBeenCalledOnce();
+		expect(ctx.ui.notify).toHaveBeenCalledOnce();
+	});
+	it.each([
+		{ source: "interactive", paused: false, hasUI: true },
+		{ source: "interactive", paused: true, hasUI: false },
+		{ source: "rpc", paused: true, hasUI: true },
+		{ source: "extension", paused: true, hasUI: true },
+		{
+			source: "interactive",
+			paused: true,
+			hasUI: true,
+			images: [{ type: "image", data: "synthetic", mimeType: "image/png" }],
+		},
+	])("leaves input on its existing path for %j", async ({ source, paused, hasUI, images }) => {
+		if (paused) new PreviewFailureStore(agentDir).fail(session, "CONTEXT_NOTE_QUOTE");
+		const handlers = loadPreview();
+		const ctx = withEditor(context(), hasUI);
+		const { setEditorText } = ctx.ui;
+		await emit(handlers, "session_start", {}, ctx);
+		vi.mocked(ctx.ui.notify).mockClear();
+		vi.mocked(ctx.abort).mockClear();
+		expect(await emit(handlers, "input", { type: "input", source, text: "Continue.", images }, ctx)).toBeUndefined();
+		expect(setEditorText).not.toHaveBeenCalled();
+		expect(ctx.ui.notify).not.toHaveBeenCalled();
+		expect(ctx.abort).not.toHaveBeenCalled();
+		if (paused) {
+			await emit(handlers, "before_provider_request", { payload: { messages: [] } }, ctx);
+			expect(ctx.abort).toHaveBeenCalledOnce();
+		}
+	});
+	it("uses the current session's failure and resumes input after recovery", () => {
+		const preview = controller();
+		const ctx = withEditor(context());
+		const input = { type: "input" as const, source: "interactive" as const, text: "Continue.", images: [] };
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("A quotation in the note"), "error");
+		preview.fail(ctx, "CONTEXT_NOTE_SCOPE");
+		expect(preview.input(input, ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.notify).toHaveBeenLastCalledWith(expect.stringContaining("The note cites a message"), "error");
+		const other = { ...ctx, sessionManager: new SyntheticSession(root, "other-session") };
+		expect(preview.input(input, other)).toBeUndefined();
+		const store = new PreviewFailureStore(agentDir);
+		const attempt = store.begin(session, true);
+		const value = candidate(session);
+		value.details!.build = "stock-preview+test";
+		store.stage(session, attempt, value);
+		session.append(saved(session, value));
+		preview.recover(ctx);
+		expect(preview.input(input, ctx)).toBeUndefined();
+	});
+	it("keeps every held message, and records input at a checkpoint leaf for Pi's retry", () => {
+		const preview = controller();
+		const ctx = withEditor(context());
+		const input = (text: string) => ({ type: "input" as const, source: "interactive" as const, text });
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		// Pi delivers messages queued during a failed compaction one input event at a time.
+		expect(preview.input(input("First."), ctx)).toEqual({ action: "handled" });
+		expect(preview.input(input("Second."), ctx)).toEqual({ action: "handled" });
+		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
+		// At a checkpoint leaf Pi answers /compact with "Already compacted" until an input is recorded.
+		protect();
+		expect(preview.input(input("Retry."), ctx)).toBeUndefined();
+		expect(ctx.ui.getEditorText()).toBe("First.\n\nSecond.");
+	});
+	it.each(["native", "protected"])(
+		"shows the %s reopen notice at the first input, after Pi's startup status",
+		async (kind) => {
+			if (kind === "native") addNativeCheckpoint();
+			else protect();
+			const handlers = loadPreview();
+			let statusText = "";
+			const notify = vi.fn((text: string, level = "info") => {
+				if (level === "info") statusText = text;
+			});
+			const base = context();
+			const ctx = { ...base, hasUI: true, ui: { ...base.ui, notify, setStatus: vi.fn() } };
+			const expected = kind === "native" ? "Source-linked compaction is off in this session" : readyNotice();
+			await emit(handlers, "session_start", {}, ctx);
+			// Official Pi renders its compaction count after session_start through the same status text.
+			statusText = "Session compacted 1 time";
+			const read = vi.spyOn(fs, "readFileSync");
+			await emit(handlers, "input", { text: "Continue", source: "interactive" }, ctx);
+			expect(statusText).toContain(expected);
+			expect(read).not.toHaveBeenCalled();
+			await emit(handlers, "input", { text: "Continue again", source: "interactive" }, ctx);
+			await emit(handlers, "session_start", {}, ctx);
+			await emit(handlers, "input", { text: "Still here", source: "interactive" }, ctx);
+			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(1);
+			expect(ctx.abort).not.toHaveBeenCalled();
+			expect(fs.existsSync(markerPath())).toBe(false);
+			session = new SyntheticSession(root, "second-session");
+			if (kind === "native") addNativeCheckpoint();
+			else protect();
+			const next = { ...ctx, sessionManager: session } as unknown as ExtensionContext;
+			await emit(handlers, "session_start", {}, next);
+			await emit(handlers, "input", { text: "Another session", source: "interactive" }, next);
+			// The off notice is per session; the ready notice stays once per process.
+			expect(notify.mock.calls.filter(([text]) => text.includes(expected))).toHaveLength(kind === "native" ? 2 : 1);
+		},
+	);
+	it("does not deliver a deferred ready notice after a failure or into another session", () => {
+		protect();
+		const preview = controller();
+		const base = context();
+		const notify = vi.fn();
+		const ctx = { ...base, hasUI: true, ui: { ...base.ui, notify, setStatus: vi.fn() } };
+		const input = { type: "input" as const, source: "rpc" as const, text: "Continue." };
+		preview.sessionStart(ctx);
+		preview.input(input, {
+			...ctx,
+			sessionManager: new SyntheticSession(root, "other-session"),
+		} as unknown as ExtensionContext);
+		expect(notify).not.toHaveBeenCalled();
+		preview.sessionStart(ctx);
+		preview.fail(ctx, "CONTEXT_NOTE_QUOTE");
+		preview.input(input, ctx);
+		expect(notify).not.toHaveBeenCalled();
+	});
 	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {
 		const handlers = loadPreview();
 		const setStatus = vi.fn();

@@ -131,7 +131,7 @@ What happens in an unsupported session depends on whether the preview already pr
 
 Start with `/compaction-doctor` for a plain-language check, or `/compaction-status` for the same findings as JSON: the extension build, the selected writer, checkpoint information, the session's protection, and whether requests are `ready`, `pending` or `blocked`, with a controlled error code. A failure notice explains what happened and what to do, with the code last. Later inputs blocked by the same code get a short reminder until a checkpoint or recovery is confirmed.
 
-If a compaction attempt fails because the note, its sources, the writer or the on-disk state could not be checked, **the extension does not publish an unchecked summary or quietly switch to another writer**. Requests stay paused across new input, `/reload` and reopening the session.
+If a compaction attempt fails because the note, its sources, the writer or the on-disk state could not be checked, **the extension does not publish an unchecked summary or quietly switch to another writer**. Requests stay paused across new input, `/reload` and reopening the session. Text typed while paused goes back to Pi's editor instead of into the session.
 
 Two commands do different jobs:
 

@@ -104,9 +104,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
 	});
 	// Each submitted input starts a new notice episode, so a blocked input is reported once.
-	pi.on("input", () => {
-		controller.notices.nextEpisode();
-	});
+	pi.on("input", (event, ctx) => controller.input(event, ctx));
 	// Stock cache warming uses a separate registry stream and bypasses request guards.
 	// Stop it wherever this preview guards requests; throwing here would restore the stock decision.
 	pi.on("cache_warming_decision", (_event, ctx) =>

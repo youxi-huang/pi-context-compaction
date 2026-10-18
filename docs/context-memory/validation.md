@@ -86,6 +86,671 @@ Verification:
 | `node scripts/context-memory-ops.mjs preview` | Exit 0 on clean implementation commit `a31af54`: official Pi 1.3.0/1.2.0/1.1.0 acceptance, cross-version checkpoints, strict default scenarios, release checks and local prepare pass. The unchanged `memory-change`, `disk-change`, `checkpoint-write-failed` and `unobserved-commit` cases pass on all three hosts |
 
 During development, the new prefix and JSON-spacing fixtures initially failed; they were corrected. An initial `verify` exited 1 on a new test's TypeScript union inference; it was corrected before the passing verification above. Real-provider tests and V2 terminal work: not run.
+## Preview interactive terminal on official Pi 1.3.0, 2026-10-18 UTC
+
+V2 of the [preview experience plan](ux-plan.md#v2-what-the-terminal-shows), observed from `main` at `c31ef54`, with preview `stock-preview+src.1f33b3e224cb30ab`. The footer and quotation refusal are readable at both widths. Pi adds a second error after both a refused compaction and a blocked input; the input's generic abort error remains after a successful retry. Reopening a native-compaction session gives no visible explanation that source-linked compaction is off.
+
+Synthetic only: official npm Pi 1.3.0, its seven pinned runtime components, Linux x86_64, Node 24.19.0, util-linux `script`, and the repository's `@xterm/headless` 5.5.0. Each capture is the settled 40-row viewport, independently run at 120 and 80 columns, with no resize, scrollback, or expansion. Blank rows and line breaks are retained; trailing whitespace is removed and every displayed filesystem path is replaced by `<cwd>`. Colors, links and cursor position are not represented by these text screens.
+
+The driver is in the PR description, outside the repository. It follows the acceptance runner's isolation: a fresh agent directory for each width, a package copy outside any Node project, the official bundled CLI, an allowlisted environment, and only scripted OpenAI-compatible responses from `127.0.0.1`. `PI_OFFLINE=0` permits loopback requests while disabling model-catalog refresh; telemetry and version checks are disabled. No provider credentials are inherited. The host files checked by acceptance have identical hashes before and after the run.
+
+The runner's explicit test settings are used, rather than Pi's default history size: `writerModel: "session"`, `noteRepair: false`, `eventLog: false`, `keepRecentTokens: 0` in the preview; native automatic compaction and cache warming off, native `keepRecentTokens: 0`, retries off, no active tools. One short synthetic completed turn makes `/compact` eligible. The first writer response contains a quotation absent from its source; the retry quotes the source exactly. There is no checkpoint after the refusal, no HTTP request for the blocked input, and exactly one preview checkpoint after the retry. Each width makes five loopback requests: two ordinary turns, the refused and accepted preview writers, and one native summarizer.
+
+For step 6, a separate session is compacted by this official Pi with the package absent, then reopened with the package enabled. Its checkpoint has native file-list metadata, not `kind: "pi-context-memory"`. A second capture of `/compaction-doctor` confirms that this session is inactive without adding a preview footer.
+
+| Command | Result | Exit |
+| --- | --- | ---: |
+| `node scripts/context-memory-preview-stock-install.mjs --stock-root .artifacts/context-memory-preview-stock --version 1.3.0` | Official cohort and network-blocked SDK import passed | 0 |
+| `node scripts/context-memory-preview-build.mjs` | Built the independent package named above | 0 |
+| `node ../work/v2-driver.mjs` (driver in the PR) | 14 screens; checkpoint, blocked-request and unchanged-host assertions passed | 0 |
+| `node scripts/context-memory-ops.mjs verify` | Build, resident acceptance and security regressions passed | 0 |
+| `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | No resident fingerprint change | 0 |
+
+The required clean-checkout, post-commit `node scripts/context-memory-ops.mjs preview` result is recorded in the PR. Real-provider tests: **not run**. No runtime, test or script file was changed.
+
+Findings, without fixes:
+
+- **Two errors for one refusal.** Step 3 shows the specific quotation refusal, then `Error: Compaction cancelled`. The second line adds no explanation and reads as a separate failure. At 120 columns the refusal takes three lines; at 80 it takes four. The code occupies its own line at both widths, while the cause, retry command and paused footer remain visible.
+- **Two errors for one blocked input.** Step 4 shows the short repeat, followed by `Error: This operation was aborted`. The repeat is one line at 120 columns and two at 80; the generic error makes an intentional pause read like an additional fault. The provider request count does not change.
+- **An old error survives success.** Step 5 leaves `Error: This operation was aborted` above `[compaction]` and `Compacted from 142 tokens (ctrl+o to expand)`, while the footer correctly changes to `compaction: 1 checkpoint`. The full refusal and short repeat are no longer on this rebuilt screen. Pi initially collapses the note; its summary display is a token count and expansion hint, with no note body visible. The usage line changes from `0.1%/128k` to `?/128k`.
+- **The inactive session has no visible off notice.** Step 6 shows the extension loaded, no compaction footer, and `Session compacted 1 time` twice, above and below the native summary. It does not show `Source-linked compaction is off in this session`. The follow-up doctor explicitly says the session and manual compaction are inactive, and requests are not paused. The captures establish the missing visible explanation, not why it is missing.
+- **The doctor's history advice remains dense.** Its `manual /compact` detail occupies two lines at 120 columns and three at 80, pushing the `requests` and result lines down. On this fresh idle session it says `Finish the turn with no queued input first` even though no turn has begun. Its 20,000-token sentence describes Pi's default, not this harness's zero-token setting; the doctor cannot see the effective host setting. After the refusal, the old `requests: ok - not paused` and `Result: ready` output remains above the newer failure, while the live footer says paused.
+- **No preview footer is cut off in these screens.** Ready, paused and checkpoint-count texts fit at 80 and 120 columns. The ready notice wraps to two lines at both widths. The 80-column host startup help wraps and the top of earlier output scrolls out by steps 3 and 4; the current failure, retry command and footer stay visible. Wider combinations with other extensions, colors and a real terminal emulator were not assessed.
+- **Isolated-host startup noise is separate.** Official Pi attempts to download missing `fd`, despite `--no-tools`, and retains `fd not found. Downloading...` plus a DNS or timeout warning. These are host/environment messages, not preview refusals. No download succeeds and no real model service is contacted. The warnings disappear when Pi rebuilds the screen after the successful preview compaction.
+
+### 120 columns, 40 rows
+
+**1. Fresh session**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction is on. It writes a checkpoint on /compact and when the context nears its limit.
+ /compaction-doctor checks this session.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+0.0%/128k                                                                                              synthetic-preview
+compaction: on
+```
+
+**2. `/compaction-doctor`**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi keeps the latest 20,000 tokens by default
+ (compaction.keepRecentTokens) and says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+0.0%/128k                                                                                              synthetic-preview
+compaction: on
+```
+
+**3. `/compact`, quotation refused**
+
+```text
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi keeps the latest 20,000 tokens by default
+ (compaction.keepRecentTokens) and says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+ Use port 4317. Do not deploy this synthetic service. Continue checking it locally.
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note doesn't match the message it cites.
+ Requests stay paused, through /reload and restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+
+ Error: Compaction cancelled
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑100 ↓30 0.1%/128k                                                                                     synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+**4. Next input, short repeat**
+
+```text
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi keeps the latest 20,000 tokens by default
+ (compaction.keepRecentTokens) and says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+ Use port 4317. Do not deploy this synthetic service. Continue checking it locally.
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note doesn't match the message it cites.
+ Requests stay paused, through /reload and restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+
+ Error: Compaction cancelled
+
+
+ Continue despite the earlier failed compaction.
+
+
+ Error: Source-linked compaction: requests are still paused. Run /compact to try again. (CONTEXT_NOTE_QUOTE)
+
+ Error: This operation was aborted
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑100 ↓30 0.1%/128k                                                                                     synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+**5. Successful `/compact`, collapsed summary**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ Continue despite the earlier failed compaction.
+
+
+ Error: This operation was aborted
+
+
+ [compaction]
+
+ Compacted from 142 tokens (ctrl+o to expand)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                                                        synthetic-preview
+compaction: 1 checkpoint
+```
+
+**6. Native-compaction session reopened with the preview**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: The operation was aborted due to timeout
+
+ Session compacted 1 time
+
+
+ [compaction]
+
+ Compacted from 130 tokens (ctrl+o to expand)
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Session compacted 1 time
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                                                        synthetic-preview
+```
+
+**6, follow-up. Doctor confirms the preview is off**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: The operation was aborted due to timeout
+
+ Session compacted 1 time
+
+
+ [compaction]
+
+ Compacted from 130 tokens (ctrl+o to expand)
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: inactive - the session already has a checkpoint from Pi's own compaction or another compactor. Pi's own
+ compaction applies
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: inactive - Pi's own compaction applies
+   requests: ok - not paused
+ Result: off in this session. Pi's own compaction applies, and nothing was changed.
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                                                        synthetic-preview
+```
+
+### 80 columns, 40 rows
+
+**1. Fresh session**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction is on. It writes a checkpoint on /compact and when
+ the context nears its limit. /compaction-doctor checks this session.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+0.0%/128k                                                      synthetic-preview
+compaction: on
+```
+
+**2. `/compaction-doctor`**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi
+ keeps the latest 20,000 tokens by default (compaction.keepRecentTokens) and
+ says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+0.0%/128k                                                      synthetic-preview
+compaction: on
+```
+
+**3. `/compact`, quotation refused**
+
+```text
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: fetch failed: getaddrinfo EAI_AGAIN github.com
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi
+ keeps the latest 20,000 tokens by default (compaction.keepRecentTokens) and
+ says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+ Use port 4317. Do not deploy this synthetic service. Continue checking it
+ locally.
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note
+ doesn't match the message it cites. Requests stay paused, through /reload and
+ restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+
+ Error: Compaction cancelled
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑100 ↓30 0.1%/128k                                             synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+**4. Next input, short repeat**
+
+```text
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: ok - saved text session, protection starts with /compact
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: unknown - Finish the turn with no queued input first. Pi
+ keeps the latest 20,000 tokens by default (compaction.keepRecentTokens) and
+ says "Nothing to compact (session too small)" until there is more.
+   requests: ok - not paused
+ Result: ready. Keep working, then run /compact when the conversation grows.
+
+
+ Use port 4317. Do not deploy this synthetic service. Continue checking it
+ locally.
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Error: Source-linked compaction: checkpoint not saved. A quotation in the note
+ doesn't match the message it cites. Requests stay paused, through /reload and
+ restarts, until a checkpoint is saved. Run /compact to try again.
+ (CONTEXT_NOTE_QUOTE)
+
+ Error: Compaction cancelled
+
+
+ Continue despite the earlier failed compaction.
+
+
+ Error: Source-linked compaction: requests are still paused. Run /compact to
+ try again. (CONTEXT_NOTE_QUOTE)
+
+ Error: This operation was aborted
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑100 ↓30 0.1%/128k                                             synthetic-preview
+compaction: paused, see /compaction-doctor
+```
+
+**5. Successful `/compact`, collapsed summary**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ Continue despite the earlier failed compaction.
+
+
+ Error: This operation was aborted
+
+
+ [compaction]
+
+ Compacted from 142 tokens (ctrl+o to expand)
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                synthetic-preview
+compaction: 1 checkpoint
+```
+
+**6. Native-compaction session reopened with the preview**
+
+```text
+
+ ▀▀█  v1.3.0
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: The operation was aborted due to timeout
+
+ Session compacted 1 time
+
+
+ [compaction]
+
+ Compacted from 130 tokens (ctrl+o to expand)
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Session compacted 1 time
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                synthetic-preview
+```
+
+**6, follow-up. Doctor confirms the preview is off**
+
+```text
+ █▀ █ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash ·
+ ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or
+ extend Pi.
+
+[Extensions]
+  extension.js
+
+
+ fd not found. Downloading...
+ Warning: Failed to download fd: The operation was aborted due to timeout
+
+ Session compacted 1 time
+
+
+ [compaction]
+
+ Compacted from 130 tokens (ctrl+o to expand)
+
+
+ The synthetic port is 4317. Deployment remains unauthorized.
+
+ Source-linked compaction doctor (read-only: no model call, nothing written)
+   extension: ok - loaded, build stock-preview+src.1f33b3e224cb30ab
+   host: ok - Pi 1.3.0, supported
+   session: inactive - the session already has a checkpoint from Pi's own
+ compaction or another compactor. Pi's own compaction applies
+   writer: ok - session model (synthetic-preview/synthetic-preview)
+   manual /compact: inactive - Pi's own compaction applies
+   requests: ok - not paused
+ Result: off in this session. Pi's own compaction applies, and nothing was
+ changed.
+
+────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────
+<cwd>
+↑200 ↓60 ?/128k                                                synthetic-preview
+```
 
 ## Preview reopen and compaction overhead on official Pi 1.3.0, 2026-10-18 UTC
 

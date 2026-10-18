@@ -757,16 +757,19 @@ export class PreviewMemoryController {
 
 	/** Text typed while paused goes back to the editor instead of into the session. */
 	input(event: InputEvent, ctx: ExtensionContext): InputEventResult | undefined {
-		this.notices.nextEpisode();
 		this.showSessionNotice(ctx);
-		if (event.source !== "interactive" || !ctx.hasUI || event.images?.length) return;
-		const code = this.stickyFailures.get(ctx.sessionManager.getSessionId());
-		// At a checkpoint leaf Pi refuses /compact as "Already compacted"; the recorded input lets the retry run.
-		if (!code || ctx.sessionManager.getLeafEntry()?.type === "compaction") return;
-		this.reportBlocked(ctx, code);
-		// Messages Pi queued during a compaction arrive one at a time; keep every one.
-		const draft = ctx.ui.getEditorText();
-		ctx.ui.setEditorText(draft.trim() ? `${draft}\n\n${event.text}` : event.text);
+		const code =
+			event.source === "interactive" && ctx.hasUI && !event.images?.length
+				? this.stickyFailures.get(ctx.sessionManager.getSessionId())
+				: undefined;
+		// Messages Pi queued during a compaction arrive one at a time, before its failure event:
+		// later ones join the first one's text and notice.
+		const draft = code ? ctx.ui.getEditorText() : "";
+		const joins = draft.trim() !== "";
+		if (!joins) this.notices.nextEpisode();
+		if (!code) return;
+		if (!joins) this.reportBlocked(ctx, code);
+		ctx.ui.setEditorText(joins ? `${draft}\n\n${event.text}` : event.text);
 		return { action: "handled" };
 	}
 

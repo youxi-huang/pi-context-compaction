@@ -317,7 +317,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 	const tokens = manual.contextTokens
 		? ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`
 		: "";
-	const gate = `Pi keeps the latest ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} tokens by default (compaction.keepRecentTokens) and says "Nothing to compact (session too small)" until there is more.${tokens}`;
+	const gate = `Pi compacts only history older than its latest ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} tokens by default.${tokens}`;
 	const recover = "Run /compaction-recover to confirm the saved checkpoint";
 	if (manual.preview === "not-active") line("manual /compact", "inactive", "Pi's own compaction applies");
 	else if (manual.preview === "blocked") {
@@ -370,7 +370,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		lines.push(
 			`Result: ready, but /compact can't write a checkpoint yet. ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`,
 		);
-	else lines.push("Result: ready. Keep working, then run /compact when the conversation grows.");
+	else lines.push("Result: ready for requests. Run /compact once the conversation grows.");
 	return lines.join("\n");
 }
 

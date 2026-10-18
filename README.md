@@ -51,7 +51,7 @@ Start a **new, persistent, text-only** Pi session. Pi shows `Source-linked compa
 /compaction-doctor
 ```
 
-It checks, without calling a model or changing anything, that the extension loaded, that this is a supported Pi version, that the session is one the preview can handle, which writer it will use, and whether anything is blocking requests. `Result: ready` means nothing is in the way; **it does not mean the conversation is long enough to compact yet**, which is why the manual `/compact` line reads `unknown`.
+It checks, without calling a model or changing anything, that the extension loaded, that this is a supported Pi version, that the session is one the preview can handle, which writer it will use, and whether anything is blocking requests. `Result: ready for requests` means nothing is in the way; **it does not mean the conversation is long enough to compact yet**, which is why the manual `/compact` line reads `unknown`.
 
 Keep working normally. Once the session has accumulated enough completed text history, ask for a checkpoint:
 

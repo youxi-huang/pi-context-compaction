@@ -1618,16 +1618,6 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
-	it("clears an earlier footer when disabled, without installing compaction hooks", async () => {
-		fs.writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ enabled: false }));
-		const handlers = loadPreview();
-		const setStatus = vi.fn();
-		const ctx = context();
-		await emit(handlers, "session_start", {}, { ...ctx, hasUI: true, ui: { ...ctx.ui, setStatus } });
-		expect(setStatus).toHaveBeenCalledExactlyOnceWith("context-memory", undefined);
-		expect(handlers.has("session_before_compact")).toBe(false);
-		expect(fs.existsSync(markerPath())).toBe(false);
-	});
 	it("updates the branch's footer without disk reads or diagnostics and leaves passing requests alone", async () => {
 		const handlers = loadPreview();
 		const setStatus = vi.fn();
@@ -1663,11 +1653,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 	});
 
 	it.each([
-		"CONTEXT_BLOCKED",
-		"CONTEXT_BUSY",
 		"CONTEXT_CAPACITY",
 		"CONTEXT_COMPACTION_CANCELLED",
-		"CONTEXT_COMPACTOR_CONFLICT",
 		"CONTEXT_CONFIG",
 		"CONTEXT_CONTINUATION_MISSING",
 		"CONTEXT_INPUT_TOO_LARGE",
@@ -1687,7 +1674,6 @@ describe("independent extension preview: sessions it does not protect", () => {
 		"CONTEXT_RECOVERY_TOO_LARGE",
 		"CONTEXT_SOURCE_CHANGED",
 		"CONTEXT_TOOL_BOUNDARY",
-		"CONTEXT_UNSETTLED",
 		"CONTEXT_WRITER_CAPACITY",
 		"CONTEXT_WRITER_FAILED",
 		"CONTEXT_WRITER_UNAVAILABLE",
@@ -1749,7 +1735,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 			"Source-linked compaction is on. It writes a checkpoint on /compact and when the context nears its limit. /compaction-doctor checks this session.",
 		);
 		expect(inactiveNotice("image", "1.3.0")).toBe(
-			"Source-linked compaction is off in this session because it contains an image. Pi's own compaction applies, and nothing was changed. Start a new text-only session to use it.",
+			"Source-linked compaction is off in this session because the session contains an image. Pi's own compaction applies, and nothing was changed. Start a new text-only session to use it.",
 		);
 		expect(blockedNotice("CONTEXT_NOTE_QUOTE", true)).toBe(
 			"Source-linked compaction: checkpoint not saved. A quotation in the note doesn't match the message it cites. Requests stay paused, through /reload and restarts, until a checkpoint is saved. Run /compact to try again. (CONTEXT_NOTE_QUOTE)",
@@ -1893,7 +1879,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(fs.existsSync(markerPath())).toBe(false);
 		expect(warnings).toHaveLength(1);
 		expect(warnings[0]).toContain("pi-context-memory.json");
-		expect(warnings[0]).toContain("Only this request was stopped.");
+		expect(warnings[0]).toContain("Nothing is paused, and the next request is checked again.");
 		preview.notices.nextEpisode();
 		preview.context(messages(), ctx);
 		expect(warnings).toHaveLength(2);
@@ -1989,7 +1975,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(diagnosis.manualCompaction).toMatchObject({ preview: "retry", recover: true });
 		const report = doctorReport(diagnosis, { disabled: false, writerModel: "session" });
 		expect(report).toContain(
-			"manual /compact: retry - /compaction-recover can confirm a saved checkpoint without a model call",
+			"manual /compact: retry - Run /compaction-recover to confirm the saved checkpoint, or /compact to retry.",
 		);
 		expect(report).toContain("Result: requests paused. Run /compaction-recover to confirm the saved checkpoint");
 	});
@@ -2016,7 +2002,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(fixed).toMatchObject({ state: "ready", manualCompaction: { preview: "blocked" } });
 		const writerReport = doctorReport(fixed, { disabled: false, writerModel: "missing/writer" });
 		expect(writerReport).toMatch(/manual \/compact: blocked - .*\(CONTEXT_WRITER_\w+\)/);
-		expect(writerReport).toContain("Result: requests ready, but /compact can't write a checkpoint yet.");
+		expect(writerReport).toContain("Result: ready, but /compact can't write a checkpoint yet.");
 		expect(writerReport).not.toContain("run /compact once the conversation has grown");
 	});
 	it("does not latch a damaged session file into the process when only inspected", () => {

@@ -773,7 +773,6 @@ export class PreviewMemoryController {
 	/** Called once per session start: one short notice, never a marker for a session the preview does not protect. */
 	sessionStart(ctx: ExtensionContext): void {
 		this.forgetVerified();
-		setStatusLine(ctx, undefined);
 		this.preparation?.activate(ctx.sessionManager.getSessionId());
 		const reason = this.safeInactive(ctx);
 		if (reason) {
@@ -1199,7 +1198,6 @@ export class PreviewMemoryController {
 			) {
 				throw new Error("CONTEXT_PREVIEW_COMMIT_UNCONFIRMED");
 			}
-			setStatusLine(ctx, "paused");
 			this.store.recover(ctx.sessionManager, leaf);
 			this.preparation?.committed();
 			this.stagedCompactions.delete(ctx.sessionManager.getSessionId());

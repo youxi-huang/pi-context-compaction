@@ -16,22 +16,6 @@ interface Advice {
 
 /** Each controlled code answers what happened and what to do next. No provider text, note text or paths. */
 const ADVICE: Record<string, Advice> = {
-	CONTEXT_BLOCKED: {
-		what: "An earlier failure still needs a checked checkpoint.",
-		next: RETRY,
-	},
-	CONTEXT_BUSY: {
-		what: "Another operation in this session is still running.",
-		next: "Wait until Pi is idle, then run /compact.",
-	},
-	CONTEXT_COMPACTOR_CONFLICT: {
-		what: "Another compactor is handling this session too.",
-		next: "Disable the other compactor and restart Pi, then run /compact.",
-	},
-	CONTEXT_UNSETTLED: {
-		what: "The current turn has not finished.",
-		next: "Wait for the turn to finish, then run /compact.",
-	},
 	CONTEXT_PREVIEW_COMPACT_REQUIRED: {
 		what: "Pi's context-overflow recovery needs an explicit /compact here.",
 		next: "Run /compact.",
@@ -43,7 +27,7 @@ const ADVICE: Record<string, Advice> = {
 		checkpoint: true,
 	},
 	CONTEXT_NOTE_SCOPE: {
-		what: "The note cites a message you can't read on this branch.",
+		what: "The note cites a message that can't be read on this branch.",
 		next: RETRY,
 		checkpoint: true,
 	},
@@ -53,7 +37,7 @@ const ADVICE: Record<string, Advice> = {
 		checkpoint: true,
 	},
 	CONTEXT_NOTE_BUDGET: {
-		what: "The note exceeds its size limit.",
+		what: "The note is larger than its size limit.",
 		next: RETRY,
 		checkpoint: true,
 	},
@@ -62,42 +46,42 @@ const ADVICE: Record<string, Advice> = {
 		next: "Wait until Pi is idle, then run /compact.",
 	},
 	CONTEXT_NOTE_REPAIR_LOSS: {
-		what: "Repairing the note loses information it needs to keep.",
+		what: "The repaired note dropped something it must keep.",
 		next: RETRY,
 		checkpoint: true,
 	},
 	CONTEXT_WRITER_FAILED: {
-		what: "The writer's response contains no usable note.",
+		what: "The writer didn't return a usable note.",
 		next: RETRY,
 		checkpoint: true,
 	},
 	CONTEXT_WRITER_UNAVAILABLE: {
-		what: "The note writer set in pi-context-memory.json isn't available.",
-		next: 'Set writerModel to "session" or a model Pi can reach and restart Pi, then run /compact.',
+		what: "The writer set in pi-context-memory.json isn't available.",
+		next: 'Set writerModel to "session" or to a model Pi can reach, restart Pi, then run /compact.',
 		checkpoint: true,
 	},
 	CONTEXT_WRITER_CAPACITY: {
-		what: "The original messages and note don't fit the writer's context window.",
-		next: "Use a writer with a larger context window, then run /compact.",
+		what: "The messages to compact and the note don't fit the writer's context window.",
+		next: "Use a writer model with a larger context window, then run /compact.",
 		checkpoint: true,
 	},
 	CONTEXT_RECOVERY_TOO_LARGE: {
-		what: "The note and recent messages don't fit the session model's context window.",
+		what: "The note and the recent messages don't fit the model's context window.",
 		next: "Select a model with a larger context window, then run /compact.",
 		checkpoint: true,
 	},
 	CONTEXT_CAPACITY: {
-		what: "The selected model's context window is too small or unknown.",
+		what: "The model's context window is too small or unknown.",
 		next: "Select a model with a larger context window, then run /compact.",
 	},
 	CONTEXT_COMPACTION_CANCELLED: {
-		what: "Compaction is cancelled before a checkpoint is saved.",
+		what: "Compaction was cancelled.",
 		next: RETRY,
 		checkpoint: true,
 	},
 	CONTEXT_SOURCE_CHANGED: {
-		what: "The session's original messages no longer match the checked copy.",
-		next: "Wait until Pi is idle and run /compact, or keep this session file and continue in a new session.",
+		what: "The session's messages changed while they were being checked.",
+		next: "Wait until Pi is idle and run /compact. If this repeats, keep this session file and continue in a new session.",
 	},
 	CONTEXT_TOOL_BOUNDARY: {
 		what: "A turn or tool call is still unfinished.",
@@ -118,61 +102,59 @@ const ADVICE: Record<string, Advice> = {
 		next: "Select a model and finish a turn, then run /compact.",
 	},
 	CONTEXT_PREVIEW_PENDING: {
-		what: "An earlier compaction attempt is incomplete.",
+		what: "An earlier compaction attempt didn't finish.",
 		next: "Run /compact to retry, or /compaction-recover if Pi already saved that checkpoint.",
 	},
 	CONTEXT_PREVIEW_COMMIT_UNCONFIRMED: {
-		what: "Pi may have saved the checkpoint, but it isn't confirmed on disk.",
-		next: "Run /compaction-recover, or /compact if recovery is refused.",
+		what: "Pi may have saved the checkpoint, but it couldn't be confirmed on disk.",
+		next: "Run /compaction-recover. If it's refused, run /compact.",
 	},
 	CONTEXT_PREVIEW_MARKER_IO: {
-		what: "The compaction failure record in Pi's agent directory can't be read or written.",
+		what: "The failure record in Pi's agent directory can't be read or written.",
 		next: "Check free space and permissions in context-memory-preview/, then run /compact.",
 	},
 	CONTEXT_PREVIEW_MARKER_INVALID: {
-		what: "The compaction failure record in Pi's agent directory is unreadable.",
-		next: "Run /compact to replace it with a checked checkpoint.",
+		what: "The failure record in Pi's agent directory is unreadable.",
+		next: "Run /compact to replace it.",
 	},
 	CONTEXT_PREVIEW_SESSION_IO: {
-		what: "The session file can't be read back.",
-		next: "Keep the session file and check disk access, then run /compact.",
+		what: "The session file couldn't be read back.",
+		next: "Check the disk, then run /compact. If this repeats, keep the file and continue in a new session.",
 	},
 	CONTEXT_PREVIEW_SESSION_INVALID: {
-		what: "The session file doesn't pass its format or identity checks.",
-		next: NEW_SESSION,
-		compactCannotClear: true,
+		what: "The session file failed its format check.",
+		next: "Run /compact to try again. If this repeats, keep this session file and continue in a new session.",
 	},
 	CONTEXT_MIGRATION_REQUIRED: {
-		what: "This protected session contains a checkpoint from another compactor that can't be checked here.",
+		what: "This protected session now has a checkpoint from another compactor, which can't be checked here.",
 		next: NEW_SESSION,
 		compactCannotClear: true,
 	},
 	CONTEXT_CONFIG: {
-		what: "pi-context-memory.json can't be read as a valid configuration.",
+		what: "pi-context-memory.json can't be read.",
 		next: "Fix or remove that file, then restart Pi.",
 		compactCannotClear: true,
 	},
 	CONTEXT_INPUT_TOO_LARGE: {
-		what: "The next request exceeds the model's input limit.",
+		what: "The next request would exceed the model's input limit.",
 		next: "Run /compact.",
 	},
 	CONTEXT_PAYLOAD_TOO_LARGE: {
-		what: "The provider request exceeds the model's context window.",
+		what: "The request Pi built would exceed the model's context window.",
 		next: "Run /compact.",
 	},
 	CONTEXT_RECOVERY_MISSING: {
-		what: "The checked checkpoint is missing from the request, possibly after another extension changes it.",
-		next: "Disable extensions that rewrite the context and restart Pi, then run /compact.",
+		what: "The checkpoint is missing from the request, possibly because another extension changed the context.",
+		next: "Disable extensions that rewrite the context, restart Pi, then run /compact.",
 	},
 	CONTEXT_NOTE_VERSION: {
-		what: "A saved checkpoint has an unsupported or unreadable format.",
+		what: "A saved checkpoint has a format this version can't read.",
 		next: NEW_SESSION,
 		compactCannotClear: true,
 	},
 	CONTEXT_CONTINUATION_MISSING: {
-		what: "A saved checkpoint is missing an active request or its next step.",
-		next: NEW_SESSION,
-		compactCannotClear: true,
+		what: "A checkpoint note is missing the unfinished request or its next step.",
+		next: "Run /compact to try again. If this repeats, keep this session file and continue in a new session.",
 	},
 };
 
@@ -181,37 +163,37 @@ function unsupportedAdvice(reason: InactiveReason | undefined, version: string):
 	switch (reason) {
 		case "host":
 			return {
-				what: `This protected session needs Pi ${SUPPORTED_PI_LABEL}, and you're using Pi ${version}.`,
-				next: `Open this session with Pi ${SUPPORTED_PI_LABEL} and run /compact there, or continue in a new session.`,
+				what: `This protected session needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}.`,
+				next: `Open it with Pi ${SUPPORTED_PI_LABEL} and run /compact there, or continue in a new session.`,
 				compactCannotClear: true,
 			};
 		case "image":
 			return {
-				what: "This protected session contains an image that can't be checked here.",
+				what: "This protected session now contains an image, which can't be checked.",
 				next: NEW_TEXT_SESSION,
 				compactCannotClear: true,
 			};
 		case "non-text":
 			return {
-				what: "This protected session contains a non-text extension message that can't be checked here.",
+				what: "This protected session now contains a non-text extension message, which can't be checked.",
 				next: NEW_TEXT_SESSION,
 				compactCannotClear: true,
 			};
 		case "context-edit":
 			return {
-				what: "This protected session contains a context edit that can't be checked here.",
+				what: "This protected session contains a context edit that can't be checked.",
 				next: NEW_SESSION,
 				compactCannotClear: true,
 			};
 		case "in-memory":
 			return {
-				what: "This protected session has no session file to check.",
+				what: "This protected session isn't saved to a file, so it can't be checked.",
 				next: "Start Pi with a saved session.",
 				compactCannotClear: true,
 			};
 		default:
 			return {
-				what: "An earlier operation in this session isn't supported here.",
+				what: "An earlier step in this session isn't supported here.",
 				next: "Run /compact to confirm a new checkpoint.",
 			};
 	}
@@ -221,7 +203,7 @@ function adviceFor(code: string, reason: InactiveReason | undefined, version: st
 	if (code === "CONTEXT_PREVIEW_UNSUPPORTED") return unsupportedAdvice(reason, version);
 	return (
 		ADVICE[code] ?? {
-			what: "The session can't be confirmed as safe to continue.",
+			what: "The session couldn't be confirmed as safe to continue.",
 			next: "Run /compaction-doctor for details.",
 		}
 	);
@@ -240,21 +222,24 @@ export function blockedNotice(
 		? advice.compactCannotClear
 			? "Requests stay paused in this session."
 			: "Requests stay paused, through /reload and restarts, until a checkpoint is saved."
-		: "Only this request was stopped.";
+		: "Nothing is paused, and the next request is checked again.";
 	const outcome = advice.checkpoint ? "checkpoint not saved" : durable ? "requests paused" : "request stopped";
 	return `${NOTICE_PREFIX}: ${outcome}. ${advice.what} ${impact} ${advice.next} (${code})`;
 }
 
 const INACTIVE: Record<InactiveReason, (version: string) => [string, string]> = {
 	host: (version) => [
-		`you're using Pi ${version}, and it needs Pi ${SUPPORTED_PI_LABEL}`,
+		`it needs Pi ${SUPPORTED_PI_LABEL}, and this is Pi ${version}`,
 		`Use Pi ${SUPPORTED_PI_LABEL} to try it.`,
 	],
-	"in-memory": () => ["it has no session file", "Start Pi with a saved session to use it."],
-	"foreign-checkpoint": () => ["it already has a checkpoint from another compactor", "Start a new session to use it."],
-	image: () => ["it contains an image", "Start a new text-only session to use it."],
-	"non-text": () => ["it contains a non-text extension message", "Start a new text-only session to use it."],
-	"context-edit": () => ["it contains an unsupported context edit", "Start a new session to use it."],
+	"in-memory": () => ["the session isn't saved to a file", "Start Pi with a saved session to use it."],
+	"foreign-checkpoint": () => [
+		"the session already has a checkpoint from Pi's own compaction or another compactor",
+		"Start a new session to use it.",
+	],
+	image: () => ["the session contains an image", "Start a new text-only session to use it."],
+	"non-text": () => ["the session contains a non-text extension message", "Start a new text-only session to use it."],
+	"context-edit": () => ["the session contains a context edit it can't check", "Start a new session to use it."],
 };
 
 /** The preview stands aside: nothing was written and Pi's own behavior applies. */
@@ -277,10 +262,8 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 	const reason = diagnosis.reason;
 	const inactive = diagnosis.protection === "not-protected";
 	if (settings.disabled) {
-		line("extension", "inactive", 'off through "enabled": false in pi-context-memory.json');
-		lines.push(
-			"Result: off in this session. Pi's own compaction applies. Remove that setting and restart Pi to use source-linked compaction.",
-		);
+		line("extension", "inactive", 'turned off by "enabled": false in pi-context-memory.json');
+		lines.push("Result: off. Pi's own compaction applies. Remove that setting and restart Pi to turn it on.");
 		return lines.join("\n");
 	}
 	line(
@@ -298,7 +281,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 			: `Pi ${diagnosis.host}, needs Pi ${SUPPORTED_PI_LABEL}`,
 	);
 	if (inactive && reason === "host") {
-		line("session", "inactive", "unchecked on this Pi version. Pi's own compaction applies");
+		line("session", "inactive", "not checked on this Pi version. Pi's own compaction applies");
 	} else if (inactive && reason) {
 		line("session", "inactive", `${INACTIVE[reason](diagnosis.host)[0]}. Pi's own compaction applies`);
 	} else if (reason) {
@@ -325,14 +308,17 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 			"ok",
 			settings.writerModel === "session"
 				? `session model (${diagnosis.writer})`
-				: `configured model (${diagnosis.writer})`,
+				: `fixed writer (${diagnosis.writer})`,
 		);
 	} else {
 		line("writer", "unknown", settings.configError ? "depends on pi-context-memory.json" : "select a model first");
 	}
 	const manual = diagnosis.manualCompaction;
-	const gate = `Pi may answer "Nothing to compact (session too small)" while keeping ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} recent tokens by default (compaction.keepRecentTokens).`;
-	const recover = "/compaction-recover can confirm a saved checkpoint without a model call";
+	const tokens = manual.contextTokens
+		? ` About ${manual.contextTokens.toLocaleString("en-US")} tokens are in context now.`
+		: "";
+	const gate = `Pi keeps the latest ${manual.piDefaultKeepRecentTokens.toLocaleString("en-US")} tokens by default (compaction.keepRecentTokens) and says "Nothing to compact (session too small)" until there is more.${tokens}`;
+	const recover = "Run /compaction-recover to confirm the saved checkpoint";
 	if (manual.preview === "not-active") line("manual /compact", "inactive", "Pi's own compaction applies");
 	else if (manual.preview === "blocked") {
 		const blocking = diagnosis.code ?? diagnosis.writerError;
@@ -347,13 +333,13 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		line(
 			"manual /compact",
 			"retry",
-			manual.recover ? `${recover}, or run /compact to retry. ${gate}` : `Run /compact to retry. ${gate}`,
+			manual.recover ? `${recover}, or /compact to retry. ${gate}` : `Run /compact to retry. ${gate}`,
 		);
 	else if (manual.preview === "waiting-for-turn")
 		line(
 			"manual /compact",
 			"unknown",
-			`Finish the turn with no queued input first.${manual.recover ? ` ${recover}.` : ""} ${gate}`,
+			`Finish the turn with no queued input first.${manual.recover ? ` ${recover} now.` : ""} ${gate}`,
 		);
 	else line("manual /compact", "unknown", `Ready to try. ${gate}`);
 	const durable =
@@ -365,8 +351,8 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		const advice = adviceFor(diagnosis.code, reason, diagnosis.host);
 		line(
 			"requests",
-			"ok",
-			`not paused. Each request is checked again. ${advice.what} ${advice.next} (${diagnosis.code})`,
+			"stopped",
+			`${advice.what} Nothing is paused, and each request is checked again. ${advice.next} (${diagnosis.code})`,
 		);
 	} else {
 		line("requests", "ok", "not paused");
@@ -382,7 +368,7 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 		);
 	else if (diagnosis.writerError)
 		lines.push(
-			`Result: requests ready, but /compact can't write a checkpoint yet. ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`,
+			`Result: ready, but /compact can't write a checkpoint yet. ${adviceFor(diagnosis.writerError, reason, diagnosis.host).next}`,
 		);
 	else lines.push("Result: ready. Keep working, then run /compact when the conversation grows.");
 	return lines.join("\n");
@@ -391,10 +377,10 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 /** /compaction-recover never creates a block; a refusal says what it checked and what to do instead. */
 export function recoverRefusedNotice(code: string, reason?: InactiveReason, version = PRIMARY_PI_VERSION): string {
 	if (code === "CONTEXT_PREVIEW_COMMIT_UNCONFIRMED") {
-		return `${NOTICE_PREFIX}: checkpoint not confirmed. No matching checkpoint saved by Pi can be confirmed. Nothing changes. Run /compact if requests are paused. (${code})`;
+		return `${NOTICE_PREFIX}: nothing to confirm. No saved checkpoint is waiting to be confirmed, so nothing was changed. If requests are paused, run /compact. (${code})`;
 	}
 	const advice = adviceFor(code, reason, version);
-	return `${NOTICE_PREFIX}: checkpoint not confirmed. ${advice.what} Requests keep their current state. ${advice.next} (${code})`;
+	return `${NOTICE_PREFIX}: checkpoint not confirmed. ${advice.what} ${advice.next} (${code})`;
 }
 
 export function readyNotice(): string {

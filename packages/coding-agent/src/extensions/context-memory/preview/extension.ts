@@ -8,7 +8,6 @@ import { PreviewFailureStore } from "./failure-store.ts";
 import { listHistory, previewHistorySchema } from "./history-view.ts";
 import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
-import { setStatusLine } from "./status-line.ts";
 import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
 
@@ -68,13 +67,10 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		},
 	});
 	// Explicitly disabling this package ends its protection. Invalid config never takes this path.
-	if (disabled) {
-		pi.on("session_start", (_event, ctx) => setStatusLine(ctx, undefined));
-		return;
-	}
+	if (disabled) return;
 
 	pi.registerCommand("compaction-recover", {
-		description: "Check a checkpoint Pi already saved so requests can resume without a model call",
+		description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
 		handler: async (_args, ctx) => {
 			await ctx.waitForIdle();
 			const reason = controller.safeInactive(ctx);
@@ -125,7 +121,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 				if (controller.notices.once("writer"))
 					notify(
 						ctx,
-						`${NOTICE_PREFIX}: checkpoint writer unavailable. The writer set in pi-context-memory.json isn't available. Requests continue until compaction is needed. Correct the writer and restart Pi before /compact. (${previewErrorCode(error)})`,
+						`${NOTICE_PREFIX}: /compact can't write a checkpoint yet. The fixed writer in pi-context-memory.json isn't available. Correct writerModel and restart Pi. (${previewErrorCode(error)})`,
 						"warning",
 					);
 			}

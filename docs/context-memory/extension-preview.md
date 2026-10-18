@@ -93,7 +93,7 @@ first when Pi already saved the staged checkpoint; `blocked` only when
 `/compact` cannot help in this session, as with an unsupported host or content,
 an unreadable configuration or an unavailable writer. Because Pi's own
 compaction settings are not visible to extensions, it reports Pi's side of
-`/compact` eligibility as `unknown` instead of guessing; `Result: ready` means
+`/compact` eligibility as `unknown` instead of guessing; `Result: ready for requests` means
 nothing is blocking requests, not that Pi will accept `/compact` yet.
 
 `/compaction-status` prints the same findings as JSON. It keeps the fields of

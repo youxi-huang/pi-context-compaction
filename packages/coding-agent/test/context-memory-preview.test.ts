@@ -2217,8 +2217,8 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const label of ["extension: ok", "host: ok", "session: ok", "writer: ok", "requests: ok - not paused"])
 			expect(report).toContain(label);
 		expect(report).toMatch(/manual \/compact: unknown/);
-		expect(report).toContain("Nothing to compact (session too small)");
-		expect(report).toContain("Result: ready");
+		expect(report).toContain("Pi needs older history beyond 20,000 recent tokens by default.");
+		expect(report).toContain("Result: ready for requests. /compact still needs enough history.");
 	});
 	it("the doctor offers a manual retry after a retryable failure instead of calling /compact blocked", () => {
 		new PreviewFailureStore(agentDir).fail(session, "CONTEXT_WRITER_FAILED");

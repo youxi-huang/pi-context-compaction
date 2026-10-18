@@ -917,20 +917,33 @@ async function worker() {
 				for (let cycle = 1; cycle <= target; cycle++) {
 					await prompt(`Cycle ${cycle}: keep checking.`);
 					await prompt(`Trace batch ${cycle}:\n${chunk}`);
+					observe("compaction begin", { checkpoints: cycle, beginUs: Number(process.hrtime.bigint() / 1000n) });
 					const result = await compact();
 					if (!result.ok) {
 						observe(`compaction failed at checkpoint ${cycle}`, result);
 						break;
 					}
 					completed = cycle;
+					observe("compaction timing", { checkpoints: cycle, endUs: Number(process.hrtime.bigint() / 1000n), status: JSON.parse((await command("/compaction-status")).output) });
 					if (milestones.includes(cycle)) {
+						observe("session reopen with extension", { checkpoints: cycle, sample: 1,
+							beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(manager.getSessionFile())), endUs: Number(process.hrtime.bigint() / 1000n) });
+						observe("session reopen with extension", { checkpoints: cycle, sample: 2,
+							beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(manager.getSessionFile())), endUs: Number(process.hrtime.bigint() / 1000n) });
+						observe("session reopen with extension", { checkpoints: cycle, sample: 3,
+							beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(manager.getSessionFile())), endUs: Number(process.hrtime.bigint() / 1000n) });
 						measured.push({ checkpoints: cycle, sessionMB: Number((statSync(manager.getSessionFile()).size / 1e6).toFixed(1)), extensionMs: Math.round(await probe(cycle)) });
 					}
 				}
 				check("compactions-succeed", `All ${target} manual compactions succeed`, completed === target, completed);
 				const file = manager.getSessionFile();
 				writeSettings(false);
-				await open(stock.SessionManager.open(file));
+				observe("session reopen disabled control", { checkpoints: completed, sample: 1,
+					beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(file)), endUs: Number(process.hrtime.bigint() / 1000n) });
+				observe("session reopen disabled control", { checkpoints: completed, sample: 2,
+					beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(file)), endUs: Number(process.hrtime.bigint() / 1000n) });
+				observe("session reopen disabled control", { checkpoints: completed, sample: 3,
+					beginUs: Number(process.hrtime.bigint() / 1000n), opened: await open(stock.SessionManager.open(file)), endUs: Number(process.hrtime.bigint() / 1000n) });
 				const baselineMs = Math.round(await probe("disabled-control"));
 				const rows = measured.map((row) => ({ ...row, baselineMs, overheadMs: Math.max(0, row.extensionMs - baselineMs) }));
 				observe("overhead per model request", { rows });

@@ -1,5 +1,109 @@
 # Validation record
 
+## Preview bench on GPT-6 Luna through the Codex subscription, official Pi 1.3.0, 2026-10-19 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It
+ran the preview bench on official Pi 1.3.0 with `openai-codex/gpt-6-luna` on the
+maintainer's ChatGPT subscription, at thinking level `high` to match the DeepSeek
+records, with `stock-preview+src.4659d3858aeb94b3`, whose preview source is that of
+`13e3370`. The access token stayed in the environment's network proxy and Pi held a
+placeholder ([codex-subscription.md](codex-subscription.md)). Settings matched the
+DeepSeek writer benches: eight cuts, eight attempts each, `--cache warm`, with four
+units at a time. The maintainer delegated the limits: 150 requests and 45 minutes
+for the writer bench, 400 requests and 90 minutes for the probes. In daily use the
+maintainer runs Luna, and more often GPT-6 Sol, at `max`; neither was run at `max`
+here.
+
+### Writer bench
+
+| | GPT-6 Luna, `high` | DeepSeek V4.1 Flash release build, 2026-10-18 |
+| --- | ---: | ---: |
+| Committed | 37 of 64 | 62 of 64 |
+| Refused | 27 `CONTEXT_NOTE_INVALID` | 2 `CONTEXT_NOTE_SCOPE` |
+| First passes with a failed quotation | 0 | 11 |
+| Responses that called a tool | 0 | 1, declined |
+| Writer input read from cache | 7.1% | 93.6% |
+| Catalog writer cost | $0.218 for 64 calls, API-equivalent | $0.219 for 76 calls |
+| Median pause | 10.2 s | 8.2 s |
+| Note size, median, against the bytes it condenses | 2,990 bytes, 4.0% | 4,415 bytes, 5.7% |
+| Gold answers cited, first asked at the cut and carried | 294 of 316, 221 of 291 | 508 of 529, 381 of 440 |
+
+Every cut lost notes except P2's second, which committed 8 of 8; P2's first
+committed 2 of 8. The notes that passed were clean: no quotation, scope or size
+repair was needed, and none drew a tool call.
+
+**The refusals.** Two more writer runs on P2 recorded each response's shape with the
+bench's `codexResponses`, never its text: the first recorded top-level keys, the
+second two levels of structure. Each compaction made one request, and every response
+held one reasoning item and one `final_answer` message, with no commentary. P2's
+second cut committed 16 of 16; its first committed 8 of 16, and the eight refused
+answers were:
+
+| Shape of the answer | First run | Second run |
+| --- | ---: | ---: |
+| Top-level keys `type`, `properties`, `required` | 3 | 1, with all seven note sections and their facts under `properties` |
+| All seven note sections, with an extra top-level `type` | 0 | 2 |
+| Not JSON | 1 | 1, 3,092 characters between an opening and a closing brace |
+
+The writer's prompt embeds the note's JSON Schema after "Return ONLY one JSON object
+matching this schema", and the schema allows no extra keys. Luna answered with the
+schema's keywords; in the second run, three of the four refused answers held a
+complete note inside them. The run does not show whether `max`, a prompt that asks
+for the object itself, or unwrapping those keys before validation would remove them;
+each is a change to the preview and waits for the maintainer.
+
+**The cache.** The session's warm-up requests read their prefix from cache, but the
+writer read 7.1% of its input from it, against 93.6% on DeepSeek. Pi's Codex
+provider sends the request's session ID as `prompt_cache_key`, and the session
+writer's request carries none, so it lands outside the session's cache. DeepSeek
+matches prefixes without a key, which is why the earlier runs did not show it.
+
+### Probes, one run
+
+Each chain retried a refused cut up to four attempts in all, as a user retries
+`/compact`. Seven of 18 attempts committed. P2's second cut was refused four times,
+which blocked its nine probes in both conditions.
+
+| | P1 | P2 | P3 |
+| --- | ---: | ---: | ---: |
+| Attempts until each cut committed | 4, 3, 2 | 1, then 4 refused | 1, 1, 2 |
+| Passed with `context_history` | 29 of 30 | 8 of 17, 9 blocked | 24 of 28 |
+| Passed with no tools | 27 of 30 | 8 of 17, 9 blocked | 20 of 28 |
+| `context_history` calls per question | 2.57 | 2.25 | 3.07 |
+| Of which `list` | 9 | 1 | 2 |
+| Questions stopped at the round limit | 3 | 0 | 4 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 |
+
+With no tools, P3's notes alone left 8 of 28 unanswered, each an abstention rather
+than a wrong answer, and `context_history` recovered four of them. No answer with
+`context_history` was wrong: the shortfall is four answers in no valid form and one
+P3 probe whose request returned nothing for over 20 minutes. The bench has no
+per-unit timeout, so its worker was stopped by hand, and the probe is scored as
+blocked. With no tools there was one wrong answer, a P1 count. Against DeepSeek's
+candidate of 2026-10-16 to 17, Luna made about twice as many `context_history` calls
+per question on P1 and P2 (1.27 and 1.09 there) and somewhat more on P3 (2.55).
+Probes read 56.6% of their input from cache, against 71 to 73% on DeepSeek.
+
+### Spend
+
+Six runs made 459 requests: one smoke, 78 for the writer bench, 41 for the two P2
+diagnostics and 339 for the probes, which took 54 minutes. At catalog prices that is
+$0.72, an API equivalent: the subscription charges nothing per request, though every
+request draws on its allowance. No run reached its limits. One request through Pi's
+CLI confirmed the route before the bench.
+
+### What this shows
+
+Through the subscription, Luna at `high` writes notes smaller than DeepSeek's that
+needed no repair, and answers from them without fabrication. It loses about two
+notes in five to schema keywords, usually around a complete note, often enough to
+block one fixture's chain after four attempts. On Codex the session writer also
+misses the session's cache, because its request carries no session ID. Both are
+changes to the preview and wait for the maintainer; `max`, the level the maintainer
+uses, was not measured. One model at one level, three synthetic sessions and one
+probe run: this does not establish a refusal rate. Session copies, notes and answers
+stayed outside the repository.
+
 ## Z1 preview request and checkpoint cost, official Pi 1.3.0, 2026-10-18 PDT
 
 [Z1](cost-plan.md#z1-what-each-request-carries), measured at `a42f6b7` with

@@ -1,5 +1,94 @@
 # Validation record
 
+## Z1 preview request and checkpoint cost, official Pi 1.3.0, 2026-10-18 PDT
+
+[Z1](cost-plan.md#z1-what-each-request-carries), measured at `a42f6b7` with
+`stock-preview+src.289ffa92e5522496`, Linux x86_64 and Node 24.19.0. Synthetic
+only: official npm Pi 1.3.0, an allowlisted environment, isolated agent directories,
+a package copy outside any Node project and a scripted loopback provider. No
+provider credentials or real-provider requests. The temporary drivers are in
+[PR #72](https://github.com/youxi-huang/pi-context-compaction/pull/72).
+
+| Command | Result |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs doctor` | Exit 0; evaluation pin present, clean source, no duplicate files |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0; 120 script and 448 runtime checks; security groups 107, 240, 3 and 111 |
+| `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | Exit 0; resident fingerprint unchanged |
+| `node scripts/context-memory-preview-build.mjs` | Exit 0; build above |
+| `node scripts/context-memory-preview-stock-install.mjs --stock-root .artifacts/context-memory-preview-stock --version 1.3.0` | Exit 0; exact official cohort and network-blocked SDK startup verified |
+| `node "$driver_dir/z1-driver.mjs" "$PWD"` | Exit 0; 12 payload variants, historical-call checks with B off and on, 40 compactions, all three strict overhead checks |
+
+**Every request.** Fresh sessions use Pi's default system prompt with builtin
+tools disabled. The driver captures `before_provider_request`, compares the full
+JSON payload with each tool deactivated, and separately removes only that tool's
+guidelines before binding. All measured text is ASCII; estimates apply official
+Pi's `estimateTokens` to the removed text (`ceil(chars / 4)`), not provider usage
+or the preview's more conservative byte estimate. Rounded parts need not add.
+
+| Request text | B off, bytes / estimated tokens | B on, bytes / estimated tokens |
+| --- | ---: | ---: |
+| Full payload | 9,080 / 2,270 | 9,230 / 2,308 |
+| Both tools deactivated | 2,199 / 550 | 2,199 / 550 |
+| Extra with both tools active | 6,881 / 1,721 | 7,031 / 1,758 |
+| Removed by deactivating `context_note` alone | 4,833 / 1,209 | 4,983 / 1,246 |
+| Removed by deactivating `context_history` alone | 2,038 / 510 | 2,038 / 510 |
+| `context_note` declaration alone | 4,832 / 1,208 | 4,832 / 1,208 |
+| `context_history` declaration alone | 1,698 / 425 | 1,698 / 425 |
+| `context_note` guideline alone | 0 / 0 | 150 / 38 |
+| `context_history` guidelines alone | 339 / 85 | 339 / 85 |
+
+Declarations exclude the surrounding tools-array punctuation; deactivation also
+removes the tool's guidelines. Provider encodings and tokenizers can differ.
+
+**Every later checkpoint request.** The driver instruments the existing
+`long-session-overhead --perf-checkpoints 40` case at checkpoints 1, 10 and 40.
+It verifies each stored summary equals `renderNote` with that branch's lineage.
+Rendering empty note sections with the same lineage gives fixed text: headings,
+guidance and lineage, including its repeated state lines. Subtraction gives the
+fact text, quotations and citations; this fixture has no gaps or carried users.
+
+| Checkpoints | Summary, bytes / tokens | Fixed text, bytes / tokens | Facts, bytes / tokens | Earlier anchors |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 436 / 109 | 234 / 59 | 202 / 51 | 0 |
+| 10 | 1,234 / 309 | 1,032 / 258 | 202 / 51 | 9 |
+| 40 | 2,220 / 555 | 2,018 / 505 | 202 / 51 | 26 |
+
+This measures the rendered summary, before provider message framing, not all
+checkpoint metadata or 40 summaries sent together. The fixture keeps the same
+three short facts, so these sizes do not predict a real writer's note size.
+
+**Voluntary notes with B off.** The [v0.4.3 provider run](#v043-bounded-provider-run-on-official-pi-130-2026-10-16-utc)
+used defaults and records notes in "most turns" across ten task turns, with four
+refused calls: two schema failures and two quotation failures. It records no
+exact call or accepted-note total. The writer benches count tool calls without
+naming the tools; those counts cannot be assigned to `context_note`. The older
+[resident provider scenario](#real-provider-scenario) records zero calls, but
+does not measure this preview. No logs or new provider run were used to fill gaps.
+In the scripted replay, a real saved `context_note` call and its tool result
+remain in the next OpenAI-completions payload after deactivating the declaration,
+with B off and on. This establishes Pi's serialization, not provider acceptance.
+
+**Two scans at 40 checkpoints.** The 11.98 MB branch has 211 entries. Medians of
+21 individual calls: `listHistory(snapshot, {kind: "state"})` takes 0.226 ms and
+returns one deduplicated item; including a fresh `freezeHistory(manager)` takes
+51.77 ms. `workNotes(branch)` takes 0.006 ms with no notes and 2.51 ms with 20
+valid one-fact notes appended; passing the latest coverage ID, as the controller
+does, takes 0.006 and 1.78 ms. These are local timings of one call, not per-request
+costs: neither scan runs on every ordinary request. The settled decisions stand.
+
+Proposals for the maintainer; none implemented:
+
+- Register `context_note` only with B: save 4,833 bytes, about 1,209 estimated
+  tokens, per B-off request. It loses the voluntary hints above and needs real
+  provider evidence for undeclared historical calls. Keep registration until
+  that workflow and compatibility tradeoff is decided; the record cannot count
+  exactly how many accepted notes would disappear.
+- Factor the five repeated fact schemas through one `$defs`/`$ref`: an offline
+  serialization of the captured declaration saves 2,723 bytes, about 681
+  estimated tokens per request, with either B setting. It keeps the tool, but
+  provider support, schema conversion and validation remain untested. This byte
+  calculation alone does not establish an admissible provider request.
+
 ## Y1 review-fix evidence on official Pi 1.3.0, 1.2.0 and 1.1.0, 2026-10-18 UTC
 
 [Y1](ux-plan.md#y1-evidence-for-the-review-fixes) stops at step 1 on official Pi 1.3.0, 1.2.0 and 1.1.0. The checkpoint-leaf exception records the short retry input and the request guard blocks it, but the next `/compact` says `Nothing to compact (session too small)`. It saves no checkpoint and requests remain paused. Y1 did not run steps 2 and 3, following its instruction to stop at the first discrepancy, and changed no behavior or guide wording. The review ran them and acted on step 1; see [In review](#in-review).

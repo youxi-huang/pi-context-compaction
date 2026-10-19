@@ -27,7 +27,7 @@ An external review of 2026-10-18 proposed further cuts. These are decided and ar
 
 ## Work packages
 
-Run Z1, then Z2, in one session. Each is its own commit, so the review can keep or drop either.
+Run Z1, then Z2, in one session. Each is its own commit, so the review can keep or drop either. Z3 follows from Z1's result.
 
 ### Z1 What each request carries
 
@@ -64,13 +64,36 @@ If the rule stands:
 - Documents: the contract's warming line, the preview guide where it mentions warming, and one `Changed` line in `CHANGELOG.md`.
 - Evidence in the PR description, on 1.3.0: during a long scripted tool call a refresh reaches the loopback provider and its entry is in the session; the next `/compact` commits; after a failed compaction no refresh is sent. Also which catalog models on each host declare a cache lifetime, which says who gains.
 
+### Z3 `context_note` with arm B only
+
+Chosen by the maintainer on 2026-10-19 from Z1's first proposal. With arm B off, the model is no longer offered `context_note`, unless the session's branch already holds a call to it. Z1 measured the saving at 4,833 bytes, about 1,209 estimated tokens, per request, before the note-writing rounds the model no longer spends. With arm B on, nothing changes.
+
+- The registration stays, with its schema, description and validation. With B off the tool is registered inactive: `defaultActive: false` if all three hosts honor it, otherwise one `setActiveTools` call at session start that drops only `context_note`.
+- At session start and after a branch change, with B off, a branch holding an assistant call to `context_note`, saved or refused, activates it through `pi.setActiveTools`, adding it to the current set. Such a session keeps declaring what it declared before, so its cached prefix and its earlier calls stay valid. Nothing else is removed, and no tool that the user or another extension activated is ever deactivated.
+- The check reads the branch in memory: no disk read, no `diagnose()`, nothing on a request.
+- Saved notes still reach the writer as hints (`workNotes()` is unchanged), and the session writer still sends the session's own active tools.
+
+Confirm on official 1.3.0, 1.2.0 and 1.1.0, with the Z1 driver from #72 adapted:
+
+1. A fresh B-off session's first payload has no `context_note` declaration, and the saving matches Z1.
+2. A B-off session whose branch holds a saved call, and one holding only a refused call, declare the tool again on reopen, and the first payload equals today's.
+3. `/new` and `/resume` in one process: what the next session declares. Accept a tool left active after leaving a session that needed it; report anything else.
+4. With B on, the first payload equals today's byte for byte.
+
+If a host cannot hold the tool inactive with B off, or a session holding a call loses the declaration, stop and report.
+
+- Regressions in `test/context-memory-preview.test.ts`: B off and a fresh branch, inactive; B off with a saved call, active; with only a refused call, active; B on, active with its guideline; activation leaves every other tool as it was.
+- Scenario and acceptance checks keep their meaning; adjust only those that assume the tool is offered with B off. If `scripts/context-memory-preview-ab.mjs` runs offline, report its control arm's main requests before and after; otherwise mark it `not run`.
+- Documents: the preview guide's [Supported workflow](extension-preview.md#supported-workflow) and [Work notes (arm B)](extension-preview.md#work-notes-arm-b), and one `Changed` line in `CHANGELOG.md`.
+- Evidence in the PR description: steps 1 to 4 per host, and the test and verification results.
+
 ## Not accepted
 
 Everything on the [experience plan's list](ux-plan.md#not-accepted), and:
 
 - Changes to source hashes, checkpoint validation, disk readback, the failure marker, writer prompts, note rendering, arm A or arm B.
 - A setting or flag for warming. The user's `cacheWarming` stays Pi's.
-- Implementing a Z1 proposal in this batch.
+- Implementing a Z1 proposal other than Z3, including the `$defs` schema.
 
 ## Verification
 
@@ -82,6 +105,7 @@ As in the [experience plan](ux-plan.md#verification), for each package.
 | --- | --- |
 | Z1 What each request carries | Measured in `5c298e6`: [results and proposals](validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt). The proposals wait for the maintainer. |
 | Z2 Cache warming while a turn runs | Stopped at its first condition in `984885a`. The warming guard stays. |
+| Z3 `context_note` with arm B only | Planned |
 
 ### Z2 stop
 

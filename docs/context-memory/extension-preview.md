@@ -188,12 +188,13 @@ repository with its development dependencies installed.
 Use Node.js 22.19 or newer and a persistent text session. Keep one Pi
 writer process per session and load this package through normal CLI/TUI/SDK
 extension discovery. Finish turns until Pi has older history to compact, use
-`/compact`, inspect `/compaction-status`, and continue. The model can record
-optional work notes with `context_note`: where the work stands, decisions and
-their reasons, failed approaches, files and the current plan, each fact on one
-line with the original entries it rests on. A note has no field for
-instructions. The model retrieves original records on the current branch with
-`context_history`. The JSONL remains the only history store.
+`/compact`, inspect `/compaction-status`, and continue. With
+[arm B](#work-notes-arm-b) on, the model can record work notes with
+`context_note`: where the work stands, decisions and their reasons, failed
+approaches, files and the current plan, each fact on one line with the
+original entries it rests on. A note has no field for instructions. The model
+retrieves original records on the current branch with `context_history`.
+The JSONL remains the only history store.
 
 `context_history` can also list one kind of item, newest first: the
 constraints, decisions, failed approaches, files, plans and state that
@@ -426,9 +427,17 @@ Arm B has its own switch, also off by default:
 ```
 
 With it, a one-line tool guideline asks the session model for a work note after
-a decision, a failed approach or a completed subtask. At compaction the
-extension merges the previous checkpoint's note with the valid notes since, in
-order, without a model call. A fact that supersedes a source drops the earlier
+a decision, a failed approach or a completed subtask. With B off, a fresh session
+does not offer `context_note`. A branch with an earlier call, saved or refused,
+activates it on reopen or branch navigation so the earlier calls keep their tool
+declaration. This only adds the tool: an explicit activation is preserved, and
+the tool stays active after moving to a branch that does not need it, until the
+next session. Previously saved notes still reach the synchronous writer as
+hints with B off.
+
+At compaction with B on, the extension merges the previous checkpoint's note
+with the valid notes since, in order, without a model call. A fact that
+supersedes a source drops the earlier
 facts citing it, and the newest plan replaces the older one. A note that lists
 `gaps` replaces the open questions recorded before it, and an empty list closes
 them; a note without `gaps` keeps them. Instructions from

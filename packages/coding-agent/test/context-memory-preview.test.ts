@@ -20,6 +20,7 @@ import {
 	type SessionBeforeCompactEvent,
 	type SessionEntry,
 	type SessionHeader,
+	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
@@ -58,7 +59,12 @@ import {
 	recoverRefusedNotice,
 } from "../src/extensions/context-memory/preview/notices.ts";
 import { PreviewPreparation } from "../src/extensions/context-memory/preview/preparation.ts";
-import { mergeWorkNotes, validateWorkNote, workNotes } from "../src/extensions/context-memory/preview/work-notes.ts";
+import {
+	mergeWorkNotes,
+	validateWorkNote,
+	WORK_NOTE_GUIDELINE,
+	workNotes,
+} from "../src/extensions/context-memory/preview/work-notes.ts";
 
 vi.mock("node:fs", async (original) => {
 	const actual = await original<typeof fs>();
@@ -1709,13 +1715,20 @@ describe("independent extension preview: sessions it does not protect", () => {
 		value.details!.build = "stock-preview+test";
 		session.append(saved(session, value));
 	}
-	function loadPreview(): Map<string, Handler[]> {
+	function loadPreview(
+		options: { tools?: Map<string, ToolDefinition>; active?: string[] } = {},
+	): Map<string, Handler[]> {
 		const handlers = new Map<string, Handler[]>();
+		const active = options.active ?? [];
 		const pi = {
 			registerCommand: () => {},
-			registerTool: () => {},
+			registerTool: (tool: ToolDefinition) => {
+				options.tools?.set(tool.name, tool);
+				if (tool.defaultActive !== false && !active.includes(tool.name)) active.push(tool.name);
+			},
 			on: (event: string, handler: Handler) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
-			getActiveTools: () => [],
+			getActiveTools: () => [...active],
+			setActiveTools: (names: string[]) => active.splice(0, active.length, ...names),
 			getAllTools: () => [],
 			appendEntry: () => {},
 		};
@@ -1727,6 +1740,98 @@ describe("independent extension preview: sessions it does not protect", () => {
 		for (const handler of handlers.get(event) ?? []) result = await handler(value, ctx);
 		return result;
 	}
+	function earlierWorkNote(savedNote: boolean): void {
+		const data = { state: [{ text: "The local check is complete.", sources: ["source-1"] }] };
+		session.append({
+			type: "message",
+			id: "note-call",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: {
+				...assistant(),
+				content: [{ type: "toolCall", id: "note-tool", name: "context_note", arguments: data }],
+				stopReason: "toolUse",
+			},
+		});
+		if (savedNote) {
+			session.append({
+				type: "custom",
+				customType: CONTEXT_NOTE_TYPE,
+				id: "work-note",
+				parentId: session.getLeafId(),
+				timestamp,
+				data,
+			});
+		}
+		session.append({
+			type: "message",
+			id: "note-result",
+			parentId: session.getLeafId(),
+			timestamp,
+			message: {
+				role: "toolResult",
+				toolCallId: "note-tool",
+				toolName: "context_note",
+				content: [{ type: "text", text: savedNote ? "Work note saved." : "Work note refused." }],
+				isError: !savedNote,
+				timestamp: 1,
+			},
+		});
+	}
+	it("registers context_note inactive on a fresh branch with arm B off", async () => {
+		const tools = new Map<string, ToolDefinition>();
+		const active: string[] = [];
+		const handlers = loadPreview({ tools, active });
+		await emit(handlers, "session_start", {}, context());
+		expect(tools.get("context_note")?.defaultActive).toBe(false);
+		expect(tools.get("context_note")?.promptGuidelines).toBeUndefined();
+		expect(active).toEqual(["context_history"]);
+	});
+	it.each([true, false])(
+		"activates an earlier context_note call with saved=%s, preserving other tools",
+		async (savedNote) => {
+			earlierWorkNote(savedNote);
+			const active = ["write", "context_history", "bash"];
+			const handlers = loadPreview({ active });
+			await emit(handlers, "session_start", {}, context());
+			expect(active).toEqual(["write", "context_history", "bash", "context_note"]);
+			await emit(handlers, "session_start", {}, context());
+			expect(active).toEqual(["write", "context_history", "bash", "context_note"]);
+		},
+	);
+	it("checks only the current branch and adds context_note after a branch switch", async () => {
+		earlierWorkNote(false);
+		const noteLeaf = session.getLeafId();
+		session.leafId = "reply-1";
+		const active = ["context_history"];
+		const handlers = loadPreview({ active });
+		const ctx = context();
+		await emit(handlers, "session_start", {}, ctx);
+		expect(active).toEqual(["context_history"]);
+		session.leafId = noteLeaf;
+		await emit(handlers, "session_tree", {}, ctx);
+		expect(active).toEqual(["context_history", "context_note"]);
+		session.leafId = "reply-1";
+		await emit(handlers, "session_tree", {}, ctx);
+		expect(active).toEqual(["context_history", "context_note"]);
+	});
+	it("preserves explicit activation with B off", async () => {
+		const active = ["context_note", "write"];
+		await emit(loadPreview({ active }), "session_start", {}, context());
+		expect(active).toEqual(["context_note", "write", "context_history"]);
+	});
+	it("keeps B on active with its guideline", async () => {
+		fs.writeFileSync(
+			join(agentDir, "pi-context-memory.json"),
+			JSON.stringify({ previewWorkNotes: { enabled: true } }),
+		);
+		const tools = new Map<string, ToolDefinition>();
+		const bActive: string[] = [];
+		await emit(loadPreview({ tools, active: bActive }), "session_start", {}, context());
+		expect(tools.get("context_note")?.defaultActive).toBe(true);
+		expect(tools.get("context_note")?.promptGuidelines).toEqual([WORK_NOTE_GUIDELINE]);
+		expect(bActive).toEqual(["context_note", "context_history"]);
+	});
 	function withEditor(base: ExtensionContext, hasUI = true) {
 		let text = "";
 		const setEditorText = vi.fn((value: string) => {

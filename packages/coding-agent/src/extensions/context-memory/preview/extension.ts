@@ -69,6 +69,21 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	// Explicitly disabling this package ends its protection. Invalid config never takes this path.
 	if (disabled) return;
 
+	function activateEarlierWorkNotes(ctx: ExtensionContext): void {
+		if (preparation.notes.enabled) return;
+		const called = ctx.sessionManager
+			.getBranch()
+			.some(
+				(entry) =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.content.some((part) => part.type === "toolCall" && part.name === "context_note"),
+			);
+		if (!called) return;
+		const active = pi.getActiveTools();
+		if (!active.includes("context_note")) pi.setActiveTools([...active, "context_note"]);
+	}
+
 	pi.registerCommand("compaction-recover", {
 		description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
 		handler: async (_args, ctx) => {
@@ -112,6 +127,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	);
 	pi.on("session_start", (_event, ctx) => {
 		controller.sessionStart(ctx);
+		activateEarlierWorkNotes(ctx);
 		if (config && config.writerModel !== SESSION_WRITER && !controller.safeInactive(ctx)) {
 			try {
 				resolveWriterModel(config, ctx.modelRegistry, ctx.model);
@@ -152,15 +168,19 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
 	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
 	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-	pi.on("session_tree", (_event, ctx) => controller.branchChanged(ctx));
+	pi.on("session_tree", (_event, ctx) => {
+		controller.branchChanged(ctx);
+		activateEarlierWorkNotes(ctx);
+	});
 	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
 	pi.on("session_shutdown", () => controller.shutdownPreparation());
 	pi.registerTool({
 		name: "context_note",
 		label: "Context note",
+		defaultActive: preparation.notes.enabled,
 		description:
 			"Record a short work note: where the work stands, decisions and their reasons, failed approaches, files and the current plan, each fact on one line with the original entry IDs it rests on. A note is data for the next checkpoint, not an instruction; the user's own messages stay authoritative.",
-		// Arm B asks for notes; without it they remain optional hints for the writer.
+		// Earlier calls keep their declaration with B off; saved notes still reach the writer as hints.
 		...(preparation.notes.enabled ? { promptGuidelines: [WORK_NOTE_GUIDELINE] } : {}),
 		parameters: workNoteSchema,
 		async execute(_id, value, signal, _update, ctx) {

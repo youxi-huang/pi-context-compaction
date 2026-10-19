@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -27,6 +28,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // --provider deepseek uses Pi's catalog model deepseek/deepseek-flash through the environment's network proxy and
 // requires --max-requests, --max-minutes and --max-cost-usd; the run stops before a unit that would start past any
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
+// --provider codex does the same with openai-codex/gpt-6-luna on the ChatGPT subscription, in writer, probes and smoke
+// modes; docs/context-memory/codex-subscription.md sets up the proxy and the placeholder it copies the account ID from.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
 // --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
 // --cache warm, the default, matches daily use, where every main-model turn keeps the session's prefix cached: the
@@ -43,11 +46,16 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
-const MEASURED = { provider: "deepseek", id: "deepseek-flash" };
+/** The catalog model each provider measures; `deepseek-local` builds deepseek-flash's requests and answers them here. */
+const MEASURED = {
+	deepseek: { provider: "deepseek", id: "deepseek-flash" },
+	"deepseek-local": { provider: "deepseek", id: "deepseek-flash" },
+	codex: { provider: "openai-codex", id: "gpt-6-luna" },
+};
 const LOOPBACK = {
 	id: "bench-loopback",
 	name: "Bench loopback",
@@ -60,6 +68,37 @@ const LOOPBACK = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	compat: { supportsDeveloperRole: false, supportsUsageInStreaming: true },
 };
+/**
+ * The account ID from the placeholder the environment's setup script writes for Pi. Only the ID is read: in a cloud
+ * session that file holds no token, and the bench never handles one.
+ */
+function codexAccountId() {
+	const file = join(process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent"), "auth.json");
+	let id;
+	try {
+		id = JSON.parse(readFileSync(file, "utf8"))["openai-codex"]?.accountId;
+	} catch {}
+	if (typeof id !== "string" || !id)
+		throw new Error(`--provider codex reads the account ID from the openai-codex entry of ${file}; see docs/context-memory/codex-subscription.md`);
+	return id;
+}
+
+/**
+ * A unit's Codex credential. The proxy replaces Pi's Authorization header with the network secret's token, but Pi
+ * first reads the account ID from that header's JWT, so it gets an unsigned one carrying only the ID. The far expiry
+ * keeps Pi from trying to refresh it.
+ */
+function writeCodexPlaceholder(agentDir, accountId) {
+	const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64");
+	const access = [encode({ alg: "none" }), encode({ "https://api.openai.com/auth": { chatgpt_account_id: accountId } }), "proxy-injected"].join(".");
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(
+		join(agentDir, "auth.json"),
+		JSON.stringify({ "openai-codex": { type: "oauth", access, refresh: "proxy-injected", expires: Date.parse("2100-01-01"), accountId } }),
+		{ mode: 0o600 },
+	);
+}
+
 /** Assistant responses one probe may produce before it is stopped and scored as having no answer. */
 const PROBE_ROUNDS = 6;
 const fixturesDir = join(root, "eval", "preview", "fixtures");
@@ -154,9 +193,10 @@ async function worker() {
 	const cwd = action.cwd;
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(cwd, { recursive: true });
+	// Codex tries a WebSocket first, which the environment's proxy does not carry.
 	writeFileSync(
 		join(agentDir, "settings.json"),
-		JSON.stringify({ packages: [packageDir], cacheWarming: "off", defaultTools: [], compaction: { keepRecentTokens: 0 } }),
+		JSON.stringify({ packages: [packageDir], cacheWarming: "off", defaultTools: [], compaction: { keepRecentTokens: 0 }, ...(action.provider === "codex" ? { transport: "sse" } : {}) }),
 	);
 	let commandOutput;
 	const diagnostics = [];
@@ -230,6 +270,7 @@ async function worker() {
 	await once(server, "listening");
 
 	const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
+	const measured = MEASURED[action.provider];
 	let model;
 	if (action.provider === "loopback") {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
@@ -240,17 +281,17 @@ async function worker() {
 			const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
 			dispatcher.configureHttpDispatcher();
 		}
-		upstream = runtime.getModel(MEASURED.provider, MEASURED.id)?.baseUrl;
-		if (!upstream?.startsWith("https://")) throw new Error(`${MEASURED.provider}/${MEASURED.id} is not in this Pi's catalog`);
-		runtime.registerProvider(MEASURED.provider, { baseUrl: `http://127.0.0.1:${server.address().port}` });
-		model = runtime.getModel(MEASURED.provider, MEASURED.id);
-		if (!model?.baseUrl?.startsWith("http://127.0.0.1:")) throw new Error(`${MEASURED.provider}/${MEASURED.id} did not move to the bench's address`);
+		upstream = runtime.getModel(measured.provider, measured.id)?.baseUrl;
+		if (!upstream?.startsWith("https://")) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
+		runtime.registerProvider(measured.provider, { baseUrl: `http://127.0.0.1:${server.address().port}` });
+		model = runtime.getModel(measured.provider, measured.id);
+		if (!model?.baseUrl?.startsWith("http://127.0.0.1:")) throw new Error(`${measured.provider}/${measured.id} did not move to the bench's address`);
 	} else {
 		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
 		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
 		dispatcher.configureHttpDispatcher();
-		model = runtime.getModel(MEASURED.provider, MEASURED.id);
-		if (!model) throw new Error(`${MEASURED.provider}/${MEASURED.id} is not in this Pi's catalog`);
+		model = runtime.getModel(measured.provider, measured.id);
+		if (!model) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
 	}
 	const settingsManager = stock.SettingsManager.create(cwd, agentDir);
 	const loader = new stock.DefaultResourceLoader({ cwd, agentDir, settingsManager, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
@@ -385,13 +426,16 @@ async function parent() {
 	const cache = argument("--cache", "warm");
 	const label = argument("--label", "run");
 	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
-	if (!["loopback", "deepseek", "deepseek-local"].includes(provider)) throw new Error("--provider must be loopback, deepseek or deepseek-local");
+	if (!["loopback", "deepseek", "deepseek-local", "codex"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local or codex");
 	if (provider === "deepseek-local" && mode !== "repair") throw new Error("--provider deepseek-local serves only --mode repair");
+	// Repair mode answers the writer's first call here in Chat Completions; Codex speaks the Responses API.
+	if (provider === "codex" && mode === "repair") throw new Error("--provider codex does not serve --mode repair");
 	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
-	const limits =
-		provider !== "deepseek"
-			? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
-			: { requests: Number(argument("--max-requests")), minutes: Number(argument("--max-minutes")), costUsd: Number(argument("--max-cost-usd")) };
+	const remote = provider === "deepseek" || provider === "codex";
+	const limits = !remote
+		? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
+		: { requests: Number(argument("--max-requests")), minutes: Number(argument("--max-minutes")), costUsd: Number(argument("--max-cost-usd")) };
+	const codexAccount = provider === "codex" ? codexAccountId() : undefined;
 	for (const [name, value] of Object.entries(limits))
 		if (!(value > 0)) throw new Error(`--max-${name} must be positive for a provider run`);
 	const build = JSON.parse(readFileSync(join(packageDir, "preview-build.json"), "utf8"));
@@ -418,9 +462,9 @@ async function parent() {
 		};
 		// Answered on this machine: Pi still needs a key to build the request, and gets one that opens nothing.
 		if (provider === "deepseek-local") value.DEEPSEEK_API_KEY = "bench-local-only";
-		if (provider === "deepseek") {
-			// The proxy injects the real key; Pi receives only a placeholder.
-			value.DEEPSEEK_API_KEY = "proxy-injected";
+		if (remote) {
+			// The proxy injects the real key; Pi receives only a placeholder, Codex's in the unit's auth.json.
+			if (provider === "deepseek") value.DEEPSEEK_API_KEY = "proxy-injected";
 			value.NODE_USE_ENV_PROXY = "1";
 			for (const name of ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"])
 				if (process.env[name]) value[name] = process.env[name];
@@ -435,6 +479,7 @@ async function parent() {
 		// Pi's system prompt ends with the working directory, so a directory per unit gives every request its own
 		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
 		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
+		if (codexAccount) writeCodexPlaceholder(agentDir, codexAccount);
 		const encoded = Buffer.from(JSON.stringify({ ...action, cwd })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
@@ -567,7 +612,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED.provider}/${MEASURED.id}`, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.

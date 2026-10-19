@@ -90,6 +90,13 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
   --concurrency 6 --max-requests 50 --max-minutes 20 --max-cost-usd 0.5
 ```
 
+`--provider codex` measures `openai-codex/gpt-6-luna` on the ChatGPT subscription, in `smoke`, `writer` and `probes`
+modes; `repair` answers the writer's first call in Chat Completions, which Codex does not speak. It needs the network
+secret and the placeholder that [codex-subscription.md](../../docs/context-memory/codex-subscription.md) sets up, reads
+only the account ID from that placeholder, and gives each unit its own placeholder and the SSE transport. The same three
+limits apply. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
+request draws on its usage allowance.
+
 ### Quotation-repair cases
 
 `repair.ts` (cases `0.5.1-repair-cases.1`) plants one to three failing quotations in a faithful note for each

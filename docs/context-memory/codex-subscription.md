@@ -38,7 +38,10 @@ under a different `auth.json` entry, and its token lifetime has not been checked
 here.
 
 The newest Luna is `openai-codex/gpt-6-luna`. The frozen `eval/live` contract
-stays on `openai-codex/gpt-5.6-luna` and refuses any other model.
+stays on `openai-codex/gpt-5.6-luna` and refuses any other model. The preview
+bench measures `gpt-6-luna` with `--provider codex`: it reads the account ID from
+this placeholder and gives each unit a placeholder of its own (see
+[eval/preview/README.md](../../eval/preview/README.md)).
 
 ## Renew the token
 

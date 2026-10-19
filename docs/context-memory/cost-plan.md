@@ -103,9 +103,9 @@ As in the [experience plan](ux-plan.md#verification), for each package.
 
 | Package | State |
 | --- | --- |
-| Z1 What each request carries | Measured in `5c298e6`: [results and proposals](validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt). The proposals wait for the maintainer. |
+| Z1 What each request carries | Measured in `5c298e6`: [results and proposals](validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt). The first proposal led to Z3; schema factoring is not accepted in this batch. |
 | Z2 Cache warming while a turn runs | Stopped at its first condition in `984885a`. The warming guard stays. |
-| Z3 `context_note` with arm B only | Planned |
+| Z3 `context_note` with arm B only | Implemented with inactive registration and activation for earlier calls. Official Pi 1.3.0, 1.2.0 and 1.1.0 save 4,833 bytes per fresh B-off request; saved-call, refused-call and B-on payloads match the baseline. [Evidence and verification in #72](https://github.com/youxi-huang/pi-context-compaction/pull/72#z3-context_note-with-arm-b-or-an-earlier-call). |
 
 ### Z2 stop
 

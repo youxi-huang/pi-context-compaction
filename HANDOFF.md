@@ -1,59 +1,51 @@
 ---
 branch: claude/peaceful-planck-ziod99
 pr: 72
-head: 51d9529
-written: 2026-10-19, Claude Code, cloud
+head: 984885af24e5d4e37bc84cd7bc95c6ec80693ab9
+written: 2026-10-18 PDT, Codex, cloud
 ---
 
-# Handoff: preview cost batch, Z1 and Z2
+# Handoff: review the preview cost measurements and warming stop
 
 ## Goal and done-when
 
-Carry out Z1, then Z2, of [cost-plan.md](docs/context-memory/cost-plan.md) for Codex. Done when Z1's `validation.md` entry is committed, Z2 is either implemented with its evidence and CI green or stopped at a precondition with the report, the plan's Status table says which, and a new `HANDOFF.md` for the review session is pushed. A Claude Code session then reviews the diff for redundancy before the PR leaves draft.
+Review Z1 and the Z2 stop report for redundancy, as the previous handoff requested. Keep #72 in draft until that review is complete. Before it becomes ready for review, record the final handoff check in its description and delete `HANDOFF.md` in the last commit, per the protocol.
 
 ## State
 
-- [verified] Every line the plan cites matches the source: `sed -n 110p` and `sed -n 158p` of `preview/extension.ts`, `sed -n 183p` and `sed -n 293p` of `scripts/context-memory-preview-acceptance.mjs`, `grep -n` in `packages/ai/scripts/generate-models.ts` (lines 982 and 992), each exit 0, at `86cb9c6`. `51d9529` adds only the plan.
-- [verified] No open PRs before this one: GitHub pull request list, open state, empty, 2026-10-19.
-- [inferred] Official Pi 1.3.0 and 1.2.0 warm the cache as the 1.1.0 snapshot does, based on the snapshot's `core/cache-warmer.ts` and the acceptance warming case, which CI runs on every listed host (`scripts/context-memory-preview-acceptance.mjs:246`).
-- [inferred] In `streaming` mode no refresh can land inside a compaction; in `idle` mode one can. Based on the snapshot's `core/sdk.ts:379-440` and `core/agent-session.ts:1083-1084`. Z2 must confirm this on each host.
-- [not run] `ops doctor`, `ops verify`, the preview build, acceptance, scenarios and tests. This session read code and wrote documents only.
+- [verified] Z1's driver exited 0 at `a42f6b7`; its commands, measurements, missing provider counts and proposals are in [validation.md, Z1](docs/context-memory/validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt), committed in `5c298e6`. The drivers are saved in #72's description.
+- [verified] `node "$driver_dir/z2-driver.mjs" "$PWD"` exited 0 at `5c298e6`: nine cases reproduce the idle-mode stop or confirm its controls on all three hosts. [The stop report](docs/context-memory/cost-plan.md#z2-stop-a-refresh-already-in-flight-survives-settlement) and the Status table are committed in `984885a`. The official-source audit exited 0 at `984885a`; its driver is also in #72.
+- [verified] `node scripts/context-memory-ops.mjs ci` at clean `984885a`: exit 0; 20/20 steps. Acceptance 32/32, 28/28, 28/28 on Pi 1.3.0/1.2.0/1.1.0, 148 strict scenarios, 31 release checks, local package preparation and 103 full offline evaluation tests passed. Neither deliberate gate was reached.
+- [verified] `git diff --exit-code a42f6b7..984885a -- packages scripts eval` and `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts`: exits 0 at `984885a`; the work changes documents only and neither deliberate gate was reached.
+- [not run] New real-provider requests, provider acceptance of undeclared historical calls, and Z2's probes after its first stop condition; see the two reports for scope.
 
 ## Decisions
 
-- Two packages, Z1 then Z2, each its own commit. Rejected: the external review's other proposals, for the reasons in [Settled](docs/context-memory/cost-plan.md#settled).
-- `context_note` stays registered in every session for now. Z1 measures it and proposes; the maintainer decides. Rejected: gating it on arm B in this batch, because it removes a workflow the [preview guide](docs/context-memory/extension-preview.md#supported-workflow) documents, changes the tool set the evaluation compares, and how providers treat earlier calls to a tool no longer declared is unverified.
-- Z2 lets Pi decide only while an agent run is active, with no compaction active or staged and no failure held. Rejected: Pi's decision in every ready session, because an `idle` refresh can be in flight when `/compact` begins and its entry would fail the compaction with `CONTEXT_SOURCE_CHANGED`. Rejected: accepting `cache_warm` entries inside the source check, because that changes a trust-boundary check. Rejected: a warming setting, because the plan adds none. Rejected: reading the phase from `continuationProbability === 1`, because that couples the rule to a Pi constant; track runs from Pi's events instead.
-- Z2's stop conditions are the plan's, unchanged. A stop is a result, not a failure: report it and leave runtime code as it is.
-- No provider run and no credentials. Every number is offline and scripted.
-- Keep the diff to what each package names. The review removes anything on the plan's [Not accepted](docs/context-memory/cost-plan.md#not-accepted) list.
+- Z1's proposals wait for the maintainer; [the validation entry](docs/context-memory/validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt) gives their savings, tradeoffs and the recommendation to keep registration until those are decided.
+- Z2 stops without a runtime change. The reason, the streaming control, the rejected scope expansion and the omitted later probes are recorded in [the stop report](docs/context-memory/cost-plan.md#z2-stop-a-refresh-already-in-flight-survives-settlement). Do not turn that control into an implementation in this review.
+- Package/source commit binding stays enforced. The first preview run's prepare failure and the successful clean rerun are recorded in #72's Evidence section; no check was weakened.
 
 ## Read first
 
-1. [cost-plan.md](docs/context-memory/cost-plan.md), whole.
-2. [ux-plan.md](docs/context-memory/ux-plan.md#not-accepted), Not accepted and Verification only.
-3. [operations.md](docs/context-memory/operations.md#evidence), Evidence and Two deliberate gates.
-4. The [U3 entry](docs/context-memory/validation.md#preview-reopen-and-compaction-overhead-on-official-pi-130-2026-10-18-utc) in `validation.md`, as the model for Z1's method and length.
-5. `scripts/context-memory-preview-acceptance.mjs:115-300`, the warming case and its fixture.
-6. In the snapshot: `packages/coding-agent/src/core/cache-warmer.ts`, `core/sdk.ts:379-440`, `core/agent-session.ts:1083`. Then the same code in each official host's `dist`.
+1. [cost-plan.md](docs/context-memory/cost-plan.md): Status, Z2 stop, and Not accepted.
+2. [validation.md, Z1](docs/context-memory/validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt), 89 lines.
+3. [PR #72](https://github.com/youxi-huang/pi-context-compaction/pull/72): Evidence, Why Z2 stops, and the temporary drivers when checking methodology.
 
 ## Settled
 
-- The external review's proposals: [cost-plan.md#settled](docs/context-memory/cost-plan.md#settled).
-- Arm B keeps its path until 0.8.0: [roadmap](docs/context-memory/roadmap.md#planned-minor-releases), maintainer decision of 2026-10-17.
-- Version strings, build identities, tags and the resident runtime are out of scope: [AGENTS.md](AGENTS.md).
+- The external review's other proposals remain [settled](docs/context-memory/cost-plan.md#settled); arm B keeps its path until 0.8.0.
+- Z1 cannot recover an exact voluntary-note total from the published provider record. Its four refusals and qualitative frequency are all that record supports.
+- Runtime, host, schema and warming changes are outside this review; this batch measured or stopped as specified.
 
 ## Next steps
 
-1. `git fetch origin claude/peaceful-planck-ziod99 && git checkout -B claude/peaceful-planck-ziod99 origin/claude/peaceful-planck-ziod99`. If you can push only to your own branch, start it here, open a draft PR against `main` (CI runs only there) and link #72.
-2. `node scripts/context-memory-ops.mjs doctor`, then `node scripts/context-memory-ops.mjs verify`. Record both with exit codes.
-3. Z1: `node scripts/context-memory-preview-build.mjs`, then measure items 1 to 4 on official Pi 1.3.0 with the scenario runner's isolation, as U3 did. Commit the `validation.md` entry as `docs: record what each preview request carries`.
-4. Z2: confirm the three snapshot claims and the stop conditions on 1.3.0, 1.2.0 and 1.1.0 first. Implement only if all hold, then run the plan's Verification. Commit as `fix: let Pi warm the cache while a guarded turn runs`, or record the stop in the plan's Status table.
-5. Update the Status table, write the next `HANDOFF.md` for the review session per the [protocol](docs/context-memory/handoff-protocol.md), push, and leave the PR in draft.
+1. `git diff 86cb9c6..984885a -- docs/context-memory/cost-plan.md docs/context-memory/validation.md` starts the review after the protocol's branch/history check. Compare it with the plan's Not accepted list.
+2. Check the Z1 byte/token definitions, historical-evidence limits and proposal costs; check that Z2's report distinguishes the temporary in-memory rule from shipped behavior. The full offline reproductions are in #72, with no dependency on this container's temporary files.
+3. Remove redundancy if needed, update the PR description and final handoff check, then follow the protocol's Finishing section. Push only added commits to this branch.
 
 ## Previous handoff check
 
-- Missing: none
-- Repeated: none
-- Wrong: none
-- Unused: none
+- Missing: exact B-off `context_note` call and accepted-note totals are absent from the linked provider record; only "most turns" and four refusals are recorded.
+- Repeated: none.
+- Wrong: none; Z2's safety hypothesis failed its prescribed precondition, not a verified handoff claim.
+- Unused: none.

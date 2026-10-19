@@ -94,7 +94,8 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 modes; `repair` answers the writer's first call in Chat Completions, which Codex does not speak. It needs the network
 secret and the placeholder that [codex-subscription.md](../../docs/context-memory/codex-subscription.md) sets up, reads
 only the account ID from that placeholder, and gives each unit its own placeholder and the SSE transport. The same three
-limits apply. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
+limits apply. Writer rows add `codexResponses`: for every response, its output items, and for each message its phase
+and the shape of its JSON (keys, kinds and lengths) or its length when it does not parse, never its text. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
 request draws on its usage allowance.
 
 ### Quotation-repair cases

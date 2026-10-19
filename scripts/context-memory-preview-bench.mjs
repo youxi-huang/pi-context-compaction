@@ -99,6 +99,73 @@ function writeCodexPlaceholder(agentDir, accountId) {
 	);
 }
 
+/** The structure of a parsed answer two levels deep: keys, and for each value its kind and length. Never its text. */
+function jsonShape(value, depth) {
+	if (Array.isArray(value)) return `array:${value.length}`;
+	if (!value || typeof value !== "object") return typeof value;
+	if (!depth) return `object:${Object.keys(value).length}`;
+	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonShape(item, depth - 1)]));
+}
+
+/**
+ * Codex answers in output items: reasoning, then one or more messages, each in a phase such as `commentary` or
+ * `final_answer`. As each response streams past Pi's own parser, records its items, and for a message its phase and
+ * the shape of its JSON, or its length when it does not parse. Never the text itself.
+ */
+function observeCodexItems(responses) {
+	const original = globalThis.fetch;
+	globalThis.fetch = async (input, init) => {
+		const response = await original(input, init);
+		if (!String(input instanceof Request ? input.url : input).endsWith("/codex/responses") || !response.body) return response;
+		const items = [];
+		responses.push(items);
+		const decoder = new TextDecoder();
+		let buffer = "";
+		const consume = (text) => {
+			buffer += text;
+			let end;
+			while ((end = buffer.indexOf("\n")) >= 0) {
+				const line = buffer.slice(0, end).trim();
+				buffer = buffer.slice(end + 1);
+				if (!line.startsWith("data:")) continue;
+				let event;
+				try {
+					event = JSON.parse(line.slice(5));
+				} catch {
+					continue;
+				}
+				if (event.type !== "response.output_item.done") continue;
+				const item = event.item ?? {};
+				if (item.type !== "message") {
+					items.push({ type: String(item.type) });
+					continue;
+				}
+				const body = (item.content ?? []).filter((part) => part.type === "output_text").map((part) => part.text).join("");
+				const text = body.trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+				let json;
+				try {
+					json = jsonShape(JSON.parse(text), 2);
+				} catch {
+					json = { parsed: false, chars: text.length, opensObject: text.startsWith("{"), closesObject: text.endsWith("}") };
+				}
+				items.push({ type: "message", phase: item.phase ?? null, json });
+			}
+		};
+		const observed = response.body.pipeThrough(
+			new TransformStream({
+				transform(chunk, controller) {
+					consume(decoder.decode(chunk, { stream: true }));
+					controller.enqueue(chunk);
+				},
+				flush() {
+					consume(`${decoder.decode()}\n`);
+				},
+			}),
+		);
+		return new Response(observed, { status: response.status, statusText: response.statusText, headers: response.headers });
+	};
+}
+
 /** Assistant responses one probe may produce before it is stopped and scored as having no answer. */
 const PROBE_ROUNDS = 6;
 const fixturesDir = join(root, "eval", "preview", "fixtures");
@@ -271,6 +338,7 @@ async function worker() {
 
 	const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
 	const measured = MEASURED[action.provider];
+	const codexResponses = [];
 	let model;
 	if (action.provider === "loopback") {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
@@ -290,6 +358,7 @@ async function worker() {
 		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
 		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
 		dispatcher.configureHttpDispatcher();
+		if (action.provider === "codex") observeCodexItems(codexResponses);
 		model = runtime.getModel(measured.provider, measured.id);
 		if (!model) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
 	}
@@ -344,6 +413,7 @@ async function worker() {
 			toolCallDeclined: writer.toolCallDeclined ?? false,
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
+			...(action.provider === "codex" ? { codexResponses } : {}),
 		};
 		if (result.ok) {
 			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;

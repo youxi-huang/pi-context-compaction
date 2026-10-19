@@ -12,7 +12,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
-- The preview bench measures `openai-codex/gpt-6-luna` on the ChatGPT subscription with `--provider codex`, in writer, probes and smoke modes, under the same request, time and cost limits. In Claude Code cloud sessions the access token stays in the environment's network proxy and Pi holds an unsigned placeholder; `docs/context-memory/codex-subscription.md` covers the setup and the renewal every ten days or so.
+- The preview bench measures `openai-codex/gpt-6-luna` on the ChatGPT subscription with `--provider codex`, in writer, probes and smoke modes, under the same request, time and cost limits. In writer mode it records the shape of every Codex response, never its text, which is how the first run traced its refused notes. In Claude Code cloud sessions the access token stays in the environment's network proxy and Pi holds an unsigned placeholder; `docs/context-memory/codex-subscription.md` covers the setup and the renewal every ten days or so.
 
 ## [v0.5.2] — 2026-10-18
 

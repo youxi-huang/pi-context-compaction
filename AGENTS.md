@@ -57,6 +57,7 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | --- | --- |
 | [operations.md](docs/context-memory/operations.md) | Before routine maintenance: red CI, dependency and security updates, CodeQL alerts, upstream ports. |
 | [handoff-protocol.md](docs/context-memory/handoff-protocol.md) | A task names a branch that carries `HANDOFF.md`, or the user asks for a handoff. |
+| [codex-subscription.md](docs/context-memory/codex-subscription.md) | Pi needs the ChatGPT Codex subscription in a cloud session, a Codex request returns 401, or its token is due for renewal. |
 | [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
 | [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
 | [v0.5.0-plan.md](docs/context-memory/v0.5.0-plan.md) | Working on 0.5.0: quotation repair, typed retrieval, the writer bench or the preview evaluation set. |

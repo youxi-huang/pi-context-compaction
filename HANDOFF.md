@@ -1,54 +1,49 @@
 ---
 branch: claude/peaceful-planck-ziod99
 pr: 72
-head: 389798d
-written: 2026-10-19, Claude Code, cloud
+head: 971c858
+written: 2026-10-18 PDT, Codex, cloud
 ---
 
-# Handoff: `context_note` with arm B only (Z3)
+# Handoff: review Z3's context_note activation
 
 ## Goal and done-when
 
-Carry out [Z3](docs/context-memory/cost-plan.md#z3-context_note-with-arm-b-only). Done when Z3 is implemented with its evidence and CI green, or stopped at its condition with the report; the plan's Status row says which; #72's description gains a Z3 section; and a new `HANDOFF.md` for the review session is pushed. Leave #72 in draft.
+Review `971c858`, which implements [Z3](docs/context-memory/cost-plan.md#z3-context_note-with-arm-b-only). Done when review findings are addressed, the review and this handoff check are recorded in #72, and `HANDOFF.md` is removed under the protocol's Finishing section. Keep #72 in draft. Do not merge or release.
 
 ## State
 
-- [verified] #72 is open, and CI on `9dabad9` passed: `verify`, CodeQL and three analyses, each `success` (GitHub check runs, 2026-10-19).
-- [verified] The 1.1.0 snapshot declares `defaultActive` and `setActiveTools`: `grep -n "setActiveTools\|defaultActive" packages/coding-agent/src/core/extensions/types.ts`, exit 0, at `9dabad9` (lines 615-622 and 1750).
-- [verified] Scripts use `context_note` only in the scenario case with arm B on, in the check that B off sends no guideline, and in the A/B runner: `grep -n context_note scripts/context-memory-preview-*.mjs`, exit 0, at `9dabad9`.
-- [inferred] Official 1.2.0 and 1.3.0 keep both, based on the snapshot being upstream 1.1.0. Not checked.
-- [not run] `ops verify`, `ops preview` and the tests. `389798d` adds only the plan.
+- [verified] The incoming handoff was current: `git merge-base --is-ancestor 389798d origin/claude/peaceful-planck-ziod99` and `git log --oneline --stat 389798d..origin/claude/peaceful-planck-ziod99`, exit 0 at `7516af8`; only the handoff commit followed its head. #72 was open and draft.
+- [verified] The official-host prerequisites and Z3's four payload/lifecycle checks passed on Pi 1.3.0, 1.2.0 and 1.1.0, exit 0 on the sources committed as `971c858`. Commands, results, package identity and the adapted driver are in [#72's Z3 section](https://github.com/youxi-huang/pi-context-compaction/pull/72#z3-context_note-with-arm-b-or-an-earlier-call).
+- [verified] `node scripts/context-memory-ops.mjs verify` passed on the sources committed as `971c858`, exit 0. `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` passed, exit 0. The focused tests and offline A/B control also passed; their evidence is in the same PR section.
+- [verified] `node scripts/context-memory-ops.mjs preview` passed on clean `971c858`, exit 0; its acceptance, strict scenarios and local package preparation are recorded in #72. GitHub's check-runs API reports all five checks successful at `971c858`, including [full CI](https://github.com/youxi-huang/pi-context-compaction/actions/runs/39193969544).
+- [not run] Real-provider replay or billing measurements. All new model responses were synthetic and local.
 
 ## Decisions
 
-- With B off, `context_note` is offered only to a branch that already calls it. Chosen by the maintainer on 2026-10-19. Rejected: registering it only with B, because sessions with earlier calls would send calls to a tool no longer declared, and no provider has been tested with that (Z1). Rejected: keeping today's behavior, which costs about 1,209 tokens per request plus the rounds the model spends on notes. Rejected: a real-provider check first, which needs the maintainer's credentials.
-- Activation only adds the tool. Rejected: deactivating it at each session start, because that would override the user's or another extension's choice. A tool left active after switching away from a session that needed it costs only its declaration.
-- Any assistant call counts, saved or refused. Rejected: saved notes only, because a refused call leaves a call with no saved entry. Rejected: only calls still in the model's context, because that changes the tool set at a commit and adds states to test.
-- The `$defs` schema is not part of this batch. The maintainer chose only the first proposal.
+- The registration uses `defaultActive`, because all three official hosts passed the prerequisite; the startup-deactivation fallback was rejected. The full choice and its exceptions are in [Z3's PR evidence](https://github.com/youxi-huang/pi-context-compaction/pull/72#z3-context_note-with-arm-b-or-an-earlier-call).
+- The other decisions remain those in the [Z3 plan](docs/context-memory/cost-plan.md#z3-context_note-with-arm-b-only): branch calls count even if refused or covered by compaction; activation only adds a tool and runs at session start and tree navigation. No new policy was chosen here.
 
 ## Read first
 
-1. [cost-plan.md](docs/context-memory/cost-plan.md): Z3, Not accepted, Status.
-2. `packages/coding-agent/src/extensions/context-memory/preview/extension.ts`: the `context_note` registration and the `session_start` and `session_tree` handlers.
-3. #72's description: the Z1 driver to adapt for steps 1 to 4.
-4. [ux-plan.md](docs/context-memory/ux-plan.md#verification): Verification.
+1. `git show 971c858 -- packages/coding-agent/src/extensions/context-memory/preview/extension.ts packages/coding-agent/test/context-memory-preview.test.ts`.
+2. [#72's Z3 section](https://github.com/youxi-huang/pi-context-compaction/pull/72#z3-context_note-with-arm-b-or-an-earlier-call): official-host evidence, verification and driver limitations.
+3. [cost-plan.md](docs/context-memory/cost-plan.md): Z3, Not accepted and Status.
 
 ## Settled
 
-- Z1's measurements and Z2's stop: [cost-plan.md#status](docs/context-memory/cost-plan.md#status), [validation.md, Z1](docs/context-memory/validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt).
-- Arm B keeps its path until 0.8.0: [roadmap](docs/context-memory/roadmap.md#planned-minor-releases).
+- Z1's measurements and Z2's stop remain settled in [Status](docs/context-memory/cost-plan.md#status) and #72. Neither needs rerunning for this review.
+- Z3's scope and compatibility tradeoffs: [the plan](docs/context-memory/cost-plan.md#z3-context_note-with-arm-b-only) and the PR's Z3 section. Review the five-file work diff; the resident implementation is outside this batch.
 
 ## Next steps
 
-1. `git fetch origin claude/peaceful-planck-ziod99 && git checkout -B claude/peaceful-planck-ziod99 origin/claude/peaceful-planck-ziod99`. If you can push only to your own branch, start it here and link #72.
-2. `node scripts/context-memory-ops.mjs doctor`, then `node scripts/context-memory-ops.mjs verify`. Record both with exit codes.
-3. On official 1.3.0, 1.2.0 and 1.1.0, check that a B-off registration can start inactive and that activation at `session_start` reaches the first request. If either fails, stop and report.
-4. Implement Z3 with its regressions, run the plan's Verification, then steps 1 to 4 per host. Commit as `feat: offer context_note only with arm B or an earlier call`.
-5. Update the Status row and #72's description, write the next `HANDOFF.md` per the [protocol](docs/context-memory/handoff-protocol.md), and push.
+1. `git fetch origin refs/heads/claude/peaceful-planck-ziod99:refs/remotes/origin/claude/peaceful-planck-ziod99`, then compare this handoff's head and #72's state under the protocol before switching to the branch. The explicit refspec also works in a single-branch clone.
+2. Review `971c858` against Z3 and its evidence. Address any findings and rerun the checks the changes require. Do not reopen Z1 or Z2 unless a check contradicts them.
+3. Record the review and final Previous handoff check in #72; remove this file in the final review commit and push to the same branch. Leave #72 in draft.
 
 ## Previous handoff check
 
-- Missing: none. This session resumed without a handoff; Codex's last one is checked in #72's review comment.
+- Missing: this checkout's single-branch origin refspec meant the incoming fetch command did not create the remote-tracking branch. An explicit source:destination refspec was needed before switching.
 - Repeated: none
 - Wrong: none
 - Unused: none

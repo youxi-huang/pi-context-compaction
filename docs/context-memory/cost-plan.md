@@ -80,5 +80,44 @@ As in the [experience plan](ux-plan.md#verification), for each package.
 
 | Package | State |
 | --- | --- |
-| Z1 What each request carries | Planned |
-| Z2 Cache warming while a turn runs | Planned |
+| Z1 What each request carries | Measured in `5c298e6`; [results and proposals](validation.md#z1-preview-request-and-checkpoint-cost-official-pi-130-2026-10-18-pdt). Exact voluntary-note call totals were not recorded by the earlier provider run. |
+| Z2 Cache warming while a turn runs | Stopped at its safety precondition on official Pi 1.3.0, 1.2.0 and 1.1.0; see below. The existing warming guard stays. |
+
+### Z2 stop: a refresh already in flight survives settlement
+
+Verified at `5c298e6`, preview `stock-preview+src.289ffa92e5522496`:
+`node "$driver_dir/z2-driver.mjs" "$PWD"` exited 0, reproducing the stop condition
+on all three official hosts. Synthetic only, with isolated agent directories,
+a package copy outside any Node project and a loopback OpenAI-completions provider.
+The model's 11-second cache lifetime makes Pi schedule a refresh after one second;
+these are lifecycle checks, not Anthropic cache or billing measurements. The driver
+and full evidence are in [PR #72](https://github.com/youxi-huang/pi-context-compaction/pull/72).
+
+The temporary probe changes only the loaded handler in memory: Pi decides during
+an active, ready run, and the existing guard returns `stop` after settlement and
+during compaction. It holds a refresh response until after the run settles and
+the compaction writer has started. Releasing that response appends `cache_warm`
+between `begin` and staging; releasing the writer then refuses the compaction
+with `CONTEXT_SOURCE_CHANGED` and leaves its durable failure marker.
+
+| Official Pi | Proposed rule, `idle` | Proposed rule, `streaming` | Existing guard, `idle` |
+| --- | --- | --- | --- |
+| 1.3.0 | One refresh and usage entry inside compaction; refused | Refresh aborted at settlement; committed | No refresh; committed |
+| 1.2.0 | One refresh and usage entry inside compaction; refused | Refresh aborted at settlement; committed | No refresh; committed |
+| 1.1.0 | One refresh and usage entry inside compaction; refused | Refresh aborted at settlement; committed | No refresh; committed |
+
+The three hosts have identical `dist/core/cache-warmer.js`. Its `start` clears
+and aborts an older run, `onAgentSettled` aborts in `streaming` mode but only
+changes the phase in `idle` mode, and `validateRun` checks the conversation
+before appending usage. The SDK's conversation check compares the agent's model
+and message prefix; starting a compaction does not change that prefix while its
+writer waits. Returning `stop` for the next decision cannot cancel a request
+whose decision already passed. All three inspected host files stayed unchanged
+on each host. Each catalog exposes cache lifetimes only on the same 17 direct
+Anthropic models, at 300 and 3,600 seconds; the PR lists their IDs.
+
+No runtime, test, script, contract or warming-guide change follows this result.
+The later reopen, doctor, history and post-commit replay probes were not run:
+the first stop condition already failed. A rule restricted to Pi's `streaming`
+setting or a way to cancel idle refreshes would need a separate design decision;
+this batch adds neither a setting nor a host change.

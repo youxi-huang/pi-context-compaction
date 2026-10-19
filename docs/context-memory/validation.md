@@ -58,6 +58,52 @@ provider sends the request's session ID as `prompt_cache_key`, and the session
 writer's request carries none, so it lands outside the session's cache. DeepSeek
 matches prefixes without a key, which is why the earlier runs did not show it.
 
+### Probes, one run
+
+Each chain retried a refused cut up to four attempts in all, as a user retries
+`/compact`. Seven of 18 attempts committed. P2's second cut was refused four times,
+which blocked its nine probes in both conditions.
+
+| | P1 | P2 | P3 |
+| --- | ---: | ---: | ---: |
+| Attempts until each cut committed | 4, 3, 2 | 1, then 4 refused | 1, 1, 2 |
+| Passed with `context_history` | 29 of 30 | 8 of 17, 9 blocked | 24 of 28 |
+| Passed with no tools | 27 of 30 | 8 of 17, 9 blocked | 20 of 28 |
+| `context_history` calls per question | 2.57 | 2.25 | 3.07 |
+| Of which `list` | 9 | 1 | 2 |
+| Questions stopped at the round limit | 3 | 0 | 4 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 |
+
+With no tools, P3's notes alone left 8 of 28 unanswered, each an abstention rather
+than a wrong answer, and `context_history` recovered four of them. No answer with
+`context_history` was wrong: the shortfall is four answers in no valid form and one
+P3 probe whose request returned nothing for over 20 minutes. The bench has no
+per-unit timeout, so its worker was stopped by hand, and the probe is scored as
+blocked. With no tools there was one wrong answer, a P1 count. Against DeepSeek's
+candidate of 2026-10-16 to 17, Luna made about twice as many `context_history` calls
+per question on P1 and P2 (1.27 and 1.09 there) and somewhat more on P3 (2.55).
+Probes read 56.6% of their input from cache, against 71 to 73% on DeepSeek.
+
+### Spend
+
+Six runs made 459 requests: one smoke, 78 for the writer bench, 41 for the two P2
+diagnostics and 339 for the probes, which took 54 minutes. At catalog prices that is
+$0.72, an API equivalent: the subscription charges nothing per request, though every
+request draws on its allowance. No run reached its limits. One request through Pi's
+CLI confirmed the route before the bench.
+
+### What this shows
+
+Through the subscription, Luna at `high` writes notes smaller than DeepSeek's that
+needed no repair, and answers from them without fabrication. It loses about two
+notes in five to schema keywords, usually around a complete note, often enough to
+block one fixture's chain after four attempts. On Codex the session writer also
+misses the session's cache, because its request carries no session ID. Both are
+changes to the preview and wait for the maintainer; `max`, the level the maintainer
+uses, was not measured. One model at one level, three synthetic sessions and one
+probe run: this does not establish a refusal rate. Session copies, notes and answers
+stayed outside the repository.
+
 ## Z1 preview request and checkpoint cost, official Pi 1.3.0, 2026-10-18 PDT
 
 [Z1](cost-plan.md#z1-what-each-request-carries), measured at `a42f6b7` with

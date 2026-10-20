@@ -14,6 +14,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
+- The preview bench measures `openai/gpt-6-luna` through an OpenAI-compatible relay with `--provider relay --base-url`, keeping Pi's catalog settings and the Responses API, so the session writer's cache key reaches the relay. A relay's own usage counts make its cache share and cost incomparable with other runs; refusals, notes and probe scores compare.
 - The preview bench stops a unit still running after `--unit-minutes`, 10 by default, so one request that never returns cannot hold a run; the unit settles as crashed and a probe it held is scored as blocked. Writer rows and the summary also count the schema envelopes removed from notes.
 - The preview bench measures `openai-codex/gpt-6-luna` on the ChatGPT subscription with `--provider codex`, in writer, probes and smoke modes, under the same request, time and cost limits. In writer mode it records the shape of every Codex response, never its text, which is how the first run traced its refused notes. In Claude Code cloud sessions the access token stays in the environment's network proxy and Pi holds an unsigned placeholder; `docs/context-memory/codex-subscription.md` covers the setup and the renewal every ten days or so.
 

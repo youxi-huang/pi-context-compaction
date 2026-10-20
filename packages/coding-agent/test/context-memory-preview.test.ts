@@ -645,6 +645,32 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(store.status(session)).toMatchObject({ state: "blocked", code: "CONTEXT_SOURCE_CHANGED" });
 	});
 
+	it.each(["compaction", "preparation"] as const)(
+		"sends the session's ID with the session writer's %s request",
+		async (path) => {
+			// The default writer is the session model, whose request reuses the session's prefix.
+			controller = new PreviewMemoryController({
+				config: { ...DEFAULT_MEMORY_CONFIG, noteRepair: false },
+				failureStore: store,
+				preparation,
+				journal,
+			});
+			controller.sessionStart(ctx);
+			const stream = vi.spyOn(ctx.modelRegistry, "streamSimple");
+			if (path === "preparation") await prepare();
+			else await controller.compact(event(), ctx);
+			expect(stream).toHaveBeenCalledTimes(1);
+			expect(stream.mock.calls[0][2]?.sessionId).toBe(session.getSessionId());
+		},
+	);
+
+	it("sends no session ID with a fixed writer's request", async () => {
+		const stream = vi.spyOn(ctx.modelRegistry, "streamSimple");
+		await controller.compact(event(), ctx);
+		expect(stream).toHaveBeenCalledTimes(1);
+		expect(stream.mock.calls[0][2]).not.toHaveProperty("sessionId");
+	});
+
 	it.each(["manual", "threshold"] as const)(
 		"shares the pre-writer read on %s compaction, then reads again at stage",
 		async (reason) => {

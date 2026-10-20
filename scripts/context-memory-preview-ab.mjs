@@ -40,7 +40,8 @@ if (!Number.isInteger(WINDOW) || WINDOW < 32_000 || WINDOW > 1_000_000) throw ne
 if (!ARMS.length || ARMS.some((arm) => !["sync", "a", "b"].includes(arm))) throw new Error("--arms takes sync, a and b");
 
 const WORK_NOTE_GUIDELINE = "Call context_note after a decision";
-const WRITER_REQUEST = "Return ONLY one JSON object matching this schema";
+/** The note request of 0.5.3 and later, then that of v0.5.2 and earlier, which the quotation repair still carries. */
+const WRITER_REQUESTS = ["Return ONLY the memory note itself", "Return ONLY one JSON object matching this schema"];
 // About 4 bytes per token, typical of English, on the scale of Pi's own estimate.
 const tokens = (text) => Math.ceil(Buffer.byteLength(text, "utf8") / 4);
 // Each log puts the turn after it inside A's preparation band: 30% into the band below Pi's threshold.
@@ -206,7 +207,7 @@ async function worker() {
 		const payloadTokens = tokens(JSON.stringify({ messages: payload.messages, tools: payload.tools }));
 		if (requests.length >= MAX_REQUESTS) return fail(response, "synthetic request budget exhausted");
 		if (latencyMs) await new Promise((done) => setTimeout(done, latencyMs));
-		if (serialized.includes(WRITER_REQUEST)) {
+		if (WRITER_REQUESTS.some((marker) => serialized.includes(marker))) {
 			requests.push({ kind: "writer", inputTokens: payloadTokens });
 			if (!bridge) return respond(response, payload.model, payloadTokens, { text: JSON.stringify(writerNote(serialized)) });
 			const answer = await ask(

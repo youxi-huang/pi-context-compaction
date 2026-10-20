@@ -113,7 +113,8 @@ one was declined (`toolCallDeclined`); all but the last are counts. Since
 asked for (`effort`), the reasoning settings and output cap its provider
 request carried (`sent`, read from the request Pi built, without its content)
 and how the response ended (`stopReason`), and `quotationRepair.droppedFrom`
-counts withdrawn facts by section. For the first candidate refused with
+counts withdrawn facts by section. Since 0.5.3, a call whose note arrived inside
+a schema envelope names its shape under `envelope`, `type` or `schema`. For the first candidate refused with
 `CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
 branch (`missing`) and those of entries without readable text (`unreadable`,
 with their kinds under `unreadableKinds`), and how many of either sit in
@@ -227,6 +228,13 @@ committed, and a writer cannot open a heading of its own, such as a second
 `## instructions`. Exact quotes are rendered as JSON strings and stay exact.
 Checkpoints written by v0.4.0 keep their summaries and reopen unchanged.
 
+Since 0.5.3 every note writer asks for the note itself rather than for an
+object matching the note's schema. Before validation the extension removes the
+two schema envelopes GPT-6 Luna returned around complete notes: a string `type`
+beside exactly the seven sections, and `type`, `properties` and `required` with
+exactly the seven sections under `properties`. It removes nothing else, and the
+note then passes every check as before.
+
 The session writer reads the conversation without entry IDs, so its handover
 request also lists every uncovered user message in full beside its ID, whole
 or not at all, within the note's hard allowance; the request drops this block
@@ -248,9 +256,12 @@ only in an assistant message or a tool output is not a user ruling.
 
 The session writer's request is the session's own system prompt, tools and
 messages plus one closing message, and it sets no tool choice, just as the
-session's requests do. A provider that caches prompt prefixes therefore serves
-most of the request from the cache the session has already warmed: on DeepSeek,
-95 to 97% of the writer's input over 192 compactions. The closing message tells
+session's requests do. Since 0.5.3 it also carries the session's ID, which Pi
+sends with each of the session's requests: Pi's Codex provider keys its prompt
+cache on that ID, and providers that need no key ignore it. A provider that
+caches prompt prefixes therefore serves most of the request from the cache the
+session has already warmed: on DeepSeek, 95 to 97% of the writer's input over
+192 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
 unavailable and the same request continues once. That continuation does not
 spend the size or quotation repair, so a compaction makes at most three writer

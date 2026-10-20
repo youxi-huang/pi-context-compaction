@@ -28,6 +28,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // --provider deepseek uses Pi's catalog model deepseek/deepseek-flash through the environment's network proxy and
 // requires --max-requests, --max-minutes and --max-cost-usd; the run stops before a unit that would start past any
 // of them. Up to --concurrency units run at once, so at most that many units can finish past a limit.
+// --unit-minutes, 10 by default, stops a unit still running after that long: it settles as crashed and counts under
+// timedOut, so one request that never returns cannot hold the run, and a probe it held is scored as blocked.
 // --provider codex does the same with openai-codex/gpt-6-luna on the ChatGPT subscription, in writer, probes and smoke
 // modes; docs/context-memory/codex-subscription.md sets up the proxy and the placeholder it copies the account ID from.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
@@ -46,10 +48,12 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
+/** The note request of 0.5.3 and later, then that of v0.5.2 and earlier, which the quotation repair still carries. */
+const WRITER_REQUESTS = ["Return ONLY the memory note itself", "Return ONLY one JSON object matching this schema"];
 /** The catalog model each provider measures; `deepseek-local` builds deepseek-flash's requests and answers them here. */
 const MEASURED = {
 	deepseek: { provider: "deepseek", id: "deepseek-flash" },
@@ -316,7 +320,7 @@ async function worker() {
 			response.end("data: [DONE]\n\n");
 			return;
 		}
-		const writer = serialized.includes("Return ONLY one JSON object matching this schema");
+		const writer = WRITER_REQUESTS.some((marker) => serialized.includes(marker));
 		const readable = new Set(
 			readLines(action.sessionFile)
 				.slice(1)
@@ -403,8 +407,9 @@ async function worker() {
 			ms: Math.round(performance.now() - started),
 			writerCalls: writer.writerCalls ?? 0,
 			phases: (writer.writerCallDetails ?? []).map((call) => call.phase),
-			// Per call: the effort asked for, the reasoning the request carried, how it ended and its output tokens.
-			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
+			// Per call: the effort asked for, the reasoning the request carried, how it ended, the schema envelope
+			// removed from its note and its tokens.
+			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, envelope: call.envelope ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			scope: writer.scope ?? null,
@@ -495,6 +500,8 @@ async function parent() {
 	const chainAttempts = Number(argument("--chain-attempts", "4"));
 	const cache = argument("--cache", "warm");
 	const label = argument("--label", "run");
+	const unitMinutes = Number(argument("--unit-minutes", "10"));
+	if (!(unitMinutes > 0)) throw new Error("--unit-minutes must be positive");
 	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
 	if (!["loopback", "deepseek", "deepseek-local", "codex"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local or codex");
 	if (provider === "deepseek-local" && mode !== "repair") throw new Error("--provider deepseek-local serves only --mode repair");
@@ -514,7 +521,7 @@ async function parent() {
 	rmSync(runDir, { recursive: true, force: true });
 	mkdirSync(runDir, { recursive: true });
 	const started = Date.now();
-	const used = { requests: 0, costUsd: 0, units: 0, unstarted: 0, warmups: 0, warmupCostUsd: 0 };
+	const used = { requests: 0, costUsd: 0, units: 0, unstarted: 0, timedOut: 0, warmups: 0, warmupCostUsd: 0 };
 	const exhausted = () =>
 		used.requests >= limits.requests || used.costUsd >= limits.costUsd || (Date.now() - started) / 60_000 >= limits.minutes;
 	const record = (file, row) => appendFileSync(join(runDir, file), `${JSON.stringify(row)}\n`);
@@ -556,10 +563,17 @@ async function parent() {
 		let stderr = "";
 		child.stdout.on("data", (part) => (stdout += part));
 		child.stderr.on("data", (part) => (stderr += part));
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGKILL");
+		}, unitMinutes * 60_000);
 		const [code] = await once(child, "close");
+		clearTimeout(timer);
 		rmSync(agentDir, { recursive: true, force: true });
+		if (timedOut) used.timedOut++;
 		const line = stdout.split("\n").find((item) => item.startsWith("BENCH_RESULT "));
-		if (!line) return { crashed: true, exitCode: code, stderr: stderr.slice(-600) };
+		if (!line) return { crashed: true, ...(timedOut ? { timedOut } : {}), exitCode: code, stderr: stderr.slice(-600) };
 		return JSON.parse(line.slice("BENCH_RESULT ".length));
 	}
 
@@ -749,6 +763,12 @@ async function parent() {
 				toolCallsDeclined: list.filter((row) => row.toolCallDeclined).length,
 				repairedAndCommitted: list.filter((row) => row.repairKind && row.ok).length,
 				toolCallResponses: sum((row) => row.toolCalls),
+				// Writer answers whose note arrived inside a schema envelope, by shape, and the attempts that then committed.
+				envelopes: {
+					type: sum((row) => row.calls?.filter((call) => call.envelope === "type").length),
+					schema: sum((row) => row.calls?.filter((call) => call.envelope === "schema").length),
+					committed: list.filter((row) => row.ok && row.calls?.some((call) => call.envelope)).length,
+				},
 				repairOutcome: { requoted: sum((row) => row.quotationRepair?.requoted), unquoted: sum((row) => row.quotationRepair?.unquoted), dropped: sum((row) => row.quotationRepair?.dropped), droppedFrom: Object.fromEntries(NOTE_SECTIONS.map((section) => [section, sum((row) => row.quotationRepair?.droppedFrom?.[section])]).filter(([, count]) => count > 0)) },
 				writerCalls: sum((row) => row.writerCalls),
 				usage: { input: sum((row) => row.usage?.input), output: sum((row) => row.usage?.output), cacheRead: sum((row) => row.usage?.cacheRead), costUsd: Number(sum((row) => row.usage?.cost?.total).toFixed(4)) },

@@ -484,8 +484,8 @@ export class PreviewMemoryController {
 			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
 			const messages = structuredClone(convertToLlm(projection.messages));
 			const prefix = getInitialSystemMessage(messages)
-				? { messages }
-				: { messages, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
+				? { messages, sessionId }
+				: { messages, sessionId, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
 			const config = { ...this.config, noteRepair: false };
 			const thinking = ctx.thinkingLevel;
 			this.preparation.start(
@@ -1018,9 +1018,15 @@ export class PreviewMemoryController {
 			const prefixMessages = convertToLlm(projectedMessages);
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
+			// The session's ID travels with the prefix, as Pi sends it with each of the session's requests.
 			const prefix = getInitialSystemMessage(prefixMessages)
-				? { messages: prefixMessages }
-				: { systemPrompt: ctx.getSystemPrompt(), messages: prefixMessages, tools: this.activeTools() };
+				? { messages: prefixMessages, sessionId: attempt.sessionId }
+				: {
+						systemPrompt: ctx.getSystemPrompt(),
+						messages: prefixMessages,
+						tools: this.activeTools(),
+						sessionId: attempt.sessionId,
+					};
 			this.lastProgress.delete(attempt.sessionId);
 			const submission = this.preparation?.enabled
 				? { ...this.preparationSubmission(ctx, event.customInstructions), noteBudget: policy }

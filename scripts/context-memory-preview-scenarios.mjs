@@ -178,7 +178,7 @@ async function worker() {
 			return stream(response, payload.model, JSON.stringify({ repairs: [{ section: "instructions", index: 0, fact }] }));
 		}
 		// Both writer paths carry this instruction; checkpoint summaries in ordinary requests do not.
-		const writer = serialized.includes("Return ONLY one JSON object matching this schema");
+		const writer = serialized.includes("Return ONLY the memory note itself");
 		const nativeSummary = serialized.includes("context summarization assistant");
 		const hasImage = serialized.includes("image_url");
 		const hasFailedAssistant = (payload.messages ?? []).some((message) => message.role === "assistant" && JSON.stringify(message.content).includes(PARTIAL_REPLY));

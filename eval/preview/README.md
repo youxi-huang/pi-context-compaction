@@ -79,7 +79,9 @@ machine.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
 `--max-cost-usd` and starts no unit once any limit is reached; with `--concurrency N`, up to N units already running
-may finish past it. Costs are Pi's catalog estimates, not invoices. The limits go to the maintainer before the first
+may finish past it. Costs are Pi's catalog estimates, not invoices. `--unit-minutes`, 10 by default, stops a unit
+still running after that long: it settles as crashed and counts under `timedOut`, and a probe it held is scored as
+blocked, so one request that never returns cannot hold the run. The limits go to the maintainer before the first
 request:
 
 ```sh
@@ -144,4 +146,6 @@ provider run, whose writer cost and pause were measured this way. The cache does
 so refusals, note sizes and probe scores compare across both settings; cost and pause do not.
 
 The run directory holds `summary.json`, per-unit rows without note text (`writer.jsonl`, `compactions.jsonl`,
-`probes.jsonl`) and `answers.jsonl` with the synthetic probe replies. Keep it outside the repository.
+`probes.jsonl`) and `answers.jsonl` with the synthetic probe replies. Keep it outside the repository. Each writer
+call in those rows names the schema envelope removed from its note (`envelope`), and the summary counts them by
+shape under `envelopes`, with the attempts that then committed.

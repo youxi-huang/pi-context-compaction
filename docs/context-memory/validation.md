@@ -1,5 +1,39 @@
 # Validation record
 
+## 0.5.3 candidate: synthetic checks, official Pi 1.3.0, 1.2.0 and 1.1.0, 2026-10-20 UTC
+
+Synthetic only, from `375863d` with `stock-preview+src.cb5dcce5a76c043e`, Linux x86_64 and Node 22.22.0. No
+provider credentials and no real-provider requests: the acceptance benches of the
+[0.5.3 plan](roadmap.md) have not run. The resident fingerprint and the evaluation pin are unchanged.
+
+| Command | Result |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0; 120 script and 479 runtime checks; security groups 107, 240, 3 and 111 |
+| `git diff --exit-code -- packages/coding-agent/src/extensions/context-memory/build.ts` | Exit 0; resident fingerprint unchanged |
+| `node scripts/context-memory-preview-build.mjs` | Exit 0; build above, from the clean commit |
+| Stock acceptance on 1.3.0 with 1.2.0 and 1.1.0 checkpoints, then on 1.2.0 and on 1.1.0 | Exit 0; 32, 28 and 28 checks passed |
+| `node scripts/context-memory-preview-scenarios.mjs`, strict profile, 1.0.4 as the unsupported host | Exit 0; 148 passed; accepted with no performance exception |
+| `node --test scripts/context-memory-preview-release-checks.test.mjs`, then `node scripts/context-memory-preview-release.mjs --prepare` | Exit 0; 31 checks; archives prepared, nothing published |
+| `node eval/check.mjs`, offline with the scripted provider | Exit 0; 103 tests |
+| Preview bench, `--provider loopback`, writer mode on P1, two attempts | Exit 0; 6 of 6 committed, no envelope, no unit timed out |
+
+**Session ID.** Official Pi 1.3.0, 1.2.0 and 1.1.0 declare `sessionId` in their stream options, and their Codex
+provider sends it as `prompt_cache_key` unless cache retention is `none`; each passes `sessionManager.getSessionId()`
+with the session's own requests. Their Chat Completions provider, which DeepSeek uses, sends the key only to
+`api.openai.com` or under long retention. Regressions check that the session writer's request carries the session's
+ID from compaction and from preparation, and that a fixed writer's request and a quotation repair carry none. The
+two controller tests fail without the change.
+
+**Envelopes.** Regressions cover both shapes from the Luna run and a plain note; eleven near misses that come back
+unchanged, among them a missing or extra key, a `type` that is not a string, a schema envelope with another keyword,
+without `required` or around a typed note, and answers that are not objects; a near miss refused with
+`CONTEXT_NOTE_INVALID`; unwrapped notes refused on schema and on scope; and an envelope removed from a size repair's
+answer. Every note writer's instruction names the seven sections and no longer says "matching this schema".
+
+**Bench timeout.** A loopback run with `--unit-minutes 0.002` stopped its first unit and recorded it as crashed with
+`timedOut`. The run then stopped at the guard for the chain's loopback setup, as a failed setup unit always has; at
+the default of ten minutes a loopback unit takes seconds. Zero, negative and non-numeric limits are refused.
+
 ## Preview bench on GPT-6 Luna through the Codex subscription, official Pi 1.3.0, 2026-10-19 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It

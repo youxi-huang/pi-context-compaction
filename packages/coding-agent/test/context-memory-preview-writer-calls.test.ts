@@ -9,6 +9,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
 import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
+import { NOTE_SECTIONS, removeNoteEnvelope } from "../src/extensions/context-memory/preview/note-envelope.ts";
 import {
 	type PreviewWriterRegistry,
 	TOOL_CALL_DECLINED,
@@ -621,5 +622,184 @@ describe("preview writer provider-call reservations and settlements", () => {
 		expect(result.usage).toEqual(usage);
 		expect(test.progress[0]).toMatchObject({ writerCalls: 1, usageReports: 0 });
 		expect(test.progress.at(-1)).toMatchObject({ writerCalls: 1, usageReports: 1, usage });
+	});
+});
+
+describe("preview writer note format", () => {
+	const prefix = {
+		systemPrompt: "Synthetic session control",
+		messages: [{ role: "user" as const, content: "Keep port 4317.", timestamp: 1 }],
+		tools: [{ name: "synthetic_tool", description: "Synthetic schema", parameters: { type: "object" } }],
+		sessionId: "session-synthetic",
+	};
+	const without = (value: Record<string, unknown>, key: string) =>
+		Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
+	/** The two answers GPT-6 Luna gave around a complete note. */
+	const typed = (value: MemoryNote = note()) => ({ type: "object", ...value });
+	const schema = (value: MemoryNote = note()) => ({
+		type: "object",
+		properties: value,
+		required: [...NOTE_SECTIONS],
+	});
+	const sessionWriter = (text: string, changes: Partial<WriteMemoryOptions> = {}) =>
+		harness(() => completed(response(text)), {
+			config: { ...DEFAULT_MEMORY_CONFIG, writerEffort: "low" },
+			sessionModel: { ...model, id: "session-model" },
+			prefix,
+			...changes,
+		});
+
+	it("removes the two schema envelopes and returns any other answer as it came", () => {
+		expect(NOTE_SECTIONS).toEqual(["instructions", "failedPaths", "reasons", "state", "nextSteps", "files", "gaps"]);
+		expect(removeNoteEnvelope(typed())).toEqual({ value: note(), envelope: "type" });
+		expect(removeNoteEnvelope(schema())).toEqual({ value: note(), envelope: "schema" });
+		const plain = note();
+		expect(removeNoteEnvelope(plain)).toEqual({ value: plain });
+		expect(removeNoteEnvelope(plain).value).toBe(plain);
+	});
+
+	it.each([
+		["a type beside six sections", () => without(typed(), "gaps")],
+		["a type beside the sections and another key", () => ({ ...typed(), required: [...NOTE_SECTIONS] })],
+		["a type that is not a string", () => ({ ...note(), type: { const: "object" } })],
+		["a schema envelope with another keyword", () => ({ ...schema(), additionalProperties: false })],
+		["a schema envelope without required", () => without(schema(), "required")],
+		[
+			"a schema envelope whose properties lack a section",
+			() => ({ ...schema(), properties: without(note(), "gaps") }),
+		],
+		["a schema envelope around a typed note", () => ({ ...schema(), properties: typed() })],
+		["a schema envelope whose properties are a list", () => ({ ...schema(), properties: [note()] })],
+		["a list of notes", () => [note()]],
+		["null", () => null],
+		["a string", () => JSON.stringify(note())],
+	])("leaves %s unchanged", (_name, make) => {
+		const value = make();
+		const result = removeNoteEnvelope(value);
+		expect(result.value).toBe(value);
+		expect(result).not.toHaveProperty("envelope");
+	});
+
+	it.each([
+		["type", typed],
+		["schema", schema],
+	] as const)("commits a note that arrived in the %s envelope and records the envelope", async (envelope, wrap) => {
+		const test = sessionWriter(JSON.stringify(wrap()));
+		const result = await writeMemory(test.options);
+		expect(result.note).toEqual(note());
+		const [call] = test.progress.at(-1)?.writerCallDetails ?? [];
+		expect(call).toMatchObject({ envelope, noteBytes: Buffer.byteLength(JSON.stringify(note()), "utf8") });
+	});
+
+	it("also removes an envelope from a fixed writer's note", async () => {
+		const test = harness(() => completed(response(JSON.stringify(typed()))));
+		const result = await writeMemory(test.options);
+		expect(result.note).toEqual(note());
+		expect(test.progress.at(-1)?.writerCallDetails[0].envelope).toBe("type");
+	});
+
+	it("records no envelope for a plain note", async () => {
+		const test = sessionWriter(JSON.stringify(note()));
+		await writeMemory(test.options);
+		expect(test.progress.at(-1)?.writerCallDetails[0]).not.toHaveProperty("envelope");
+	});
+
+	it("refuses a near miss as before", async () => {
+		const test = sessionWriter(JSON.stringify({ ...schema(), additionalProperties: false }));
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_INVALID");
+		expect(test.progress.at(-1)?.writerCallDetails[0]).not.toHaveProperty("envelope");
+	});
+
+	it("checks an unwrapped note like any other", async () => {
+		// Sections described as schemas pass the envelope's shape but not the note's.
+		const described = Object.fromEntries(NOTE_SECTIONS.map((section) => [section, { type: "array" }]));
+		const invalid = sessionWriter(JSON.stringify({ type: "object", properties: described, required: [] }));
+		await expect(writeMemory(invalid.options)).rejects.toThrow("CONTEXT_NOTE_INVALID");
+		expect(invalid.progress.at(-1)?.writerCallDetails[0].envelope).toBe("schema");
+		const unscoped = note();
+		unscoped.state[0].sources = ["unknown-entry"];
+		const scope = sessionWriter(JSON.stringify(typed(unscoped)));
+		await expect(writeMemory(scope.options)).rejects.toThrow("CONTEXT_NOTE_SCOPE");
+		expect(scope.progress.at(-1)?.scope).toMatchObject({ missing: 1 });
+	});
+
+	it("removes an envelope from the size repair's answer, which is checked again", async () => {
+		let dispatched = 0;
+		const test = sessionWriter("", { noteTokens: 500 });
+		test.requests.mockImplementation(() => {
+			dispatched++;
+			return completed(response(JSON.stringify(dispatched === 1 ? note("界".repeat(700)) : schema())));
+		});
+		const result = await writeMemory(test.options);
+		expect(result.note).toEqual(note());
+		expect(test.before.map((call) => call.phase)).toEqual(["generate", "repair"]);
+		expect(test.progress.at(-1)?.writerCallDetails.map((call) => call.envelope)).toEqual([undefined, "schema"]);
+	});
+
+	it("asks every note writer for the note itself, not an object matching a schema", async () => {
+		const asks = (text: string | undefined) => {
+			expect(text).toContain(
+				"Return ONLY the memory note itself: one JSON object whose top-level keys are exactly instructions, failedPaths, reasons, state, nextSteps, files, gaps.",
+			);
+			expect(text).toContain('"additionalProperties":false');
+			expect(text).not.toContain("matching this schema");
+			expect(text).not.toContain("complete JSON schema");
+		};
+		const session = sessionWriter(JSON.stringify(note()));
+		await writeMemory(session.options);
+		const closing = session.requests.mock.calls[0][1].messages.at(-1)?.content;
+		asks(typeof closing === "string" ? closing : undefined);
+		let dispatched = 0;
+		const fixed = harness(
+			() => {
+				dispatched++;
+				return completed(response(JSON.stringify(note(dispatched === 1 ? "界".repeat(700) : undefined))));
+			},
+			{ noteTokens: 500 },
+		);
+		await writeMemory(fixed.options);
+		const [generate, repair] = fixed.requests.mock.calls.map((call) => call[1].systemPrompt);
+		asks(generate);
+		asks(repair);
+		expect(repair).toContain("the answer is the whole shortened note");
+	});
+
+	it("sends the session's ID with the session writer's request and its continuation only", async () => {
+		const test = sessionWriter(JSON.stringify(note()));
+		await writeMemory(test.options);
+		expect(test.requests.mock.calls[0][2]?.sessionId).toBe("session-synthetic");
+		const bare = sessionWriter(JSON.stringify(note()), { prefix: { ...prefix, sessionId: undefined } });
+		await writeMemory(bare.options);
+		expect(bare.requests.mock.calls[0][2]).not.toHaveProperty("sessionId");
+		const fixed = harness(undefined, { prefix });
+		await writeMemory(fixed.options);
+		expect(fixed.requests.mock.calls[0][2]).not.toHaveProperty("sessionId");
+	});
+
+	it("sends no session ID with a quotation repair, whose context is its own", async () => {
+		const misquoted = {
+			...note(),
+			state: [{ text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4318" }],
+		};
+		const repair = {
+			repairs: [
+				{
+					section: "state",
+					index: 0,
+					fact: { text: "The synthetic service uses port 4317.", sources: ["source-1"], quote: "port 4317" },
+				},
+			],
+		};
+		let dispatched = 0;
+		const test = sessionWriter("");
+		test.requests.mockImplementation(() =>
+			completed(response(JSON.stringify(dispatched++ === 0 ? misquoted : repair))),
+		);
+		const result = await writeMemory(test.options);
+		expect(result.note.state[0].quote).toBe("port 4317");
+		const [generate, repaired] = test.requests.mock.calls.map((call) => call[2]);
+		expect(generate?.sessionId).toBe("session-synthetic");
+		expect(repaired).not.toHaveProperty("sessionId");
+		expect(repaired?.cacheRetention).toBe("none");
 	});
 });

@@ -8,10 +8,13 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Changed
 
+- The independent preview's session writer sends the session's ID with its request, as Pi does with each of the session's requests. Pi's Codex provider keys its prompt cache on that ID: without it, GPT-6 Luna's writer read 7.1% of its input from cache, against 93.6% on DeepSeek. Providers that need no key ignore it.
+- The independent preview asks its note writers for the note itself rather than for an object matching the note's JSON Schema. Before validation it removes the two schema envelopes GPT-6 Luna returned around complete notes: a string `type` beside exactly the seven sections, and `type`, `properties` and `required` with exactly the seven sections under `properties`. Nothing else is rewritten, every commit check still applies, and `/compaction-status` names a removed envelope under `envelope` in `writerCallDetails`. Answers that are not JSON are refused as before.
 - With arm B off, a fresh independent-preview session no longer offers `context_note`, saving about 1,209 Pi-estimated tokens per request. A branch with an earlier call, saved or refused, activates it on reopen or branch navigation; explicit activations and saved notes remain usable.
 
 ### Maintenance
 
+- The preview bench stops a unit still running after `--unit-minutes`, 10 by default, so one request that never returns cannot hold a run; the unit settles as crashed and a probe it held is scored as blocked. Writer rows and the summary also count the schema envelopes removed from notes.
 - The preview bench measures `openai-codex/gpt-6-luna` on the ChatGPT subscription with `--provider codex`, in writer, probes and smoke modes, under the same request, time and cost limits. In writer mode it records the shape of every Codex response, never its text, which is how the first run traced its refused notes. In Claude Code cloud sessions the access token stays in the environment's network proxy and Pi holds an unsigned placeholder; `docs/context-memory/codex-subscription.md` covers the setup and the renewal every ten days or so.
 
 ## [v0.5.2] — 2026-10-18

@@ -687,6 +687,20 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		},
 	);
 
+	it("blocks a note whose next step has no sources: no checkpoint, history kept, counts in status", async () => {
+		const entries = session.getBranch().length;
+		output = JSON.stringify({ ...note(), nextSteps: [{ text: "Continue checking the service locally." }] });
+		await expect(controller.compact(event(), ctx)).rejects.toThrow("CONTEXT_NOTE_INVALID");
+		// Repair is off in this controller: one writer call, nothing appended, and the session is held.
+		expect(requests).toHaveLength(1);
+		expect(session.getBranch()).toHaveLength(entries);
+		expect(store.inspect(session)).toMatchObject({ state: "blocked", code: "CONTEXT_NOTE_INVALID" });
+		const lastWriter = controller.status(ctx).lastWriter;
+		expect(lastWriter).toMatchObject({ repairUsed: false, schema: { uncited: { nextSteps: 1 }, other: false } });
+		expect(JSON.stringify(lastWriter)).not.toContain("Continue checking");
+		controller.beforeRequest({ messages: [] }, ctx);
+		expect(ctx.abort).toHaveBeenCalledTimes(1);
+	});
 	it("includes the checkpoint itself in the bytes shared with the readiness readback", async () => {
 		const value = await controller.compact(event(), ctx);
 		const entry = saved(session, value);

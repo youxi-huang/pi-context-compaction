@@ -118,8 +118,11 @@ a schema envelope names its shape under `envelope`, `type` or `schema`. For the 
 `CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
 branch (`missing`) and those of entries without readable text (`unreadable`,
 with their kinds under `unreadableKinds`), and how many of either sit in
-`supersedes`; it never names the IDs. Pi maps a level the model does not declare
-to a supported one, so `sent` can differ from `effort`.
+`supersedes`; it never names the IDs. For the first candidate refused on the
+note schema, `schema` counts its facts without sources by section (`uncited`)
+and says whether the note fails the schema for another reason too (`other`);
+it never names the facts. Pi maps a level the model does not declare to a
+supported one, so `sent` can differ from `effort`.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -249,9 +252,20 @@ message contains refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, since a
 misquoted rule is still a rule. Re-citing it or dropping its quote remains
 possible. Since 0.5.1 the quotation repair runs without reasoning, whatever the
 writer's effort: it rebinds at most five quotations, and on DeepSeek it passed
-as often without reasoning as at `high`, at a quarter of the output. `noteRepair` governs this repair and the size repair, and a
-compaction spends at most one of them. A second failure blocks as before. The
-extension never moves a quotation to another entry on its own: text found
+as often without reasoning as at `high`, at a quarter of the output.
+
+Every fact in a note, next steps included, must cite at least one entry. When
+a candidate's only fault against the schema is facts without sources, for at
+most five facts, the writer gets one repair request, also without reasoning,
+that names those facts beside the entries they may cite: the active requests
+and other user messages in full, excerpts of the entries the rest of the note
+cites, and the uncovered entries by their opening words. The answer may add
+sources only, and the whole note is checked again. A fact cannot be withdrawn
+here: most such facts are next steps, and dropping unfinished work to avoid
+citing it would commit a note that lost it silently. `noteRepair` governs
+this repair, the quotation repair and the size repair, and a compaction spends
+at most one of them. A second failure blocks as before. The extension never
+moves a quotation to another entry or supplies a source on its own: text found
 only in an assistant message or a tool output is not a user ruling.
 
 The session writer's request is the session's own system prompt, tools and
@@ -264,7 +278,7 @@ session has already warmed: on DeepSeek, 95 to 97% of the writer's input over
 192 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
 unavailable and the same request continues once. That continuation does not
-spend the size or quotation repair, so a compaction makes at most three writer
+spend the compaction's one repair, so a compaction makes at most three writer
 calls. A second tool call, or one with `noteRepair` off, refuses the note with
 `CONTEXT_WRITER_FAILED`. On DeepSeek about one writer response in twenty called
 a tool.

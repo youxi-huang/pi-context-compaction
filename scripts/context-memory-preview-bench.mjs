@@ -437,6 +437,7 @@ async function worker() {
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			scope: writer.scope ?? null,
+			schema: writer.schema ?? null,
 			quotationRepair: writer.quotationRepair ?? null,
 			toolCalls: writer.toolCallResponses ?? 0,
 			toolCallDeclined: writer.toolCallDeclined ?? false,
@@ -785,8 +786,15 @@ async function parent() {
 						return kinds;
 					}, {}),
 				},
+				// Schema refusals' facts without sources, by section, and the refusals that failed the schema otherwise too.
+				schemaRefusals: {
+					refusals: list.filter((row) => row.schema).length,
+					uncited: Object.fromEntries(NOTE_SECTIONS.map((section) => [section, sum((row) => row.schema?.uncited?.[section])]).filter(([, count]) => count > 0)),
+					other: list.filter((row) => row.schema?.other).length,
+				},
 				repairs: {
 					quotation: list.filter((row) => row.repairKind === "quotation").length,
+					sources: list.filter((row) => row.repairKind === "sources").length,
 					size: list.filter((row) => row.repairKind === "size").length,
 				},
 				toolCallsDeclined: list.filter((row) => row.toolCallDeclined).length,
@@ -835,7 +843,7 @@ async function parent() {
 					spend(result, provider === "deepseek");
 					const score = scoreRepair(repairCase, { committed: result.ok === true, code: result.code ?? (result.crashed ? "CRASHED" : null), note: result.committedNote }, branch);
 					scores.push(score);
-					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, scope: result.scope ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
+					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
 					rows.push(row);
 					record("repairs.jsonl", row);
 				};
@@ -902,7 +910,7 @@ async function parent() {
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});

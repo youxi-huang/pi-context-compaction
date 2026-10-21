@@ -107,23 +107,40 @@ function writeCodexPlaceholder(agentDir, accountId) {
 }
 
 /** The structure of a parsed answer two levels deep: keys, and for each value its kind and length. Never its text. */
+/** One array item's keys and kinds, flagging what the note schema refuses: empty strings, long strings, repeated IDs. */
+function itemShape(item) {
+	if (Array.isArray(item)) return `array:${item.length}${new Set(item.map(String)).size < item.length ? ":repeated" : ""}`;
+	if (typeof item === "string") return !item.length ? "string:empty" : item.length > 4000 ? "string:>4000" : item.length > 1000 ? "string:>1000" : "string";
+	if (!item || typeof item !== "object") return typeof item;
+	return `{${Object.keys(item)
+		.sort()
+		.map((key) => `${key}:${itemShape(item[key])}`)
+		.join(",")}}`;
+}
+
 function jsonShape(value, depth) {
-	if (Array.isArray(value)) return `array:${value.length}`;
+	if (Array.isArray(value)) {
+		if (!depth || !value.length) return `array:${value.length}`;
+		const items = {};
+		for (const item of value) items[itemShape(item)] = (items[itemShape(item)] ?? 0) + 1;
+		return { length: value.length, items };
+	}
 	if (!value || typeof value !== "object") return typeof value;
 	if (!depth) return `object:${Object.keys(value).length}`;
 	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonShape(item, depth - 1)]));
 }
 
 /**
- * Codex answers in output items: reasoning, then one or more messages, each in a phase such as `commentary` or
- * `final_answer`. As each response streams past Pi's own parser, records its items, and for a message its phase and
- * the shape of its JSON, or its length when it does not parse. Never the text itself.
+ * The Responses API answers in output items: reasoning, then one or more messages, on Codex each in a phase such as
+ * `commentary` or `final_answer`. As each response from a URL ending in `path` streams past Pi's own parser, records
+ * its items, and for a message its phase and the shape of its JSON, or its length when it does not parse. Never the
+ * text itself.
  */
-function observeCodexItems(responses) {
+function observeResponseItems(responses, path) {
 	const original = globalThis.fetch;
 	globalThis.fetch = async (input, init) => {
 		const response = await original(input, init);
-		if (!String(input instanceof Request ? input.url : input).endsWith("/codex/responses") || !response.body) return response;
+		if (!String(input instanceof Request ? input.url : input).endsWith(path) || !response.body) return response;
 		const items = [];
 		responses.push(items);
 		const decoder = new TextDecoder();
@@ -345,7 +362,7 @@ async function worker() {
 
 	const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
 	const measured = MEASURED[action.provider];
-	const codexResponses = [];
+	const responseItems = [];
 	let model;
 	if (action.provider === "loopback") {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
@@ -365,7 +382,8 @@ async function worker() {
 		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
 		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
 		dispatcher.configureHttpDispatcher();
-		if (action.provider === "codex") observeCodexItems(codexResponses);
+		if (action.provider === "codex") observeResponseItems(responseItems, "/codex/responses");
+		if (action.provider === "relay") observeResponseItems(responseItems, "/responses");
 		// The catalog's own model, with its compatibility settings and level map; only the address moves to the relay.
 		if (action.provider === "relay") runtime.registerProvider(measured.provider, { baseUrl: action.baseUrl });
 		model = runtime.getModel(measured.provider, measured.id);
@@ -424,7 +442,8 @@ async function worker() {
 			toolCallDeclined: writer.toolCallDeclined ?? false,
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
-			...(action.provider === "codex" ? { codexResponses } : {}),
+			...(action.provider === "codex" ? { codexResponses: responseItems } : {}),
+			...(action.provider === "relay" ? { relayResponses: responseItems } : {}),
 		};
 		if (result.ok) {
 			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;

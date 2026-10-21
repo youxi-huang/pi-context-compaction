@@ -97,14 +97,15 @@ modes; `repair` answers the writer's first call in Chat Completions, which Codex
 secret and the placeholder that [codex-subscription.md](../../docs/context-memory/codex-subscription.md) sets up, reads
 only the account ID from that placeholder, and gives each unit its own placeholder and the SSE transport. The same three
 limits apply. Writer rows add `codexResponses`: for every response, its output items, and for each message its phase
-and the shape of its JSON (keys, kinds and lengths) or its length when it does not parse, never its text. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
+and the shape of its JSON or its length when it does not parse, never its text. The shape names each key's kind and length, and for each section the keys and kinds of its items with their counts, marking empty strings, strings over 1,000 or 4,000 characters and repeated IDs, the cases the note schema refuses. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
 request draws on its usage allowance.
 
 `--provider relay --base-url https://.../v1` measures Pi's catalog model `openai/gpt-6-luna` through an
 OpenAI-compatible relay, in `smoke`, `writer` and `probes` modes. Pi keeps the model's compatibility settings and level
 map and speaks the Responses API, so the session writer's `prompt_cache_key` reaches the relay; only the address
 moves. The environment's network proxy supplies the relay's key, and Pi receives a placeholder. The same three limits
-apply, and `summary.json` names the relay's host under `endpoint`. A relay may add its own instructions and reports
+apply, `summary.json` names the relay's host under `endpoint`, and writer rows add `relayResponses`, shaped as
+`codexResponses`. A relay may add its own instructions and reports
 usage of its own: compare refusals, notes and probe scores with other runs, but not its cache share or cost, which
 are catalog estimates over the relay's counts.
 

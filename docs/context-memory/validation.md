@@ -1,5 +1,90 @@
 # Validation record
 
+## Sources-repair candidate beside v0.5.3 on GPT-6 Luna through a relay, official Pi 1.3.0, 2026-10-21 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It repeats the Luna half of the
+[run earlier that day](#sources-repair-candidate-beside-v053-through-a-relay-deepseek-v41-flash-and-gpt-6-luna-official-pi-130-2026-10-21-utc),
+whose relay failures left too few answers to judge. The release build is v0.5.3, `stock-preview+src.cb5dcce5a76c043e`
+rebuilt from `5cde2de`. The candidate is `stock-preview+src.78a897a9bfecf24d`, built from `4f0c265`, whose preview
+source is that of `5487145`: the earlier candidate plus the fix that reads the effort a `configuration_update` item
+carries, which changes what `sent` reports, not what is sent. It passed `node scripts/context-memory-ops.mjs ci` on
+`4f0c265`, exit 0, before the first request. Every run used the bench of `c4fec95` on official Pi 1.3.0, Linux
+x86_64, and each round started both builds together with the same settings.
+
+Luna ran as Pi's catalog model `openai/gpt-6-luna` at `max` through the same third-party relay: eight cuts, four
+attempts each, `--cache warm`, three units at a time per build. The maintainer set the limits before the first
+request: 260 requests, 90 minutes and $6 in all, and per run 64 requests, 40 minutes and $1.49. When the relay
+failed the second round, the maintainer raised the requests to 360 for a replacement round. No run reached a limit
+and no attempt went unstarted.
+
+| Round, UTC | v0.5.3 release build | Candidate |
+| --- | --- | --- |
+| 1, from 22:52 | 18 answered, 14 relay failures | 18 answered, 14 relay failures |
+| 2, from 23:07 | none answered | none answered |
+| 3, from 23:27 | 25 answered, 7 relay failures | 22 answered, 10 relay failures |
+
+In the second round every request after the first warm-up ended in an error after 1 to 41 s with no output, in both
+builds. A request at 23:11 got `503 Service temporarily unavailable`; one at 23:27 succeeded, and the third round
+started then. The second round is left out below.
+
+### Writer bench, rounds 1 and 3
+
+| | v0.5.3 release build | Candidate |
+| --- | ---: | ---: |
+| Attempts | 32 and 32 | 32 and 32 |
+| Answered by the relay | 18 and 25 | 18 and 22 |
+| Committed | 12 and 16 | 18 and 22 |
+| `CONTEXT_NOTE_INVALID` | 6 and 9 | none |
+| Relay failures (`CONTEXT_WRITER_FAILED`) | 14 and 7 | 14 and 10 |
+| Sources repairs | none possible | none |
+| First passes with a failed quotation | none | none |
+| Median pause of committed attempts | 67 s and 56 s | 79 s and 61 s |
+| Note size, median, against the bytes it condenses | 4,264 and 4,212 bytes, 5.6% and 5.8% | 4,182 and 4,050 bytes, 5.2% and 5.0% |
+| Gold answers cited, first asked at the cut and carried | 225 of 232, 173 of 192 | 332 of 340, 220 of 255 |
+
+Each of the release build's 15 refused answers was JSON with exactly the seven sections, in one `final_answer`
+message after reasoning. In each, every `nextSteps` item held `text` alone, one to five per note, and the other fact
+sections cited their sources: the refusal the 0.5.3 run traced. The release build records no schema counts, so this
+rests on the recorded response shapes. It committed nothing at P1's second cut, where it refused all seven answers.
+
+The candidate committed all 40 answered attempts on its first writer call. No answer left a fact without sources,
+and each `nextSteps` item cited one to seven entries, so the sources repair never ran: on Luna, as on DeepSeek, the
+run exercises the instruction, not the repair. Two runs per build separate 15 refusals in 43 answers from none in
+40 (Fisher's exact test, one-sided, p = 0.00001). The release build refused more often than in its acceptance
+bench, 15 of 43 answers against 9 of 56; here both builds met the same relay at the same time.
+
+Per cut the two builds cited gold answers alike. Pooled, the candidate carried fewer earlier answers, 86% against
+90%, because more of its notes fall at P1's third cut, where both builds carry about 70%. The pauses are the relay's:
+the writer call took 14 to 163 s and returned 2,113 to 10,970 output tokens by the relay's counts, and outside it the
+extension spent 25 to 73 ms per committed compaction, median 34 to 38 ms, in both builds. Of the 45 relay failures in
+rounds 1 and 3, 40 ended in an error after 7 to 10 s with no output and five after 14 to 63 s, in both builds alike.
+
+The candidate records `sent.effort: max` and `sent.fixedEffort: medium` for every writer call; the release build,
+which reads only the fixed field, records `medium` for the same request. Whether the relay applies the
+`configuration_update` item is still not known.
+
+The bench used 288 requests: 1 smoke, 82 in round 1, 122 in round 2, where each failed warm-up was tried four times,
+and 83 in round 3. Five more went outside the bench, three to check the route before the first and two to check the
+relay after the second round: 293 of 360. The bench's catalog cost over the relay's counts was $0.35 of $6, over
+rounds of 15.0, 3.9 and 16.3 minutes. The relay's charge was not read.
+
+### Gate results
+
+| Criterion of the [0.5.3 plan](roadmap.md) | Result |
+| --- | --- |
+| Luna at `max` commits at least nine notes in ten | Met on the answers, 40 of 40. Not on the attempts, 40 of 64, the other 24 relay failures |
+| Luna reads most of its writer input from cache | Not judged: the relay's counts are scaled |
+| DeepSeek commits as often as the release build, same day | Not repeated. Earlier that day the candidate of `01830f2`, whose requests this one sends unchanged, committed as often as v0.5.3 on a self-hosted DeepSeek V4.1 Flash |
+| Probes on the committed notes show no loss of recovery | Not run |
+
+### What this shows
+
+On Luna through this relay, asking every fact for its sources removed the refusals the v0.5.3 release build still
+has: 40 of 40 answers committed against 28 of 43, with no repair needed and notes slightly smaller. Whether relay
+failures count against the criterion, and whether probes run before a release, wait for the maintainer. One relay,
+one evening and synthetic sessions; the relay adds failures of its own and hides its true usage. Session copies,
+notes and answers stayed outside the repository.
+
 ## Sources-repair candidate beside v0.5.3 through a relay, DeepSeek V4.1 Flash and GPT-6 Luna, official Pi 1.3.0, 2026-10-21 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It compares the v0.5.3 release

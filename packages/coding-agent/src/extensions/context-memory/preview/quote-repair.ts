@@ -12,7 +12,7 @@ const EXCERPT_CHARS = 1600;
 const CITED_EXCERPTS = 3;
 
 // Spelled out: a mapped array would lose the literal types.
-const section = Type.Union([
+export const sectionSchema = Type.Union([
 	Type.Literal("instructions"),
 	Type.Literal("failedPaths"),
 	Type.Literal("reasons"),
@@ -25,7 +25,7 @@ export const quoteRepairSchema = Type.Object(
 		repairs: Type.Array(
 			Type.Object(
 				{
-					section,
+					section: sectionSchema,
 					index: Type.Integer({ minimum: 0 }),
 					fact: Type.Union([noteSchema.properties.state.items, Type.Null()]),
 				},

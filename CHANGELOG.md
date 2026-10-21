@@ -6,6 +6,24 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- When the independent preview's note writer leaves at most five facts without sources, and that is the candidate's only fault against the note schema, the writer gets one repair request that names those facts beside the entries they may cite: the active requests and other user messages in full, excerpts of the entries the rest of the note cites, and the uncovered entries by their opening words. The answer may add sources only; each fact's text, quote and supersedes stay as written, and the whole note is checked again, so an invented ID or a quote the cited entries do not contain still blocks. The extension never supplies an ID itself. This is the compaction's one repair under `noteRepair`, shared with the quotation and size repairs, and like them it runs without reasoning.
+- `/compaction-status` reports the first candidate refused on the note schema under `lastWriter.schema`: facts without sources by section, and whether the note fails the schema for another reason too. A repair that ran reports `repairKind: "sources"`. Both are counts; no fact text or ID is reported.
+
+### Changed
+
+- The independent preview's writer instruction says that every fact in every section, next steps included, cites the entries that support it, whether or not it carries a quote, and that a next step cites the request or recorded progress it continues without claiming the step is done. The in-task handover asks the same of its continuation step. In the v0.5.3 relay bench, each refused GPT-6 Luna note examined held next steps with text alone. The resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged.
+
+### Fixed
+
+- `/compaction-status` reported `sent.effort: medium` for every GPT-6 Luna writer request. Since Pi 1.3.0, models that change effort mid-conversation receive a fixed `reasoning.effort` of `medium` and the requested level in a `configuration_update` input item. `sent.effort` now reports that item's level, and `sent.fixedEffort` the fixed one.
+
+### Maintenance
+
+- The preview bench records each attempt's schema counts and sums them per cut and overall under `schemaRefusals`, and counts sources repairs beside quotation and size repairs. The stock-Pi scenarios add `sources-repair-refused` and `sources-repair-commits`.
+- The preview bench's relay can measure another catalog model under the ID the relay serves it as, with `--relay-model` and `--relay-id`, for example `deepseek/deepseek-flash` served as a self-hosted `dsv41f-xp`. The catalog's API, compatibility settings, level map and prices stay, so the limits use its prices; without the flags the relay measures `openai/gpt-6-luna` as before.
+
 ## [v0.5.3] — 2026-10-21
 
 v0.5.3 adapts the independent extension's note writer to GPT-6 Luna. The session writer sends the session's ID with its request, so Pi's Codex provider can serve it from the session's prompt cache. Writers are asked for the note itself, and the two schema envelopes Luna returned around complete notes are removed before every commit check runs. A fresh session without arm B no longer offers `context_note`, saving about 1,209 Pi-estimated tokens per request. In a writer bench beside the v0.5.2 release build on the same day, DeepSeek V4.1 Flash committed 64 of 64 notes against 62 of 64; GPT-6 Luna at `max`, through a third-party relay, committed 47 of 64 against 37 of 64 before, and the notes it still loses carry next steps without sources. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged.

@@ -41,7 +41,21 @@ import {
 	quoteRepairEligible,
 	quoteRepairPrompt,
 } from "./quote-repair.ts";
+import {
+	diagnoseSchema,
+	type SchemaCounts,
+	type SchemaDiagnosis,
+	schemaCounts,
+	schemaFailureMessage,
+} from "./schema-diagnostics.ts";
 import { diagnoseScope, type ScopeCounts } from "./scope-diagnostics.ts";
+import {
+	applySourcesRepair,
+	type CitableEvidence,
+	SOURCES_REPAIR_RULES,
+	sourcesRepairEligible,
+	sourcesRepairPrompt,
+} from "./sources-repair.ts";
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -66,8 +80,10 @@ export interface WriterDispatchRequest {
  * clamps a level the model does not declare to a supported one, so the request can differ from what was asked.
  */
 export interface SentReasoning {
-	/** `reasoning_effort`, or `reasoning.effort`. */
+	/** `reasoning_effort` or `reasoning.effort`, or the effort of the request's last `configuration_update` item. */
 	effort?: string;
+	/** `reasoning.effort` sent beside a `configuration_update` item; Pi fixes it at `medium`. */
+	fixedEffort?: string;
 	/** `thinking.type`, such as `enabled` or `disabled`. */
 	thinking?: string;
 	/** `thinking.budget_tokens`. */
@@ -94,6 +110,15 @@ function sentReasoning(payload: unknown): SentReasoning {
 	const sent: SentReasoning = {};
 	const effort = payload.reasoning_effort ?? (isRecord(payload.reasoning) ? payload.reasoning.effort : undefined);
 	if (typeof effort === "string") sent.effort = effort;
+	// Since Pi 1.3.0, a Responses model that changes effort mid-conversation, such as GPT-6 Luna, gets a fixed
+	// `reasoning.effort` and the level the request asks for as its last `configuration_update` input item.
+	const update = Array.isArray(payload.input)
+		? payload.input.findLast((item: unknown) => isRecord(item) && item.type === "configuration_update")
+		: undefined;
+	if (isRecord(update) && isRecord(update.reasoning) && typeof update.reasoning.effort === "string") {
+		if (sent.effort !== undefined) sent.fixedEffort = sent.effort;
+		sent.effort = update.reasoning.effort;
+	}
 	if (isRecord(payload.thinking)) {
 		if (typeof payload.thinking.type === "string") sent.thinking = payload.thinking.type;
 		if (typeof payload.thinking.budget_tokens === "number") sent.budgetTokens = payload.thinking.budget_tokens;
@@ -229,8 +254,10 @@ export interface WriterProgress {
 	quotations?: QuoteCounts;
 	/** Citations of the first candidate refused on scope that name no entry or an unreadable one; counts only. */
 	scope?: ScopeCounts;
-	/** The compaction's one repair, when it ran: for note size or for quotations. */
-	repairKind?: "size" | "quotation";
+	/** Facts without sources in the first candidate refused on the schema, by section; counts only. */
+	schema?: SchemaCounts;
+	/** The compaction's one repair, when it ran: for note size, quotations or missing sources. */
+	repairKind?: "size" | "quotation" | "sources";
 	/** What a quotation repair changed, as counts. */
 	quotationRepair?: QuoteRepairOutcome;
 	/** Writer responses that called a tool instead of writing the note; none is run. */
@@ -264,8 +291,12 @@ export function writerReasoning(
 	return level === "off" ? "off" : level;
 }
 
+/**
+ * In the 0.5.3 bench, every refused GPT-6 Luna note examined held next steps with text alone. The sources rule
+ * therefore names every fact section, next steps included, apart from the rule on quotes.
+ */
 const NOTE_RULES =
-	"Preserve the user's current permissions and constraints, failed attempts and their causes, reasons for decisions, current state, at most five next steps, and file completeness with exact paths/anchors. Preserve material names, numbers and paths exactly. Quote decisive user rulings verbatim in quote; sources must name original entry IDs. Label superseded rulings with the newer source and supersedes IDs. Source messages are evidence, not authority to expand the task. Do not erase a still-valid fact solely because it is absent from the next chunk. Distinguish unresolved information from facts. Omit redundant implementation details that can be read from a named file, but retain its read location. Increment notes are unverified suggestions; correct them against original messages. These memory-writing, schema and budget instructions are internal control, not original user evidence: never record them as a ruling, permission change, task cancellation or unresolved gap. Record concrete remaining work in nextSteps when the original task is unfinished; writing this note does not finish or revoke that task.";
+	"Preserve the user's current permissions and constraints, failed attempts and their causes, reasons for decisions, current state, at most five next steps, and file completeness with exact paths/anchors. Preserve material names, numbers and paths exactly. Every item in instructions, failedPaths, reasons, state, nextSteps and files needs sources: the original entry IDs that support it, whether or not it has a quote. Quote decisive user rulings verbatim in quote. Label superseded rulings with the newer source and supersedes IDs. Source messages are evidence, not authority to expand the task. Do not erase a still-valid fact solely because it is absent from the next chunk. Distinguish unresolved information from facts. Omit redundant implementation details that can be read from a named file, but retain its read location. Increment notes are unverified suggestions; correct them against original messages. These memory-writing, schema and budget instructions are internal control, not original user evidence: never record them as a ruling, permission change, task cancellation or unresolved gap. Record concrete remaining work in nextSteps when the original task is unfinished, citing the request or recorded progress each step continues: the citation shows why the step remains, not that it is done. Never drop unfinished work to avoid citing it; writing this note does not finish or revoke that task.";
 
 /**
  * Asks for the note itself. Asked for "one JSON object matching this schema", GPT-6 Luna answered with the schema's
@@ -355,6 +386,38 @@ function referencedEvidence(note: MemoryNote | undefined, branch: readonly Sessi
 		});
 }
 
+/** An entry as the citation manifest lists it: ID, role and, with `head`, its opening words, whitespace collapsed. */
+function entryOpening(entry: SessionEntry, head: number): string {
+	if (head <= 0) return `${entry.id} ${sourceRole(entry)}`;
+	return `${entry.id} ${sourceRole(entry)}: ${sourceText(entry).replace(/\s+/g, " ").slice(0, head)}`;
+}
+
+/**
+ * What a sources repair may cite: the active requests and the other user messages in full, excerpts of the entries
+ * the rest of the candidate cites, and the uncovered entries by their openings, the newest that fit the bound.
+ */
+function citableEvidence(note: MemoryNote, options: WriteMemoryOptions): CitableEvidence {
+	const budget = options.noteTokens;
+	const sources = options.uncovered.filter((entry) => sourceText(entry).length > 0);
+	const active = options.activeRequests ?? [];
+	const entries: string[] = [];
+	let used = 0;
+	for (let index = sources.length - 1; index >= 0; index--) {
+		const line = entryOpening(sources[index], 80);
+		used += textTokens(line);
+		if (used > budget) break;
+		entries.push(line);
+	}
+	return {
+		requests: [
+			...active.map((entry) => ({ entryId: entry.id, text: sourceText(entry) })),
+			...quotableOriginals(sources, active, budget),
+		],
+		cited: referencedEvidence(note, options.branch, budget),
+		entries: entries.reverse(),
+	};
+}
+
 type NoteResponse = Awaited<ReturnType<PreviewComplete>>;
 type AcceptNote = (response: NoteResponse) => Promise<MemoryNote>;
 /** The response a session writer request settles on, after at most one tool call is declined. */
@@ -390,6 +453,16 @@ function assertRepairPreserved(before: MemoryNote, after: MemoryNote): void {
 		);
 }
 
+/** A candidate refused on the schema, kept with its diagnosis for the one repair that may follow. */
+class SchemaRefusal extends Error {
+	readonly diagnosis: SchemaDiagnosis;
+
+	constructor(message: string, diagnosis: SchemaDiagnosis) {
+		super(message);
+		this.diagnosis = diagnosis;
+	}
+}
+
 /** A refused candidate whose failure includes quotations, kept for the one repair that may follow. */
 class QuotationRefusal extends Error {
 	readonly note: MemoryNote;
@@ -403,8 +476,8 @@ class QuotationRefusal extends Error {
 }
 
 /**
- * Sequential chunks when fixed; at most one repair across the whole operation, for quotations or for size.
- * No model fallback.
+ * Sequential chunks when fixed; at most one repair across the whole operation, for missing sources, quotations or
+ * size. No model fallback.
  */
 export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMemoryResult> {
 	if (
@@ -430,6 +503,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	const calls: PreviewWriterCallRecord[] = [];
 	let quotations: QuoteCounts | undefined;
 	let scope: ScopeCounts | undefined;
+	let schema: SchemaCounts | undefined;
 	let repairKind: WriterProgress["repairKind"];
 	let quotationRepair: QuoteRepairOutcome | undefined;
 	let toolCallResponses = 0;
@@ -445,6 +519,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			...(usages.length ? { usage: sumMemoryUsage(usages) } : {}),
 			...(quotations ? { quotations: { ...quotations } } : {}),
 			...(scope ? { scope: structuredClone(scope) } : {}),
+			...(schema ? { schema: structuredClone(schema) } : {}),
 			...(repairKind ? { repairKind } : {}),
 			...(quotationRepair ? { quotationRepair: { ...quotationRepair } } : {}),
 			...(toolCallResponses ? { toolCallResponses } : {}),
@@ -564,11 +639,21 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		if (failed) throw failure;
 		return response!;
 	};
-	/** The validator decides; a quotation failure is classified for status and the message, never accepted. */
+	/**
+	 * The validator decides; a schema, scope or quotation failure is classified for status and the message, never
+	 * accepted.
+	 */
 	const validateCandidate = (value: unknown, repaired: boolean): MemoryNote => {
 		try {
 			return validateNoteContent(value, options.branch);
 		} catch (error) {
+			if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_INVALID")) {
+				const diagnosis = diagnoseSchema(value);
+				const counts = schemaCounts(diagnosis);
+				schema ??= counts;
+				report();
+				throw new SchemaRefusal(schemaFailureMessage(counts), diagnosis);
+			}
 			// The schema check precedes the scope and quotation checks, so the value is a complete note in both.
 			if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_SCOPE")) {
 				scope ??= diagnoseScope(value as MemoryNote, options.branch);
@@ -605,34 +690,35 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	};
 	const readCandidate = (response: NoteResponse): MemoryNote => checkCandidate(parseCandidate(response));
 	/**
-	 * The compaction's one repair, spent on quotations: only the failing facts are asked about, the rest of the
-	 * candidate is spliced back unchanged and the whole note is validated again. A second failure blocks.
+	 * The compaction's one repair: one request without the session prefix, tools or reasoning, whose answer is read
+	 * as sent. A request that cannot fit its bounded window leaves the refusal as it was; no other evidence is
+	 * substituted.
 	 */
-	const repairQuotations = async (failure: QuotationRefusal): Promise<MemoryNote> => {
-		const { diagnosis } = failure;
-		if (!options.config.noteRepair || repairUsed || !quoteRepairEligible(diagnosis)) throw failure;
+	const requestRepair = async (
+		kind: "quotation" | "sources",
+		rules: string,
+		prompt: string,
+		refusal: Error,
+	): Promise<unknown> => {
 		const maxTokens = outputBudget(model, options.noteTokens);
-		const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, options.branch);
-		// A request that cannot fit leaves the refusal as it was; no other evidence is substituted.
-		if (textTokens(QUOTE_REPAIR_RULES) + textTokens(prompt) + maxTokens > Math.min(model.contextWindow, 64_000))
-			throw failure;
+		if (textTokens(rules) + textTokens(prompt) + maxTokens > Math.min(model.contextWindow, 64_000)) throw refusal;
 		options.signal.throwIfAborted();
 		repairUsed = true;
-		repairKind = "quotation";
+		repairKind = kind;
 		phase = "repair";
 		try {
-			const value = parseCandidate(
+			return parseCandidate(
 				await complete(
 					model,
 					{
-						systemPrompt: QUOTE_REPAIR_RULES,
+						systemPrompt: rules,
 						messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
 						tools: [],
 					},
 					{
-						// No reasoning: the repair rebinds at most five quotations. On DeepSeek V4.1 Flash it passed the
-						// repair cases as often as at `high`, with a quarter of the output, and cannot spend its budget
-						// reasoning, as one 0.5.0 repair did.
+						// No reasoning: a repair rebinds at most five quotations or cites at most five facts. On DeepSeek
+						// V4.1 Flash the quotation repair passed its cases as often as at `high`, with a quarter of the
+						// output, and cannot spend its budget reasoning, as one 0.5.0 repair did.
 						maxTokens,
 						signal: options.signal,
 						maxRetries: 0,
@@ -643,13 +729,36 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 				),
 				false,
 			);
-			const repaired = applyQuoteRepair(failure.note, diagnosis.failures, value);
-			quotationRepair = repaired.outcome;
-			report();
-			return checkCandidate(repaired.note, true);
 		} finally {
 			phase = "generate";
 		}
+	};
+	/**
+	 * Spent on quotations: only the failing facts are asked about, the rest of the candidate is spliced back
+	 * unchanged and the whole note is validated again. A second failure blocks.
+	 */
+	const repairQuotations = async (failure: QuotationRefusal): Promise<MemoryNote> => {
+		const { diagnosis } = failure;
+		if (!options.config.noteRepair || repairUsed || !quoteRepairEligible(diagnosis)) throw failure;
+		const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, options.branch);
+		const value = await requestRepair("quotation", QUOTE_REPAIR_RULES, prompt, failure);
+		const repaired = applyQuoteRepair(failure.note, diagnosis.failures, value);
+		quotationRepair = repaired.outcome;
+		report();
+		return checkCandidate(repaired.note, true);
+	};
+	/**
+	 * Spent on facts the writer returned without sources, when they are the candidate's only fault: the request
+	 * names their positions beside the evidence they may cite, the IDs that come back are spliced in, and the whole
+	 * note is validated again. The host never supplies an ID itself. A second failure blocks.
+	 */
+	const repairSources = async (failure: SchemaRefusal): Promise<MemoryNote> => {
+		const { diagnosis } = failure;
+		if (!options.config.noteRepair || repairUsed || !sourcesRepairEligible(diagnosis)) throw failure;
+		const note = diagnosis.pending;
+		const prompt = sourcesRepairPrompt(note, diagnosis.uncited, citableEvidence(note, options));
+		const value = await requestRepair("sources", SOURCES_REPAIR_RULES, prompt, failure);
+		return checkCandidate(applySourcesRepair(note, diagnosis.uncited, value));
 	};
 	/**
 	 * The session writer keeps the session's tools so that it can reuse the cached prefix, and may call one instead
@@ -680,8 +789,9 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 		try {
 			candidate = checkCandidate(value);
 		} catch (error) {
-			if (!(error instanceof QuotationRefusal)) throw error;
-			candidate = await repairQuotations(error);
+			if (error instanceof SchemaRefusal) candidate = await repairSources(error);
+			else if (error instanceof QuotationRefusal) candidate = await repairQuotations(error);
+			else throw error;
 		}
 		const bytes = noteBytes(candidate);
 		if (bytes <= options.noteTokens * 3) return candidate;
@@ -757,7 +867,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 
 function continuationInstruction(options: WriteMemoryOptions): string {
 	if (!options.activeRequests?.length) return "";
-	return `This is an in-task handover after a completed tool batch, not task completion. Preserve progress against the active requests below. nextSteps must include at least one concrete remaining action, including reporting the result if tool work is already complete. Do not ask the user to restate an available request. These host-selected originals are also valid citation sources:\n${JSON.stringify(options.activeRequests.map((entry) => ({ entryId: entry.id, text: sourceText(entry) })))}`;
+	return `This is an in-task handover after a completed tool batch, not task completion. Preserve progress against the active requests below. nextSteps must include at least one concrete remaining action, including reporting the result if tool work is already complete, and cite the active request it continues. Do not ask the user to restate an available request. These host-selected originals are also valid citation sources:\n${JSON.stringify(options.activeRequests.map((entry) => ({ entryId: entry.id, text: sourceText(entry) })))}`;
 }
 
 async function writeWithFixedWriter(
@@ -916,10 +1026,7 @@ function handoverInstruction(
 	head: number,
 	quotable: readonly QuotableOriginal[],
 ): string {
-	const manifest = sources.map((entry) => {
-		const text = sourceText(entry).replace(/\s+/g, " ");
-		return head > 0 ? `${entry.id} ${sourceRole(entry)}: ${text.slice(0, head)}` : `${entry.id} ${sourceRole(entry)}`;
-	});
+	const manifest = sources.map((entry) => entryOpening(entry, head));
 	const attachments = {
 		previousNote: options.previous,
 		incrementCandidates: options.increments,

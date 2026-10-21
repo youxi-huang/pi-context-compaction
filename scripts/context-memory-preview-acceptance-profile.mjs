@@ -40,7 +40,7 @@ const SCENARIOS = [
 	scenario("protected-then-native", "fixture-protected fixture-native-checkpoint stays-blocked one-notice-per-input notice-points-to-new-session"),
 	scenario("in-memory-session", "prompt-sent", "prompt-sent"),
 	scenario("other-pi-version", "fresh-session-usable no-marker", "prompt-sent"),
-	scenario("failed-compaction-notices", "rejected-and-blocked quote-repair-refused one-notice-for-failure one-notice-per-blocked-input explicit-retry-recovers quote-repair-commits"),
+	scenario("failed-compaction-notices", "rejected-and-blocked quote-repair-refused one-notice-for-failure one-notice-per-blocked-input explicit-retry-recovers quote-repair-commits sources-repair-refused sources-repair-commits"),
 	scenario("work-notes", "guideline forged-notes-refused note-saved notes-commit disk-confirmed user-words note-claim-stays-data typed-list correction-in-context restart section-tamper-blocks explicit-recovery same-id-edit-blocks"),
 	scenario("prepared-candidate", "no-note-guideline prepared branch-switch-drops-candidate sync-on-new-branch unknown-usage cancelled-preparation journal-survives-restart"),
 	scenario("long-session-overhead", "compactions-succeed per-request-budget bounded-growth"),

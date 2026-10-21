@@ -17,7 +17,13 @@ import {
 	quoteFeedback,
 } from "../src/extensions/context-memory/preview/quote-diagnostics.ts";
 import { applyQuoteRepair } from "../src/extensions/context-memory/preview/quote-repair.ts";
+import {
+	diagnoseSchema,
+	schemaCounts,
+	schemaFailureMessage,
+} from "../src/extensions/context-memory/preview/schema-diagnostics.ts";
 import { diagnoseScope } from "../src/extensions/context-memory/preview/scope-diagnostics.ts";
+import { applySourcesRepair, SOURCES_REPAIR_RULES } from "../src/extensions/context-memory/preview/sources-repair.ts";
 import { validateWorkNote } from "../src/extensions/context-memory/preview/work-notes.ts";
 import {
 	type PreviewWriterRegistry,
@@ -475,6 +481,45 @@ describe("preview writer quotation repair", () => {
 		expect(tools[1]).toEqual({ choice: undefined, count: 0 });
 	});
 
+	it("reports the level a configuration_update item carries, not the fixed reasoning.effort beside it", async () => {
+		// What Pi 1.3.0 builds for GPT-6 Luna: a fixed `reasoning.effort`, an item before each earlier assistant
+		// message with that turn's level, and a last item with the level this request asks for.
+		const reasoning = { ...model, reasoning: true };
+		const payloads = [
+			{
+				reasoning: { effort: "medium" },
+				max_output_tokens: 4096,
+				input: [
+					{ role: "user", content: "not recorded" },
+					{ type: "configuration_update", reasoning: { effort: "low" } },
+					{ role: "assistant", content: "not recorded" },
+					{ type: "configuration_update", reasoning: { effort: "max" } },
+				],
+			},
+			{ reasoning: { effort: "high" }, max_output_tokens: 4096, input: [{ role: "user", content: "not recorded" }] },
+		];
+		const sent = [];
+		for (const payload of payloads) {
+			const test = quoteHarness([], {
+				registry: {
+					find: () => reasoning,
+					hasConfiguredAuth: () => true,
+					streamSimple: (_model, _context, options) => {
+						void options?.onPayload?.(payload, reasoning);
+						return stream(response(note({})));
+					},
+				},
+			});
+			await writeMemory(test.options);
+			expect(JSON.stringify(test.progress)).not.toContain("not recorded");
+			sent.push(test.progress.at(-1)?.writerCallDetails[0].sent);
+		}
+		expect(sent).toEqual([
+			{ effort: "max", fixedEffort: "medium", maxTokens: 4096 },
+			{ effort: "high", maxTokens: 4096 },
+		]);
+	});
+
 	it("requires one answer for each failing fact and nothing else", () => {
 		const failures = diagnoseQuotes(misattributed(), branch).failures;
 		const fact = { text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." };
@@ -697,5 +742,304 @@ describe("preview writer scope diagnostics", () => {
 		});
 		expect(last?.repairUsed).toBe(false);
 		expect(JSON.stringify(last)).not.toContain("invented");
+	});
+});
+
+/** A note whose next steps are listed with text alone, as GPT-6 Luna returned them in the 0.5.3 bench. */
+function uncited(steps: Record<string, unknown>[] = [{ text: "Report the threshold." }]): Record<string, unknown> {
+	return { ...note({}), nextSteps: steps };
+}
+
+function sourcesOf(sources: string[], section = "nextSteps", index = 0) {
+	return { section, index, sources };
+}
+
+describe("schema diagnostics", () => {
+	it("counts facts without sources by section, absent or empty, and leaves the answer as it was", () => {
+		const value = {
+			...uncited([{ text: "Report the threshold." }, { text: "Check the port.", sources: [] }]),
+			files: [{ text: "out/report.md", quote: "The threshold is 15." }],
+		};
+		const before = structuredClone(value);
+		const diagnosis = diagnoseSchema(value);
+		expect(diagnosis.uncited).toEqual([
+			{ section: "nextSteps", index: 0 },
+			{ section: "nextSteps", index: 1 },
+			{ section: "files", index: 0 },
+		]);
+		expect(diagnosis.other).toBe(false);
+		// The pending note holds empty sources where they were missing, never the placeholder.
+		expect(diagnosis.pending?.nextSteps).toEqual([
+			{ text: "Report the threshold.", sources: [] },
+			{ text: "Check the port.", sources: [] },
+		]);
+		expect(diagnosis.pending?.files).toEqual([{ text: "out/report.md", quote: "The threshold is 15.", sources: [] }]);
+		expect(value).toEqual(before);
+		expect(schemaCounts(diagnosis)).toEqual({ uncited: { nextSteps: 2, files: 1 }, other: false });
+	});
+
+	it("marks any other fault, and then holds no pending note", () => {
+		const cases: unknown[] = [
+			{ ...uncited(), gaps: undefined },
+			{ ...uncited(), extra: [] },
+			uncited([{ text: "Report the threshold.", sources: null }]),
+			uncited([{ text: "", sources: ["u3"] }]),
+			uncited([{ text: "Report the threshold.", source: ["u3"] }]),
+			uncited(Array.from({ length: 6 }, () => ({ text: "Report the threshold." }))),
+			{ ...note({}), state: [] },
+			"not a note",
+			[note({})],
+		];
+		for (const value of cases) {
+			const diagnosis = diagnoseSchema(value);
+			expect(diagnosis.other).toBe(true);
+			expect(diagnosis.pending).toBeUndefined();
+		}
+		expect(schemaCounts(diagnoseSchema(uncited([{ text: "Step.", sources: null }])))).toEqual({
+			uncited: {},
+			other: true,
+		});
+	});
+
+	it("names counts and sections in the message, never the facts' text", () => {
+		const message = schemaFailureMessage(schemaCounts(diagnoseSchema(uncited())));
+		expect(message).toBe(
+			"CONTEXT_NOTE_INVALID: 1 fact has no sources (1 in nextSteps). No checkpoint committed; original history retained.",
+		);
+		expect(message).not.toContain("Report the threshold");
+		expect(schemaFailureMessage({ uncited: { nextSteps: 2, state: 1 }, other: true })).toBe(
+			"CONTEXT_NOTE_INVALID: 3 facts have no sources (2 in nextSteps, 1 in state), and the note fails the schema otherwise too. No checkpoint committed; original history retained.",
+		);
+		expect(schemaFailureMessage({ uncited: {}, other: true })).toBe(
+			"CONTEXT_NOTE_INVALID: writer must return the complete note schema. No checkpoint committed; original history retained.",
+		);
+	});
+});
+
+describe("preview writer sources repair", () => {
+	it("cites next steps left without sources with one request about those facts only", async () => {
+		const test = quoteHarness([
+			uncited([{ text: "Report the threshold." }, { text: "Keep port 4317.", sources: [] }]),
+			{ repairs: [sourcesOf(["u3"]), sourcesOf(["u1"], "nextSteps", 1)] },
+		]);
+		const result = await writeMemory(test.options);
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(result.note.nextSteps).toEqual([
+			{ text: "Report the threshold.", sources: ["u3"] },
+			{ text: "Keep port 4317.", sources: ["u1"] },
+		]);
+		// Untouched facts come back unchanged.
+		expect(result.note.state).toEqual([{ text: "The threshold is 15.", sources: ["u3"] }]);
+		expect(() => validateNote(result.note, branch, 2000)).not.toThrow();
+		const repairPrompt = test.prompts[1];
+		expect(repairPrompt.startsWith(SOURCES_REPAIR_RULES)).toBe(true);
+		expect(repairPrompt).toContain('{\\"text\\":\\"Report the threshold.\\",\\"sources\\":[]}');
+		// User messages in full, and every uncovered entry by its opening, as citable evidence.
+		expect(repairPrompt).toContain(
+			'\\"entryId\\":\\"u1\\",\\"text\\":\\"Keep the service on port 4317.\\\\nDo not touch vendor/.\\"',
+		);
+		expect(repairPrompt).toContain("a1 assistant: Understood:");
+		// Only the facts without sources are asked about.
+		expect(repairPrompt).not.toContain('\\"section\\":\\"state\\"');
+		const last = test.progress.at(-1);
+		expect(last).toMatchObject({
+			writerCalls: 2,
+			repairUsed: true,
+			repairKind: "sources",
+			schema: { uncited: { nextSteps: 2 }, other: false },
+		});
+		expect(last?.writerCallDetails.map((call) => call.phase)).toEqual(["generate", "repair"]);
+		expect(last?.quotations).toBeUndefined();
+		// Status carries counts only.
+		expect(JSON.stringify(last)).not.toContain("Report the threshold");
+	});
+
+	it("sends the request without reasoning, tools or the session prefix, as the quotation repair does", async () => {
+		const reasoning = { ...model, reasoning: true };
+		const settings: { reasoning?: string; tools: number; messages: number; cache?: string }[] = [];
+		const answers = [response(uncited()), response({ repairs: [sourcesOf(["u3"])] })];
+		const test = quoteHarness([], {
+			registry: {
+				find: () => reasoning,
+				hasConfiguredAuth: () => true,
+				streamSimple: (_model, context, options) => {
+					settings.push({
+						reasoning: options?.reasoning,
+						tools: context.tools?.length ?? 0,
+						messages: context.messages.length,
+						cache: options?.cacheRetention,
+					});
+					return stream(answers.shift()!);
+				},
+			},
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-quote-test/quote-writer", writerEffort: "high" },
+		});
+		await writeMemory(test.options);
+		expect(settings).toEqual([
+			{ reasoning: "high", tools: 0, messages: 1, cache: "none" },
+			{ reasoning: undefined, tools: 0, messages: 1, cache: "none" },
+		]);
+	});
+
+	it("blocks when the repair cites an entry the branch does not hold", async () => {
+		const test = quoteHarness([uncited(), { repairs: [sourcesOf(["invented"])] }]);
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_SCOPE");
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(test.progress.at(-1)).toMatchObject({ repairKind: "sources", scope: { missing: 1 } });
+	});
+
+	it("requires one answer for each fact without sources and nothing else", async () => {
+		const pending = diagnoseSchema(uncited()).pending!;
+		const facts = [{ section: "nextSteps" as const, index: 0 }];
+		for (const answer of [
+			{ repairs: [] },
+			{ repairs: [sourcesOf(["u3"], "state")] },
+			{ repairs: [sourcesOf(["u3"]), sourcesOf(["u1"])] },
+			{ repairs: [{ ...sourcesOf(["u3"]), text: "Reworded step." }] },
+			{ repairs: [sourcesOf([])] },
+			{ repairs: [sourcesOf(["u3", "u3"])] },
+			"not json",
+		])
+			expect(() => applySourcesRepair(pending, facts, answer)).toThrow("CONTEXT_NOTE_INVALID");
+		const reworded = quoteHarness([uncited(), { repairs: [{ ...sourcesOf(["u3"]), text: "Reworded step." }] }]);
+		await expect(writeMemory(reworded.options)).rejects.toThrow(
+			"CONTEXT_NOTE_INVALID: the sources repair did not return its schema",
+		);
+		expect(reworded.requests).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps each repaired fact's text, quote and supersedes, and the rest of the note, byte for byte", () => {
+		const value = uncited([{ text: "Report the threshold.", quote: "The threshold is 15.", supersedes: ["u2"] }]);
+		const pending = diagnoseSchema(value).pending!;
+		const repaired = applySourcesRepair(pending, [{ section: "nextSteps", index: 0 }], {
+			repairs: [sourcesOf(["u3"])],
+		});
+		expect(repaired.nextSteps).toEqual([
+			{ text: "Report the threshold.", quote: "The threshold is 15.", supersedes: ["u2"], sources: ["u3"] },
+		]);
+		expect({ ...repaired, nextSteps: [] }).toEqual({ ...pending, nextSteps: [] });
+		expect(pending.nextSteps[0].sources).toEqual([]);
+	});
+
+	it("does not repair another schema fault, more than five facts without sources, or with repair off", async () => {
+		const other = quoteHarness([{ ...uncited(), extra: true }]);
+		await expect(writeMemory(other.options)).rejects.toThrow(
+			"CONTEXT_NOTE_INVALID: 1 fact has no sources (1 in nextSteps), and the note fails the schema otherwise too.",
+		);
+		expect(other.requests).toHaveBeenCalledTimes(1);
+		expect(other.progress.at(-1)).toMatchObject({
+			repairUsed: false,
+			schema: { uncited: { nextSteps: 1 }, other: true },
+		});
+		const many = {
+			...uncited(Array.from({ length: 5 }, (_, index) => ({ text: `Step ${index}.` }))),
+			reasons: [{ text: "Port.", sources: [] }],
+		};
+		const six = quoteHarness([many]);
+		await expect(writeMemory(six.options)).rejects.toThrow("6 facts have no sources (1 in reasons, 5 in nextSteps)");
+		expect(six.requests).toHaveBeenCalledTimes(1);
+		const off = quoteHarness([uncited()], {
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-quote-test/quote-writer", noteRepair: false },
+		});
+		await expect(writeMemory(off.options)).rejects.toThrow("CONTEXT_NOTE_INVALID: 1 fact has no sources");
+		expect(off.requests).toHaveBeenCalledTimes(1);
+		expect(off.progress.at(-1)).toMatchObject({
+			repairUsed: false,
+			schema: { uncited: { nextSteps: 1 }, other: false },
+		});
+		const invalidJson = quoteHarness(["{ not json"]);
+		await expect(writeMemory(invalidJson.options)).rejects.toThrow(
+			"CONTEXT_NOTE_INVALID: writer did not return valid JSON",
+		);
+		expect(invalidJson.progress.at(-1)?.schema).toBeUndefined();
+	});
+
+	it("spends the compaction's one repair: a quotation failure after it blocks without another request", async () => {
+		const value = {
+			...uncited([{ text: "Keep port 4317.", quote: "Keep the service on port 4317." }]),
+		};
+		const test = quoteHarness([value, { repairs: [sourcesOf(["u3"])] }]);
+		await expect(writeMemory(test.options)).rejects.toThrow(
+			"CONTEXT_NOTE_QUOTE: 1 quotation does not match the entries cited (1 found verbatim in other entries).",
+		);
+		expect(test.requests).toHaveBeenCalledTimes(2);
+		expect(test.progress.at(-1)).toMatchObject({
+			repairKind: "sources",
+			quotations: { failed: 1, elsewhere: 1, format: 0, absent: 0 },
+		});
+		const large = uncited();
+		large.state = [{ text: "x".repeat(1600), sources: ["u3"] }];
+		const budget = quoteHarness([large, { repairs: [sourcesOf(["u3"])] }], { noteTokens: 500 });
+		await expect(writeMemory(budget.options)).rejects.toThrow("CONTEXT_NOTE_BUDGET");
+		expect(budget.requests).toHaveBeenCalledTimes(2);
+	});
+
+	it("repairs once across fixed-writer chunks", async () => {
+		const long = (id: string, parentId: string | null, words: string) =>
+			user(id, `${words} ${"filler text for chunking. ".repeat(3200)}`, parentId);
+		const chunked = [long("c1", null, "Keep the service on port 4317."), long("c2", "c1", "The threshold is 15.")];
+		const chunkNote = { ...note({ state: [{ text: "Port.", sources: ["c1"] }] }), nextSteps: [{ text: "Check." }] };
+		const test = quoteHarness([chunkNote, { repairs: [sourcesOf(["c1"])] }, chunkNote], {
+			uncovered: chunked,
+			branch: chunked,
+		});
+		await expect(writeMemory(test.options)).rejects.toThrow("CONTEXT_NOTE_INVALID: 1 fact has no sources");
+		expect(test.progress.at(-1)?.writerCallDetails.map((call) => call.phase)).toEqual([
+			"generate",
+			"repair",
+			"generate",
+		]);
+	});
+
+	it("offers the active requests as evidence and still requires the continuation step", async () => {
+		const active = user("u4", "Now finish the report.", "u3");
+		const activeBranch = [...branch, active];
+		const test = quoteHarness([uncited([{ text: "Finish the report." }]), { repairs: [sourcesOf(["u4"])] }], {
+			uncovered: activeBranch,
+			branch: activeBranch,
+			activeRequests: [active],
+		});
+		const result = await writeMemory(test.options);
+		expect(result.note.nextSteps).toEqual([{ text: "Finish the report.", sources: ["u4"] }]);
+		expect(test.prompts[1]).toContain('{\\"entryId\\":\\"u4\\",\\"text\\":\\"Now finish the report.\\"}');
+	});
+
+	it("keeps the stored note shape: a repaired note is an ordinary schema-valid note", async () => {
+		const test = quoteHarness([uncited(), { repairs: [sourcesOf(["u3"])] }]);
+		const result = await writeMemory(test.options);
+		expect(Object.keys(result.note).sort()).toEqual(Object.keys(noteSchema.properties).sort());
+		expect(result.note.nextSteps[0]).toEqual({ text: "Report the threshold.", sources: ["u3"] });
+	});
+});
+
+describe("writer instruction: every fact cites its sources", () => {
+	const rule =
+		"Every item in instructions, failedPaths, reasons, state, nextSteps and files needs sources: the original entry IDs that support it, whether or not it has a quote.";
+	const nextSteps = "citing the request or recorded progress each step continues";
+
+	it("reaches the fixed writer, the session writer and the size repair", async () => {
+		const fixed = quoteHarness([note({})]);
+		await writeMemory(fixed.options);
+		expect(fixed.prompts[0]).toContain(rule);
+		expect(fixed.prompts[0]).toContain(nextSteps);
+		const active = user("u4", "Now finish the report.", "u3");
+		const sessionBranch = [...branch, active];
+		const session = quoteHarness([{ ...note({}), nextSteps: [{ text: "Finish the report.", sources: ["u4"] }] }], {
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: SESSION_WRITER },
+			sessionModel: model,
+			prefix: { messages: [{ role: "user", content: "Earlier conversation.", timestamp: 1 }] },
+			uncovered: sessionBranch,
+			branch: sessionBranch,
+			activeRequests: [active],
+		});
+		await writeMemory(session.options);
+		expect(session.prompts[0]).toContain(rule);
+		expect(session.prompts[0]).toContain("and cite the active request it continues");
+		const large = note({ state: [{ text: "x".repeat(1600), sources: ["u3"] }] });
+		const sized = quoteHarness([large, note({})], { noteTokens: 500 });
+		await writeMemory(sized.options);
+		expect(sized.progress.at(-1)?.repairKind).toBe("size");
+		expect(sized.prompts[1]).toContain("Shorten a validated memory candidate");
+		expect(sized.prompts[1]).toContain(rule);
 	});
 });

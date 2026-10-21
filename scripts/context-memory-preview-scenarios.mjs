@@ -149,7 +149,8 @@ async function worker() {
 			failedPaths: [],
 			reasons: [],
 			state: [{ text: "The synthetic service uses port 4317.", sources: [id] }],
-			nextSteps: [{ text: "Continue checking the service locally.", sources: [id] }],
+			// The uncited writers leave the next step's sources out, as GPT-6 Luna did in the 0.5.3 bench.
+			nextSteps: [writerMode.startsWith("uncited") ? { text: "Continue checking the service locally." } : { text: "Continue checking the service locally.", sources: [id] }],
 			files: [],
 			gaps: [],
 		};
@@ -176,6 +177,12 @@ async function worker() {
 			const quote = writerMode === "bad-quote" ? "Deployment is authorized." : "Do not deploy this synthetic service.";
 			const fact = { text: "Deployment remains unauthorized.", sources: [sourceId()], quote };
 			return stream(response, payload.model, JSON.stringify({ repairs: [{ section: "instructions", index: 0, fact }] }));
+		}
+		// A sources repair names only the facts without sources; one writer invents an ID, the other cites the source.
+		if (serialized.includes("Add the missing sources of a memory candidate")) {
+			requests.push({ kind: "writer-sources-repair" });
+			const sources = writerMode === "uncited-invented" ? ["invented-entry"] : [sourceId()];
+			return stream(response, payload.model, JSON.stringify({ repairs: [{ section: "nextSteps", index: 0, sources }] }));
 		}
 		// Both writer paths carry this instruction; checkpoint summaries in ordinary requests do not.
 		const writer = serialized.includes("Return ONLY the memory note itself");
@@ -718,6 +725,28 @@ async function worker() {
 					"A quotation cited to the wrong entry is repaired by one request about that fact, and the checkpoint commits",
 					repaired.ok && JSON.stringify(repaired.sent) === JSON.stringify(["writer", "writer-repair"]) && repaired.marker === null && status.lastWriter?.repairKind === "quotation" && status.lastWriter?.quotations?.elsewhere === 1 && status.lastWriter?.quotationRepair?.requoted === 1,
 					{ repaired, lastWriter: status.lastWriter },
+				);
+				// A next step without sources gets one sources repair; an invented ID in its answer still blocks.
+				await seed();
+				writerMode = "uncited-invented";
+				const uncited = await compact();
+				const held = await prompt("Continue.");
+				observe("/compact with an uncited next step and an invented repair", { uncited, held });
+				check(
+					"sources-repair-refused",
+					"A next step without sources gets one sources repair; an invented ID in it is refused with CONTEXT_NOTE_SCOPE and later requests are blocked",
+					!uncited.ok && JSON.stringify(uncited.sent) === JSON.stringify(["writer", "writer-sources-repair"]) && uncited.marker?.code === "CONTEXT_NOTE_SCOPE" && !held.reached,
+					{ uncited, held },
+				);
+				writerMode = "uncited";
+				const cited = await compact();
+				const citedStatus = JSON.parse((await command("/compaction-status")).output);
+				writerMode = "good";
+				check(
+					"sources-repair-commits",
+					"A next step without sources is cited by one sources repair, and the checkpoint commits",
+					cited.ok && JSON.stringify(cited.sent) === JSON.stringify(["writer", "writer-sources-repair"]) && cited.marker === null && citedStatus.lastWriter?.repairKind === "sources" && citedStatus.lastWriter?.schema?.uncited?.nextSteps === 1 && citedStatus.lastWriter?.schema?.other === false,
+					{ cited, lastWriter: citedStatus.lastWriter },
 				);
 				break;
 			}

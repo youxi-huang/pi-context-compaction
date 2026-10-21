@@ -1,5 +1,140 @@
 # Validation record
 
+## 0.5.3 acceptance benches on DeepSeek V4.1 Flash and GPT-6 Luna through a relay, official Pi 1.3.0, 2026-10-20 to 21 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It ran the acceptance benches of the
+[0.5.3 plan](roadmap.md) on official Pi 1.3.0, Linux x86_64. The candidate is `stock-preview+src.cb5dcce5a76c043e`,
+built from `f54006a`, whose preview source is that of `375863d`; it passed `node scripts/context-memory-ops.mjs preview`
+on 1.3.0, 1.2.0 and 1.1.0 before the first request. The baseline is the v0.5.2 release build, rebuilt from `86cb9c6`
+with the same `stock-preview+src.289ffa92e5522496` its release recorded. Every run used the bench of `a1f91fb`; the
+two Luna diagnostics added the response shapes of the commit that records this entry.
+
+DeepSeek ran on its official API at thinking level `high`, as in every earlier DeepSeek record. For Luna the
+maintainer chose a third-party OpenAI-compatible relay over the Codex subscription, at `max`, without a priority
+tier. The bench's new `--provider relay` loads Pi's catalog model `openai/gpt-6-luna` and moves only its address, so
+Pi sends what it sends to OpenAI's Responses API. The maintainer set the limits before the first request: for
+DeepSeek 240 requests, 60 minutes and $1.60 for the writer pair and 530 requests for the probes; for Luna 150
+requests, 45 minutes and $3 for the writer runs and 400 requests, 90 minutes and $5 for the probes. No run reached a
+limit except the first DeepSeek probe run, whose 250-request cap left one probe unstarted.
+
+### DeepSeek writer bench
+
+The two builds started 20 seconds apart: eight cuts, eight attempts each, `--cache warm`, six units at a time.
+
+| | v0.5.2 release build | 0.5.3 candidate |
+| --- | ---: | ---: |
+| Committed | 62 of 64 | 64 of 64 |
+| Refused | 1 `CONTEXT_NOTE_SCOPE` at P1's first cut, 1 `CONTEXT_NOTE_QUOTE` at P2's first | none |
+| First passes with a failed quotation | 13 | 2 |
+| Quotation repairs committed | 12 of 13 | 2 of 2 |
+| Envelopes removed | none | none |
+| Writer input read from cache | 96.1% | 96.4% |
+| Catalog writer cost | $0.172 for 77 calls | $0.167 for 66 calls |
+| Median pause | 7.4 s | 7.6 s |
+| Note size, median, against the bytes it condenses | 4,311 bytes, 5.7% | 4,437 bytes, 5.6% |
+| Gold answers cited, first asked at the cut and carried | 507 of 530, 363 of 440 | 520 of 544, 402 of 440 |
+
+The release build matched its own 62 of 64 of 2026-10-18.
+
+### DeepSeek probes, two runs
+
+Every chain cut committed on its first attempt in both runs. Totals over the two runs:
+
+| | P1 | P2 | P3 |
+| --- | ---: | ---: | ---: |
+| Passed with `context_history` | 59 of 60 | 32 of 34 | 54 of 56 |
+| Passed with no tools | 58 of 60 | 33 of 34 | 45 of 55, one probe unstarted |
+| `context_history` calls per question | 1.75 | 1.47 | 2.84 |
+| Of which `list` | 5 | 1 | 21 |
+| Questions stopped at the round limit | 0 | 1 | 3 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 |
+
+Of the five probes not passed with `context_history`, three stopped at the round limit and two were scored
+incorrect with the right value in a form the scorer does not take: `"line 42"` for the number 42, and a sentence
+that does not lead with "by warehouse code". The v0.5.0 candidate, over two runs, passed 59 of 60, 34 of 34 and 56 of
+56 with `context_history`, and 60, 34 and 40 with no tools. Probes read 72% of their input from cache.
+
+### Luna writer bench
+
+Same settings as the DeepSeek bench, four units at a time, against the Codex run of 2026-10-19:
+
+| | Relay, `max`, this candidate | Codex subscription, `high`, `13e3370` |
+| --- | ---: | ---: |
+| Committed | 47 of 64 | 37 of 64 |
+| `CONTEXT_NOTE_INVALID` | 9 | 27 |
+| `CONTEXT_WRITER_FAILED` | 8, each an error after 7 to 17 s with no output | 0 |
+| Envelopes removed | none | not yet removed |
+| First passes with a failed quotation | 1, repaired | 0 |
+| Median pause | 52.4 s | 10.2 s |
+| Note size, median, against the bytes it condenses | 3,821 bytes, 5.1% | 2,990 bytes, 4.0% |
+| Gold answers cited, first asked at the cut and carried | 390 of 400, 278 of 329 | 294 of 316, 221 of 291 |
+
+Without the eight relay failures, 47 of 56 committed. Neither schema envelope appeared.
+
+**The refusals.** A run on P1 and P2, six attempts per cut, committed 19 of 30, with 7 `CONTEXT_NOTE_INVALID`
+and 4 relay failures. Each of the seven refused answers was JSON with exactly the seven sections, in one
+`final_answer` message after reasoning. A second run on P1 recorded the keys and kinds of each section's items,
+never their text: it committed 14 of 18, and in each of the four refused notes every `nextSteps` item held `text`
+alone. In the committed notes every `nextSteps` item cited one to five sources, and the refused notes' other
+sections had the item shapes of committed ones. The note schema requires at least one source for every fact, next
+steps included, and the refusal names no field.
+
+### Luna probes, one run
+
+| | P1 | P2 | P3 |
+| --- | ---: | ---: | ---: |
+| Attempts until each cut committed | 1, 1, 1 | 1, 1 | 1, 3 after two relay failures, 1 |
+| Passed with `context_history` | 27 of 30 | 17 of 17 | 21 of 28 |
+| Passed with no tools | 28 of 30 | 17 of 17 | 19 of 28 |
+| `context_history` calls per question | 1.63 | 1.00 | 1.86 |
+| Questions stopped at the round limit | 3 | 0 | 7 |
+| Fabricated, or citing an unknown entry | 0 | 0 | 0 |
+
+No answer with `context_history` was wrong. Of its seven P3 losses, three ended on the relay's `server_error: Our
+servers are currently overloaded`, and four were stopped at a seventh response after only three to five calls; the
+DeepSeek probes that reached the round limit had made six to nine. With no tools the notes alone passed 28 and 19
+on P1 and P3, against 27 and 20 on 2026-10-19. That day P2's second cut was refused four times and blocked nine
+probes; here every P2 probe ran.
+
+### The relay
+
+Its usage counts are not the request's. A request of about nine tokens was reported as 4,412 input tokens on the
+Responses API and 9,462 on Chat Completions, and the smoke request, about 12,000 to 14,000 tokens, as about 40,000,
+33,011 of them cached on its first send; its responses mark their usage as scaled. Writer cache share (97.3%),
+probe cache share (87.0%) and catalog costs computed from these counts do not compare with other runs. Its messages
+carry Codex's `final_answer` phase.
+
+Official Pi 1.3.0 sends `openai/gpt-6-luna`'s level in a `configuration_update` input item and sets
+`reasoning.effort` to `medium`, as it does on OpenAI, and the writer rows record `medium` as sent. On one modular
+arithmetic question, one request each through the relay used 3,987 reasoning tokens at `low`, 5,850 at `medium`,
+7,852 in Pi's form for `max` and 10,547 at `max` sent directly, all answering correctly. One sample each does not
+show how much of `max` reached the writer.
+
+### Spend
+
+DeepSeek: 674 requests in four runs, $0.97 at catalog prices; the balance fell by ¥3.24 between 23:40 and 00:29 UTC.
+Luna: 451 bench requests in five runs, the smoke and the two diagnostics included, and 14 requests outside the bench
+to check the route and the effort, four of which the relay ended with 502 before any output. The relay's charge was
+not read. Neither figure is an invoice.
+
+### Gate results
+
+| Criterion of the [0.5.3 plan](roadmap.md) | Result |
+| --- | --- |
+| Luna at `max` commits at least nine notes in ten | Not met: 47 of 64, or 47 of 56 without relay failures |
+| Luna reads most of its writer input from cache | Not judged: the relay's counts are scaled |
+| DeepSeek commits as often as the v0.5.2 release build, same day | Met: 64 of 64 against 62 of 64 |
+| Probes on the committed notes show no loss of recovery | Met on DeepSeek. On Luna, three of the ten losses with `context_history` are relay errors and the notes alone answered as on 2026-10-19 |
+
+### What this shows
+
+On DeepSeek the candidate commits at least as often as v0.5.2 and needed fewer quotation repairs, with recovery as
+before. On Luna through this relay, asking for the note itself left no schema envelope, and the refusals fell from
+27 to 9 of 64; the ones examined are next steps written without sources. Whether a writer instruction, a repair or a
+schema change should address them waits for the maintainer, as does the release. One relay, one day and synthetic
+sessions; the relay adds failures of its own and hides its true usage. Session copies, notes and answers stayed
+outside the repository.
+
 ## 0.5.3 candidate: synthetic checks, official Pi 1.3.0, 1.2.0 and 1.1.0, 2026-10-20 UTC
 
 Synthetic only, from `375863d` with `stock-preview+src.cb5dcce5a76c043e`, Linux x86_64 and Node 22.22.0. No

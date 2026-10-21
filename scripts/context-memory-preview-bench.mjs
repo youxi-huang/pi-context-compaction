@@ -32,6 +32,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // timedOut, so one request that never returns cannot hold the run, and a probe it held is scored as blocked.
 // --provider codex does the same with openai-codex/gpt-6-luna on the ChatGPT subscription, in writer, probes and smoke
 // modes; docs/context-memory/codex-subscription.md sets up the proxy and the placeholder it copies the account ID from.
+// --provider relay does the same with Pi's catalog model openai/gpt-6-luna, its address moved to --base-url, an
+// OpenAI-compatible service that speaks the Responses API and whose key the environment's network proxy supplies.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
 // --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
 // --cache warm, the default, matches daily use, where every main-model turn keeps the session's prefix cached: the
@@ -48,7 +50,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://...] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -59,6 +61,7 @@ const MEASURED = {
 	deepseek: { provider: "deepseek", id: "deepseek-flash" },
 	"deepseek-local": { provider: "deepseek", id: "deepseek-flash" },
 	codex: { provider: "openai-codex", id: "gpt-6-luna" },
+	relay: { provider: "openai", id: "gpt-6-luna" },
 };
 const LOOPBACK = {
 	id: "bench-loopback",
@@ -104,23 +107,40 @@ function writeCodexPlaceholder(agentDir, accountId) {
 }
 
 /** The structure of a parsed answer two levels deep: keys, and for each value its kind and length. Never its text. */
+/** One array item's keys and kinds, flagging what the note schema refuses: empty strings, long strings, repeated IDs. */
+function itemShape(item) {
+	if (Array.isArray(item)) return `array:${item.length}${new Set(item.map(String)).size < item.length ? ":repeated" : ""}`;
+	if (typeof item === "string") return !item.length ? "string:empty" : item.length > 4000 ? "string:>4000" : item.length > 1000 ? "string:>1000" : "string";
+	if (!item || typeof item !== "object") return typeof item;
+	return `{${Object.keys(item)
+		.sort()
+		.map((key) => `${key}:${itemShape(item[key])}`)
+		.join(",")}}`;
+}
+
 function jsonShape(value, depth) {
-	if (Array.isArray(value)) return `array:${value.length}`;
+	if (Array.isArray(value)) {
+		if (!depth || !value.length) return `array:${value.length}`;
+		const items = {};
+		for (const item of value) items[itemShape(item)] = (items[itemShape(item)] ?? 0) + 1;
+		return { length: value.length, items };
+	}
 	if (!value || typeof value !== "object") return typeof value;
 	if (!depth) return `object:${Object.keys(value).length}`;
 	return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, jsonShape(item, depth - 1)]));
 }
 
 /**
- * Codex answers in output items: reasoning, then one or more messages, each in a phase such as `commentary` or
- * `final_answer`. As each response streams past Pi's own parser, records its items, and for a message its phase and
- * the shape of its JSON, or its length when it does not parse. Never the text itself.
+ * The Responses API answers in output items: reasoning, then one or more messages, on Codex each in a phase such as
+ * `commentary` or `final_answer`. As each response from a URL ending in `path` streams past Pi's own parser, records
+ * its items, and for a message its phase and the shape of its JSON, or its length when it does not parse. Never the
+ * text itself.
  */
-function observeCodexItems(responses) {
+function observeResponseItems(responses, path) {
 	const original = globalThis.fetch;
 	globalThis.fetch = async (input, init) => {
 		const response = await original(input, init);
-		if (!String(input instanceof Request ? input.url : input).endsWith("/codex/responses") || !response.body) return response;
+		if (!String(input instanceof Request ? input.url : input).endsWith(path) || !response.body) return response;
 		const items = [];
 		responses.push(items);
 		const decoder = new TextDecoder();
@@ -342,7 +362,7 @@ async function worker() {
 
 	const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
 	const measured = MEASURED[action.provider];
-	const codexResponses = [];
+	const responseItems = [];
 	let model;
 	if (action.provider === "loopback") {
 		model = { ...LOOPBACK, baseUrl: `http://127.0.0.1:${server.address().port}/v1` };
@@ -362,9 +382,13 @@ async function worker() {
 		// The Pi CLI installs its proxy-aware dispatcher at startup; an SDK caller has to do the same.
 		const dispatcher = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "core", "http-dispatcher.js")).href);
 		dispatcher.configureHttpDispatcher();
-		if (action.provider === "codex") observeCodexItems(codexResponses);
+		if (action.provider === "codex") observeResponseItems(responseItems, "/codex/responses");
+		if (action.provider === "relay") observeResponseItems(responseItems, "/responses");
+		// The catalog's own model, with its compatibility settings and level map; only the address moves to the relay.
+		if (action.provider === "relay") runtime.registerProvider(measured.provider, { baseUrl: action.baseUrl });
 		model = runtime.getModel(measured.provider, measured.id);
 		if (!model) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
+		if (action.provider === "relay" && model.baseUrl !== action.baseUrl) throw new Error(`${measured.provider}/${measured.id} did not move to the relay's address`);
 	}
 	const settingsManager = stock.SettingsManager.create(cwd, agentDir);
 	const loader = new stock.DefaultResourceLoader({ cwd, agentDir, settingsManager, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
@@ -418,7 +442,8 @@ async function worker() {
 			toolCallDeclined: writer.toolCallDeclined ?? false,
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
-			...(action.provider === "codex" ? { codexResponses } : {}),
+			...(action.provider === "codex" ? { codexResponses: responseItems } : {}),
+			...(action.provider === "relay" ? { relayResponses: responseItems } : {}),
 		};
 		if (result.ok) {
 			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;
@@ -503,12 +528,15 @@ async function parent() {
 	const unitMinutes = Number(argument("--unit-minutes", "10"));
 	if (!(unitMinutes > 0)) throw new Error("--unit-minutes must be positive");
 	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
-	if (!["loopback", "deepseek", "deepseek-local", "codex"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local or codex");
+	if (!["loopback", "deepseek", "deepseek-local", "codex", "relay"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local, codex or relay");
 	if (provider === "deepseek-local" && mode !== "repair") throw new Error("--provider deepseek-local serves only --mode repair");
 	// Repair mode answers the writer's first call here in Chat Completions; Codex speaks the Responses API.
 	if (provider === "codex" && mode === "repair") throw new Error("--provider codex does not serve --mode repair");
+	if (provider === "relay" && mode === "repair") throw new Error("--provider relay does not serve --mode repair");
+	const baseUrl = provider === "relay" ? argument("--base-url", "").replace(/\/+$/, "") : undefined;
+	if (provider === "relay" && !baseUrl.startsWith("https://")) throw new Error("--provider relay needs --base-url https://...");
 	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
-	const remote = provider === "deepseek" || provider === "codex";
+	const remote = provider === "deepseek" || provider === "codex" || provider === "relay";
 	const limits = !remote
 		? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
 		: { requests: Number(argument("--max-requests")), minutes: Number(argument("--max-minutes")), costUsd: Number(argument("--max-cost-usd")) };
@@ -542,6 +570,7 @@ async function parent() {
 		if (remote) {
 			// The proxy injects the real key; Pi receives only a placeholder, Codex's in the unit's auth.json.
 			if (provider === "deepseek") value.DEEPSEEK_API_KEY = "proxy-injected";
+			if (provider === "relay") value.OPENAI_API_KEY = "proxy-injected";
 			value.NODE_USE_ENV_PROXY = "1";
 			for (const name of ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"])
 				if (process.env[name]) value[name] = process.env[name];
@@ -557,7 +586,7 @@ async function parent() {
 		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
 		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
 		if (codexAccount) writeCodexPlaceholder(agentDir, codexAccount);
-		const encoded = Buffer.from(JSON.stringify({ ...action, cwd })).toString("base64url");
+		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl } : {}) })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
@@ -696,7 +725,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.

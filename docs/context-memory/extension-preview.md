@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.2
+# Independent extension preview — v0.5.3
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.2 supports manual and completed-turn threshold compaction.** Optional
+**v0.5.3 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.3
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.2
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.3
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.2 lists
+Check that the installed preview lists the new Pi version first; v0.5.3 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.2)
+The [v0.5.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.3)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not

@@ -1,5 +1,83 @@
 # Validation record
 
+## Sources-repair candidate beside v0.5.3 through a relay, DeepSeek V4.1 Flash and GPT-6 Luna, official Pi 1.3.0, 2026-10-21 UTC
+
+This is a real-provider run, recorded apart from the synthetic evidence below. It compares the v0.5.3 release
+build, `stock-preview+src.cb5dcce5a76c043e` rebuilt from `5cde2de`, with the candidate
+`stock-preview+src.dff5227af790f053`, whose preview source is that of `01830f2`, on official Pi 1.3.0, Linux
+x86_64. The candidate passed `node scripts/context-memory-ops.mjs ci` on `01830f2` before the first request, and
+every run used the bench of `c4fec95`. Each round started both builds together with the same settings, as the
+runbook asks.
+
+Both models came through one third-party OpenAI-compatible relay. DeepSeek V4.1 Flash is a self-hosted
+deployment the relay serves as `deepseek-v4.1-flash-1017-xp`. The bench moved Pi's catalog model
+`deepseek/deepseek-flash` there with `--relay-model` and `--relay-id`, keeping its settings, at thinking level `high`.
+Luna ran as Pi's catalog model `openai/gpt-6-luna` at `max`. The maintainer set the limits before the first
+request: for DeepSeek 350 requests, 60 minutes and $1.50, raised to $5 by catalog price before the bench when
+two smoke requests reported no cache; for Luna 200 requests, 60 minutes and $5. Neither model reached them. The
+per-run caps derived from them left three Luna attempts unstarted in three of the four Luna runs.
+
+Before the benches, smoke requests found that the relay key's group had no channel for the DeepSeek model
+(`503 model_not_found`) and that Luna answered 502 with no body. The maintainer changed the key between the two
+models. These checks used 11 DeepSeek and 5 Luna requests.
+
+### DeepSeek writer bench, two runs each
+
+Eight cuts, seven attempts each, `--cache warm`, three units at a time per build:
+
+| | v0.5.3 release build | Candidate |
+| --- | ---: | ---: |
+| Committed | 53 and 55 of 56 | 53 and 55 of 56 |
+| `CONTEXT_WRITER_FAILED` | 3 and 0 | 3 and 0 |
+| `CONTEXT_NOTE_INVALID` | 0 and 1 | 0 and 1, an answer that was not JSON |
+| Facts without sources | not recorded by this build | none |
+| First passes with a failed quotation | 4 and 1, all repaired and committed | 0 and 1, repaired and committed |
+| Sources repairs | none possible | none |
+| Writer input read from cache | 57% and 59% | 68% and 56% |
+| Catalog cost, warm-ups included | $0.374 and $0.378 | $0.338 and $0.409 |
+| Median pause | 11.4 s and 11.4 s | 11.3 s and 12.1 s |
+| Note size, median, against the bytes it condenses | 4,241 and 4,236 bytes, 5.3% and 5.5% | 4,389 and 4,536 bytes, 5.5% and 5.3% |
+| Gold answers cited, first asked at the cut and carried | 888 of 921, 698 of 763 | 894 of 920, 712 of 749 |
+
+Each `CONTEXT_WRITER_FAILED` was a writer request that ended in an error after 125.6 to 125.7 s with no
+output: a timeout on the relay's side. Without them both builds committed 108 of 109. The candidate's
+`CONTEXT_NOTE_INVALID` carried no schema counts, so its answer did not parse as JSON; the release build records
+none, and its one refusal cannot be classified. No candidate note left a fact without sources, so on this model
+the run exercises the instruction, not the repair. The candidate committed as often as the release build, at the
+same pause and cost, with notes 3 to 7% larger. Two runs per build do not separate five failed quotations from
+one. Outside the writer call, the extension spent 25 to 136 ms per committed compaction, median 35 to 37 ms, in
+both builds.
+
+### Luna writer bench, two runs each
+
+Eight cuts, three attempts each, `--cache warm`, three units at a time per build. The relay failed most requests
+from the first round's third cut onward: writer and warm-up requests ended in errors after 1 to 48 s with no
+output, in both builds alike. A smoke request between the rounds succeeded on its second try.
+
+| | v0.5.3 release build | Candidate |
+| --- | ---: | ---: |
+| Attempts | 21 and 21, 3 unstarted in each | 21 and 24, 3 unstarted in the first |
+| Answered by the relay | 9 and 3 | 6 and 4 |
+| Committed | 9 and 2 | 6 and 4 |
+| Relay failures (`CONTEXT_WRITER_FAILED`) | 12 and 19, one a quotation repair | 15 and 20 |
+| Refused on the schema | none | none |
+| Sources repairs | none possible | none |
+| Median pause of committed attempts | 76 s and 67 s | 76 s and 72 s |
+
+Every answered note committed except one whose quotation repair the relay failed. Neither build refused a note
+for missing sources, so the repair never ran. At the 0.5.3 run's rate of about one such refusal in six answered
+attempts, 12 and 10 answered attempts are too few for a difference to show; this run does not decide the Luna
+criterion. The pauses are the relay's: outside the writer call the extension spent 27 to 54 ms, and the writer
+call returned 2,771 to 5,575 output tokens in 44 to 167 s.
+
+Every Luna request reported `sent.effort: medium`. Pi 1.3.0 sends a fixed `reasoning.effort` of `medium` to
+models whose compatibility settings declare `supportsMidConvoEffort`, and carries the requested level, here
+`max`, in a `configuration_update` input item. `sent` reads only the former. Whether the relay applies that item
+is not known.
+
+In total DeepSeek used 273 of 350 requests and $1.51 of $5 by catalog price over two rounds of 9.6 and 6.0 minutes;
+Luna used 180 of 200 requests and $0.10 of $5 over rounds of 13.2 and 7.8 minutes.
+
 ## 0.5.3 acceptance benches on DeepSeek V4.1 Flash and GPT-6 Luna through a relay, official Pi 1.3.0, 2026-10-20 to 21 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It ran the acceptance benches of the

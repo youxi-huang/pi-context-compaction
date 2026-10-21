@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.5.3] — 2026-10-21
+
+v0.5.3 adapts the independent extension's note writer to GPT-6 Luna. The session writer sends the session's ID with its request, so Pi's Codex provider can serve it from the session's prompt cache. Writers are asked for the note itself, and the two schema envelopes Luna returned around complete notes are removed before every commit check runs. A fresh session without arm B no longer offers `context_note`, saving about 1,209 Pi-estimated tokens per request. In a writer bench beside the v0.5.2 release build on the same day, DeepSeek V4.1 Flash committed 64 of 64 notes against 62 of 64; GPT-6 Luna at `max`, through a third-party relay, committed 47 of 64 against 37 of 64 before, and the notes it still loses carry next steps without sources. The changes are in the independent preview only: the resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged.
+
 ### Changed
 
 - The independent preview's session writer sends the session's ID with its request, as Pi does with each of the session's requests. Pi's Codex provider keys its prompt cache on that ID: without it, GPT-6 Luna's writer read 7.1% of its input from cache, against 93.6% on DeepSeek. Providers that need no key ignore it.

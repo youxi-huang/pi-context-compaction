@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.2
+# Independent extension preview — v0.5.3
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.2 supports manual and completed-turn threshold compaction.** Optional
+**v0.5.3 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.2
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.3
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.2
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.3
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.2 lists
+Check that the installed preview lists the new Pi version first; v0.5.3 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.2 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.2)
+The [v0.5.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.3)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -113,7 +113,8 @@ one was declined (`toolCallDeclined`); all but the last are counts. Since
 asked for (`effort`), the reasoning settings and output cap its provider
 request carried (`sent`, read from the request Pi built, without its content)
 and how the response ended (`stopReason`), and `quotationRepair.droppedFrom`
-counts withdrawn facts by section. For the first candidate refused with
+counts withdrawn facts by section. Since 0.5.3, a call whose note arrived inside
+a schema envelope names its shape under `envelope`, `type` or `schema`. For the first candidate refused with
 `CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
 branch (`missing`) and those of entries without readable text (`unreadable`,
 with their kinds under `unreadableKinds`), and how many of either sit in
@@ -188,12 +189,13 @@ repository with its development dependencies installed.
 Use Node.js 22.19 or newer and a persistent text session. Keep one Pi
 writer process per session and load this package through normal CLI/TUI/SDK
 extension discovery. Finish turns until Pi has older history to compact, use
-`/compact`, inspect `/compaction-status`, and continue. The model can record
-optional work notes with `context_note`: where the work stands, decisions and
-their reasons, failed approaches, files and the current plan, each fact on one
-line with the original entries it rests on. A note has no field for
-instructions. The model retrieves original records on the current branch with
-`context_history`. The JSONL remains the only history store.
+`/compact`, inspect `/compaction-status`, and continue. With
+[arm B](#work-notes-arm-b) on, the model can record work notes with
+`context_note`: where the work stands, decisions and their reasons, failed
+approaches, files and the current plan, each fact on one line with the
+original entries it rests on. A note has no field for instructions. The model
+retrieves original records on the current branch with `context_history`.
+The JSONL remains the only history store.
 
 `context_history` can also list one kind of item, newest first: the
 constraints, decisions, failed approaches, files, plans and state that
@@ -226,6 +228,13 @@ committed, and a writer cannot open a heading of its own, such as a second
 `## instructions`. Exact quotes are rendered as JSON strings and stay exact.
 Checkpoints written by v0.4.0 keep their summaries and reopen unchanged.
 
+Since 0.5.3 every note writer asks for the note itself rather than for an
+object matching the note's schema. Before validation the extension removes the
+two schema envelopes GPT-6 Luna returned around complete notes: a string `type`
+beside exactly the seven sections, and `type`, `properties` and `required` with
+exactly the seven sections under `properties`. It removes nothing else, and the
+note then passes every check as before.
+
 The session writer reads the conversation without entry IDs, so its handover
 request also lists every uncovered user message in full beside its ID, whole
 or not at all, within the note's hard allowance; the request drops this block
@@ -247,9 +256,12 @@ only in an assistant message or a tool output is not a user ruling.
 
 The session writer's request is the session's own system prompt, tools and
 messages plus one closing message, and it sets no tool choice, just as the
-session's requests do. A provider that caches prompt prefixes therefore serves
-most of the request from the cache the session has already warmed: on DeepSeek,
-95 to 97% of the writer's input over 192 compactions. The closing message tells
+session's requests do. Since 0.5.3 it also carries the session's ID, which Pi
+sends with each of the session's requests: Pi's Codex provider keys its prompt
+cache on that ID, and providers that need no key ignore it. A provider that
+caches prompt prefixes therefore serves most of the request from the cache the
+session has already warmed: on DeepSeek, 95 to 97% of the writer's input over
+192 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
 unavailable and the same request continues once. That continuation does not
 spend the size or quotation repair, so a compaction makes at most three writer
@@ -426,9 +438,17 @@ Arm B has its own switch, also off by default:
 ```
 
 With it, a one-line tool guideline asks the session model for a work note after
-a decision, a failed approach or a completed subtask. At compaction the
-extension merges the previous checkpoint's note with the valid notes since, in
-order, without a model call. A fact that supersedes a source drops the earlier
+a decision, a failed approach or a completed subtask. With B off, a fresh session
+does not offer `context_note`. A branch with an earlier call, saved or refused,
+activates it on reopen or branch navigation so the earlier calls keep their tool
+declaration. This only adds the tool: an explicit activation is preserved, and
+the tool stays active after moving to a branch that does not need it, until the
+next session. Previously saved notes still reach the synchronous writer as
+hints with B off.
+
+At compaction with B on, the extension merges the previous checkpoint's note
+with the valid notes since, in order, without a model call. A fact that
+supersedes a source drops the earlier
 facts citing it, and the newest plan replaces the older one. A note that lists
 `gaps` replaces the open questions recorded before it, and an empty list closes
 them; a note without `gaps` keeps them. Instructions from

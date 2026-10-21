@@ -1,7 +1,7 @@
 {
-  "build": "stock-preview+src.289ffa92e5522496",
-  "version": "0.5.2",
-  "sourceCommit": "86cb9c6684b82bb6af20431046ba04cc2fafc37c",
+  "build": "stock-preview+src.cb5dcce5a76c043e",
+  "version": "0.5.3",
+  "sourceCommit": "5cde2ded19200d81cf18e51ab4c2e3f000994702",
   "supportedPi": "1.3.0",
   "supportedPiVersions": [
     "1.3.0",
@@ -9,7 +9,7 @@
     "1.1.0"
   ],
   "checkpointSchema": 1,
-  "sourceHash": "289ffa92e55224967d6f089d2318d08a40eb9ca349898a176262ef23c997534e",
+  "sourceHash": "cb5dcce5a76c043e1d7085e97b3e824286a28989ba475fc37a4ef73e931a36f0",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -45,11 +45,11 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/controller.ts",
-      "sha256": "f2e478b655ffe4c6deb1282f90f5cbbe54c97feb227b463155f9df74eed4e441"
+      "sha256": "892840cb63803a13fd0b14ebc468dd68bd87eccb68c96e89d6e117f5e8772a41"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
-      "sha256": "b263839cb23facb64bbb290599315d834ea511699b60db8901934d488387c5e0"
+      "sha256": "4b03484e1f3d3e5f0562d7ed0f43bf38083905d7cc2fb1f18aa60611df5548a3"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts",
@@ -62,6 +62,10 @@
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/history-view.ts",
       "sha256": "444fb0f9bbd24c823789e34cde697f133a9c8251f6adfbb10b0c59f889999958"
+    },
+    {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/note-envelope.ts",
+      "sha256": "688417206826dd744bbb6614aa82c76cdb32c5e2c2e71dd36ad002f1190ffa4c"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/notices.ts",
@@ -97,7 +101,7 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/writer.ts",
-      "sha256": "fd7d2b3b7c05d67ef71fba1ebe3088db6aab68d6978d5ac341532665f2f2667a"
+      "sha256": "492bccb152ddaa2ce841f648cf144cd5dd84f37e4acde693dce28286a844bc50"
     }
   ],
   "externalImports": [

@@ -481,6 +481,45 @@ describe("preview writer quotation repair", () => {
 		expect(tools[1]).toEqual({ choice: undefined, count: 0 });
 	});
 
+	it("reports the level a configuration_update item carries, not the fixed reasoning.effort beside it", async () => {
+		// What Pi 1.3.0 builds for GPT-6 Luna: a fixed `reasoning.effort`, an item before each earlier assistant
+		// message with that turn's level, and a last item with the level this request asks for.
+		const reasoning = { ...model, reasoning: true };
+		const payloads = [
+			{
+				reasoning: { effort: "medium" },
+				max_output_tokens: 4096,
+				input: [
+					{ role: "user", content: "not recorded" },
+					{ type: "configuration_update", reasoning: { effort: "low" } },
+					{ role: "assistant", content: "not recorded" },
+					{ type: "configuration_update", reasoning: { effort: "max" } },
+				],
+			},
+			{ reasoning: { effort: "high" }, max_output_tokens: 4096, input: [{ role: "user", content: "not recorded" }] },
+		];
+		const sent = [];
+		for (const payload of payloads) {
+			const test = quoteHarness([], {
+				registry: {
+					find: () => reasoning,
+					hasConfiguredAuth: () => true,
+					streamSimple: (_model, _context, options) => {
+						void options?.onPayload?.(payload, reasoning);
+						return stream(response(note({})));
+					},
+				},
+			});
+			await writeMemory(test.options);
+			expect(JSON.stringify(test.progress)).not.toContain("not recorded");
+			sent.push(test.progress.at(-1)?.writerCallDetails[0].sent);
+		}
+		expect(sent).toEqual([
+			{ effort: "max", fixedEffort: "medium", maxTokens: 4096 },
+			{ effort: "high", maxTokens: 4096 },
+		]);
+	});
+
 	it("requires one answer for each failing fact and nothing else", () => {
 		const failures = diagnoseQuotes(misattributed(), branch).failures;
 		const fact = { text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." };

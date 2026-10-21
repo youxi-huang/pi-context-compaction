@@ -15,6 +15,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - The independent preview's writer instruction says that every fact in every section, next steps included, cites the entries that support it, whether or not it carries a quote, and that a next step cites the request or recorded progress it continues without claiming the step is done. The in-task handover asks the same of its continuation step. In the v0.5.3 relay bench, each refused GPT-6 Luna note examined held next steps with text alone. The resident runtime, its build fingerprint, the checkpoint schema and the evaluation pin are unchanged.
 
+### Fixed
+
+- `/compaction-status` reported `sent.effort: medium` for every GPT-6 Luna writer request. Since Pi 1.3.0, models that change effort mid-conversation receive a fixed `reasoning.effort` of `medium` and the requested level in a `configuration_update` input item. `sent.effort` now reports that item's level, and `sent.fixedEffort` the fixed one.
+
 ### Maintenance
 
 - The preview bench records each attempt's schema counts and sums them per cut and overall under `schemaRefusals`, and counts sources repairs beside quotation and size repairs. The stock-Pi scenarios add `sources-repair-refused` and `sources-repair-commits`.

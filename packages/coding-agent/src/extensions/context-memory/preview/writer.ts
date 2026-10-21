@@ -80,8 +80,10 @@ export interface WriterDispatchRequest {
  * clamps a level the model does not declare to a supported one, so the request can differ from what was asked.
  */
 export interface SentReasoning {
-	/** `reasoning_effort`, or `reasoning.effort`. */
+	/** `reasoning_effort` or `reasoning.effort`, or the effort of the request's last `configuration_update` item. */
 	effort?: string;
+	/** `reasoning.effort` sent beside a `configuration_update` item; Pi fixes it at `medium`. */
+	fixedEffort?: string;
 	/** `thinking.type`, such as `enabled` or `disabled`. */
 	thinking?: string;
 	/** `thinking.budget_tokens`. */
@@ -108,6 +110,15 @@ function sentReasoning(payload: unknown): SentReasoning {
 	const sent: SentReasoning = {};
 	const effort = payload.reasoning_effort ?? (isRecord(payload.reasoning) ? payload.reasoning.effort : undefined);
 	if (typeof effort === "string") sent.effort = effort;
+	// Since Pi 1.3.0, a Responses model that changes effort mid-conversation, such as GPT-6 Luna, gets a fixed
+	// `reasoning.effort` and the level the request asks for as its last `configuration_update` input item.
+	const update = Array.isArray(payload.input)
+		? payload.input.findLast((item: unknown) => isRecord(item) && item.type === "configuration_update")
+		: undefined;
+	if (isRecord(update) && isRecord(update.reasoning) && typeof update.reasoning.effort === "string") {
+		if (sent.effort !== undefined) sent.fixedEffort = sent.effort;
+		sent.effort = update.reasoning.effort;
+	}
 	if (isRecord(payload.thinking)) {
 		if (typeof payload.thinking.type === "string") sent.thinking = payload.thinking.type;
 		if (typeof payload.thinking.budget_tokens === "number") sent.budgetTokens = payload.thinking.budget_tokens;

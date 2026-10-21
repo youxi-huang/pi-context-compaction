@@ -122,7 +122,11 @@ with their kinds under `unreadableKinds`), and how many of either sit in
 note schema, `schema` counts its facts without sources by section (`uncited`)
 and says whether the note fails the schema for another reason too (`other`);
 it never names the facts. Pi maps a level the model does not declare to a
-supported one, so `sent` can differ from `effort`.
+supported one, so `sent` can differ from `effort`. Since Pi 1.3.0, a model that
+changes effort mid-conversation, such as GPT-6 Luna, receives a fixed
+`reasoning.effort` of `medium` and the requested level in a
+`configuration_update` input item; `sent.effort` then reports that item's level
+and `sent.fixedEffort` the fixed one.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens

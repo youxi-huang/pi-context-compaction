@@ -34,6 +34,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // modes; docs/context-memory/codex-subscription.md sets up the proxy and the placeholder it copies the account ID from.
 // --provider relay does the same with Pi's catalog model openai/gpt-6-luna, its address moved to --base-url, an
 // OpenAI-compatible service that speaks the Responses API and whose key the environment's network proxy supplies.
+// --relay-model names another catalog model to move there instead, such as deepseek/deepseek-flash, and --relay-id
+// the ID the relay serves it under, such as a self-hosted deployment's; the catalog's API, compatibility settings,
+// level map and prices stay, so the request is the one Pi builds for that model and the limits use its prices.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
 // --keep-sessions keeps every session copy, notes included, for local reading; keep them out of the repository.
 // --cache warm, the default, matches daily use, where every main-model turn keeps the session's prefix cached: the
@@ -50,7 +53,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://...] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -63,6 +66,8 @@ const MEASURED = {
 	codex: { provider: "openai-codex", id: "gpt-6-luna" },
 	relay: { provider: "openai", id: "gpt-6-luna" },
 };
+/** The variable Pi reads each relayed catalog provider's key from; the proxy supplies the real one. */
+const RELAY_KEYS = { openai: "OPENAI_API_KEY", deepseek: "DEEPSEEK_API_KEY" };
 const LOOPBACK = {
 	id: "bench-loopback",
 	name: "Bench loopback",
@@ -361,7 +366,7 @@ async function worker() {
 	await once(server, "listening");
 
 	const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
-	const measured = MEASURED[action.provider];
+	const measured = action.provider === "relay" ? action.relay.model : MEASURED[action.provider];
 	const responseItems = [];
 	let model;
 	if (action.provider === "loopback") {
@@ -384,11 +389,16 @@ async function worker() {
 		dispatcher.configureHttpDispatcher();
 		if (action.provider === "codex") observeResponseItems(responseItems, "/codex/responses");
 		if (action.provider === "relay") observeResponseItems(responseItems, "/responses");
-		// The catalog's own model, with its compatibility settings and level map; only the address moves to the relay.
-		if (action.provider === "relay") runtime.registerProvider(measured.provider, { baseUrl: action.baseUrl });
-		model = runtime.getModel(measured.provider, measured.id);
-		if (!model) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
-		if (action.provider === "relay" && model.baseUrl !== action.baseUrl) throw new Error(`${measured.provider}/${measured.id} did not move to the relay's address`);
+		// The catalog's own model, with its compatibility settings and level map; only the address moves to the relay,
+		// and with --relay-id the ID it is served under.
+		const catalog = runtime.getModel(measured.provider, measured.id);
+		if (!catalog) throw new Error(`${measured.provider}/${measured.id} is not in this Pi's catalog`);
+		const served = action.provider === "relay" ? action.relay.id : measured.id;
+		if (action.provider === "relay")
+			runtime.registerProvider(measured.provider, { baseUrl: action.baseUrl, ...(served === measured.id ? {} : { models: [{ ...catalog, id: served, baseUrl: action.baseUrl }] }) });
+		model = runtime.getModel(measured.provider, served);
+		if (!model) throw new Error(`${measured.provider}/${served} is not registered`);
+		if (action.provider === "relay" && model.baseUrl !== action.baseUrl) throw new Error(`${measured.provider}/${served} did not move to the relay's address`);
 	}
 	const settingsManager = stock.SettingsManager.create(cwd, agentDir);
 	const loader = new stock.DefaultResourceLoader({ cwd, agentDir, settingsManager, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true });
@@ -536,6 +546,11 @@ async function parent() {
 	if (provider === "relay" && mode === "repair") throw new Error("--provider relay does not serve --mode repair");
 	const baseUrl = provider === "relay" ? argument("--base-url", "").replace(/\/+$/, "") : undefined;
 	if (provider === "relay" && !baseUrl.startsWith("https://")) throw new Error("--provider relay needs --base-url https://...");
+	const relayModel = argument("--relay-model", `${MEASURED.relay.provider}/${MEASURED.relay.id}`);
+	const relaySeparator = relayModel.indexOf("/");
+	const relay = provider === "relay" ? { model: { provider: relayModel.slice(0, relaySeparator), id: relayModel.slice(relaySeparator + 1) } } : undefined;
+	if (relay) relay.id = argument("--relay-id", relay.model.id);
+	if (relay && (relaySeparator <= 0 || !RELAY_KEYS[relay.model.provider] || !relay.id)) throw new Error(`--relay-model takes provider/id for a provider among ${Object.keys(RELAY_KEYS).join(", ")}`);
 	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
 	const remote = provider === "deepseek" || provider === "codex" || provider === "relay";
 	const limits = !remote
@@ -571,7 +586,7 @@ async function parent() {
 		if (remote) {
 			// The proxy injects the real key; Pi receives only a placeholder, Codex's in the unit's auth.json.
 			if (provider === "deepseek") value.DEEPSEEK_API_KEY = "proxy-injected";
-			if (provider === "relay") value.OPENAI_API_KEY = "proxy-injected";
+			if (provider === "relay") value[RELAY_KEYS[relay.model.provider]] = "proxy-injected";
 			value.NODE_USE_ENV_PROXY = "1";
 			for (const name of ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "NODE_EXTRA_CA_CERTS", "SSL_CERT_FILE"])
 				if (process.env[name]) value[name] = process.env[name];
@@ -587,7 +602,7 @@ async function parent() {
 		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
 		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
 		if (codexAccount) writeCodexPlaceholder(agentDir, codexAccount);
-		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl } : {}) })).toString("base64url");
+		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl, relay } : {}) })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
@@ -726,7 +741,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.

@@ -1,5 +1,41 @@
 # Validation record
 
+## 0.7.0 host-neutral core: specification, five lifts, conformance vectors and host-neutral fixtures, 2026-10-22 UTC
+
+The core package lands with its specification (reviewed by the maintainer the
+same day), the five WP2 lifts move the classified modules out of the preview
+with no behavior change, the 34 conformance vectors arrive from an external
+agent's branch and pass an independent audit before integration, and the
+fixtures gain the host-neutral record format whose Pi conversion reproduces
+the pinned bytes. All evidence is synthetic and offline (`PI_OFFLINE=1`, zero
+model budget); no provider was called. Real-provider behavior is unmeasured
+and keeps its own budgeted track.
+
+| Command | Result and exit code |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify`, run after every landing (commits ad5684a through c96f438) | Exit 0 each time, all eight steps; "Published runtime fingerprint is unchanged" throughout; no `EVAL_FROZEN_INPUT_CHANGED`; the five shared extension files byte-identical at every step |
+| Equivalence runs, one per lift and one for the vector integration: both runners with `--equivalence-out` on pre- and post-lift candidates against official Pi 1.3.0, compared by `scripts/context-memory-equivalence-compare.mjs` | Equal on every pair at every step: bench writer 11 cases, repair 38, probes 36, five scenario cases (reduced battery of 51 records for the integration); zero differences across roughly 90 content-free records per side per step |
+| Writer split identity (step 5) | `writerContractHashes`: schemaHash identical pre and post; promptHash identical under any fixed artifact ID; a 48-scenario scripted comparison of the old and new preview writer produced byte-identical request, progress and outcome dumps (729,484 bytes each side) |
+| Stock acceptance and scenarios on the integrated tree (run by the integrating agent via `node scripts/context-memory-ops.mjs preview`, commit c96f438 pre-commit state) | Acceptance 32/28/28 passes with zero failures on official Pi 1.3.0, 1.2.0 and 1.1.0 including cross-version reopen; 152 scenario checks passed, 0 failed, 0 known gaps, strict profile accepted; release checks 31 passed; `preview-release-prepare` stopped only on the then-uncommitted tree |
+| Conformance audit (independent agent, worktree of codex/wp3-conformance-vectors 447484f) | All 34 vectors' expected outcomes re-derived independently with full agreement; mutation testing showed each deliberately weakened validator caught by its vectors; the JCS implementation probed against RFC 8785 (UTF-16 key order, ES number formatting, surrogate rejection) with no divergence; manifest SHA-256 recomputed and matched; the core notes change differentially verified byte-identical on its default path over 41 branches |
+| `node --experimental-strip-types eval/preview/pi-session.ts --check` and `eval/preview/generate.ts --check` (commit 2fec3ae) | Converted P1–P4 sessions match the pinned manifest hashes; generation reproduces the committed records and session bytes; exit 0 |
+
+Findings recorded for follow-up:
+
+- On the Pi-adapter vector path, converted sessions carry derived fields the
+  vectors' own records do not, so adapter-path checkpoints compute their
+  source hash over the converted entries at assembly time; the vectors' pinned
+  hashes hold for the core path only, and the three zero-record vectors stay
+  core-only (the converter rightly rejects an empty records file).
+- `canonical.ts` rejects live-object inputs that are not JSON (a nested
+  `undefined` throws a plain TypeError, not a refusal class); hosts must hash
+  parsed JSON, as the conformance README states.
+- The specification's source-hash property 2 says "any covered record's stored
+  content", while the canonical form hashes modeled fields plus declared
+  native passthrough; the wording tension is recorded, not a code defect.
+- `conformance/runner.ts` sits outside biome's include list (type-checked via
+  the tests, never linted); worth adding when biome's config is next touched.
+
 ## 0.6.0 wave 2: rendered-note candidates, bench candidate wiring and the first reduction comparison, 2026-10-22 UTC
 
 WP3 lands behind `previewRendering`, off by default: the model-facing summary

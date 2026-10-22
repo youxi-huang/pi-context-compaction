@@ -46,6 +46,18 @@ core sources directly. The preview stays type-checked by the repository root
 TypeScript exclusion above, this is a build-configuration change with no host
 runtime source changes and no new fingerprint inputs.
 
+## The resident freeze
+
+As of 2026-10-22, with the 0.7.0 lifts complete, the resident runtime is frozen
+under decision H5 of the [v0.7.0 plan](v0.7.0-plan.md): no further Pi-version
+ports and no new features land in it; dependency and security maintenance under
+[operations.md](operations.md) continues until retirement; its tags and history
+are retained; it retires by 0.10.0 once the P-series fixtures cover what the
+F-series measured. The six changed host files below, the resident extension
+sources and their build fingerprint stay exactly as they are for that whole
+period, and nothing from the preview's 0.5.x–0.7.x work is ported into them.
+The extension is the host-neutral core's first adapter from 0.7.0 on.
+
 ## Why the host is changed at all
 
 Pi's extension API runs handlers on events. For most of what this project does, that is enough: the writer, the note format, history search, grants and the event log all live in the extension. Five things cannot be enforced from an event handler, because the handler runs after the moment that matters, or can be filtered out before it runs, or is not consulted at all:

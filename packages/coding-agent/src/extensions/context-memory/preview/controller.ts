@@ -49,6 +49,7 @@ import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
+import { applyReduction, declaredCacheLifetimeMs, type ReductionView, reduceRecords } from "./reduction.ts";
 import { setStatusLine } from "./status-line.ts";
 import {
 	assertUserMessages,
@@ -358,9 +359,12 @@ export interface PreviewControllerOptions {
 	excerpts?: PreviewSwitch;
 	/**
 	 * Which entries the current context shows only reduced (WP2): their full text is not in context, so retrieval
-	 * leaves them unmarked and an excerpt may quote them. Until reductions are wired, no entry is reduced.
+	 * leaves them unmarked and an excerpt may quote them. By default the predicate reads the reduction view;
+	 * with reductions off no entry is reduced. Tests may substitute it.
 	 */
 	reduced?: (ctx: ExtensionContext) => (entryId: string) => boolean;
+	/** WP2: deterministic reversible reductions of the projected view; off by default. */
+	reduction?: PreviewSwitch;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -390,6 +394,9 @@ export class PreviewMemoryController {
 		string,
 		{ appended: AppendedExcerpt[]; withheld: number; tokens: number }
 	>();
+	private readonly reduction: PreviewSwitch;
+	/** In-memory, per session: full read-backs of entries the reduced view replaces. Counts only. */
+	private readonly reducedReadBacks = new Map<string, number>();
 	private readonly lastCompaction = new Map<
 		string,
 		{
@@ -411,7 +418,45 @@ export class PreviewMemoryController {
 		this.journal = options.journal;
 		this.workNotes = options.workNotes ?? { enabled: false };
 		this.excerpts = options.excerpts ?? { enabled: false };
-		this.reduced = options.reduced ?? (() => () => false);
+		this.reduction = options.reduction ?? { enabled: false };
+		this.reduced =
+			options.reduced ??
+			((ctx) => {
+				const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+				const reducedIds = new Set((view?.entries ?? []).map((entry) => entry.recordId));
+				return (entryId: string) => reducedIds.has(entryId);
+			});
+	}
+
+	/**
+	 * The deterministic reduced view of this branch, or none. Off, invalid or absent configuration
+	 * and any classification error all leave requests unreduced: a reduction has no failure state
+	 * and never stands in for a failed compaction.
+	 */
+	private reducedView(
+		branch: readonly SessionEntry[],
+		model: { promptCache?: { short?: number; long?: number } } | undefined,
+	): ReductionView | undefined {
+		if (!this.reduction.enabled) return undefined;
+		try {
+			const view = reduceRecords(branch, declaredCacheLifetimeMs(model));
+			return view.entries.length ? view : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/** Count a full read-back of an entry the current reduced view replaces; counts only, no content. */
+	recordHistoryRead(ctx: ExtensionContext, entryId: string): void {
+		try {
+			if (!this.reduction.enabled) return;
+			const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+			if (!view?.entries.some((entry) => entry.recordId === entryId)) return;
+			const sessionId = ctx.sessionManager.getSessionId();
+			this.reducedReadBacks.set(sessionId, (this.reducedReadBacks.get(sessionId) ?? 0) + 1);
+		} catch {
+			// Counting is advisory; the read itself is served from the original records regardless.
+		}
 	}
 
 	bindTools(tools: () => Tool[]): void {
@@ -500,7 +545,11 @@ export class PreviewMemoryController {
 				streamSimple: registry.streamSimple.bind(registry),
 			};
 			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
-			const messages = structuredClone(convertToLlm(projection.messages));
+			// The prepared writer call reads the same reduced prefix the session's own requests carry (G4).
+			const reductionView = this.reducedView(branch, ctx.model);
+			const messages = structuredClone(
+				convertToLlm(reductionView ? applyReduction(projection.messages, reductionView) : projection.messages),
+			);
 			const prefix = getInitialSystemMessage(messages)
 				? { messages, sessionId }
 				: { messages, sessionId, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
@@ -676,6 +725,32 @@ export class PreviewMemoryController {
 		} catch {
 			// The journal is advisory for status; its own gap state is reported when it can be read.
 		}
+		// Content-free reduction counts: never entry text or IDs.
+		let reduction:
+			| {
+					enabled: boolean;
+					reason?: string;
+					entriesReduced?: number;
+					estimatedTokensRemoved?: number;
+					readBacks?: number;
+			  }
+			| undefined;
+		if (this.reduction.enabled) {
+			let view: ReductionView | undefined;
+			try {
+				view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+			} catch {
+				// A reduction has no failure state; status then reports an unreduced view.
+			}
+			reduction = {
+				enabled: true,
+				entriesReduced: view?.entries.length ?? 0,
+				estimatedTokensRemoved: view?.tokensRemoved ?? 0,
+				readBacks: this.reducedReadBacks.get(sessionId) ?? 0,
+			};
+		} else if (this.reduction.error) {
+			reduction = { enabled: false, reason: this.reduction.error };
+		}
 		return {
 			build: diagnosis.build,
 			enabled: this.config?.enabled ?? true,
@@ -697,6 +772,7 @@ export class PreviewMemoryController {
 			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
 			manualCompaction: diagnosis.manualCompaction,
 			...(prepared ? { preparation: prepared } : {}),
+			...(reduction ? { reduction } : {}),
 			...(calls ? { calls } : {}),
 			...(lastCompaction ? { lastCompaction } : {}),
 			// Counts only, never record text or IDs; `tokens` is retrieval usage, apart from any writer usage.
@@ -910,6 +986,7 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return messages;
 		}
+		let projected = messages;
 		let headroom = 0;
 		const ready = this.guard(ctx, () => {
 			const checkpoint = this.assertReady(ctx);
@@ -920,17 +997,22 @@ export class PreviewMemoryController {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
 				}
 			}
-			assertToolPairs(messages);
+			// The reduced view changes only the projection: summaries are never reduced, pairing is kept,
+			// and the token estimate below measures what the request actually carries.
+			const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model);
+			if (view) projected = applyReduction(messages, view);
+			assertToolPairs(projected);
 			const estimate =
-				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
+				projected.reduce((sum, message) => sum + estimateTokens(message), 0) +
+				(getInitialSystemMessage(projected) ? 0 : piTokens(ctx.getSystemPrompt()));
 			const limit = requestLimit(ctx.model);
 			if (estimate > limit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
 			headroom = limit - estimate;
 		});
 		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
 		// under another role would change their authority and invalidate the provider prefix cache.
-		return ready && this.excerpts.enabled ? this.withExcerpts(messages, ctx, headroom) : messages;
+		// Reduction runs first, so the excerpt's shown-term check reads the reduced stubs (G4, WP4 seam).
+		return ready && this.excerpts.enabled ? this.withExcerpts(projected, ctx, headroom) : projected;
 	}
 
 	/** Whether an entry's full text is in this session's current context: projected and not reduced. Built on first use. */
@@ -1094,7 +1176,12 @@ export class PreviewMemoryController {
 					projectedMessages.pop();
 				} else break;
 			}
-			const prefixMessages = convertToLlm(projectedMessages);
+			// G4: the writer's session prefix shares the context projection's reduced view byte for byte,
+			// so the writer continues the session's cache. Sources, hashes and readback stay on originals.
+			const reductionView = this.reducedView(branch, ctx.model);
+			const prefixMessages = convertToLlm(
+				reductionView ? applyReduction(projectedMessages, reductionView) : projectedMessages,
+			);
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
 			// The session's ID travels with the prefix, as Pi sends it with each of the session's requests.

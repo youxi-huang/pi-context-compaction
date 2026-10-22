@@ -43,6 +43,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		preparation: new PreviewPreparation({ enabled: preparation.enabled, settingsError: preparation.error, journal }),
 		workNotes: preparation.notes,
 		excerpts: readExcerptSettings(agentDir),
+		reduction: preparation.reduction,
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
@@ -227,6 +228,8 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			}
 			// A full read is returned exactly as before; search hits gain their price and mark.
 			const page = queryHistory(snapshot, query);
+			// A full read of an entry the reduced view replaces is a counted page-back; counts only.
+			if (query.operation === "read" && query.entryId) controller.recordHistoryRead(ctx, query.entryId);
 			const result = query.operation === "search" ? priceSearch(page, snapshot, inContext) : page;
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -44,6 +44,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // compactions, as a session's last turn would. Each warm-up is itself a cold request; warm-ups count against the
 // limits and are reported apart. --cache cold gives each unit its own working directory, which Pi's system prompt
 // ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run.
+// Writer and probes runs end with the token-overhead report of eval/preview/overhead.ts under `overhead`: writer
+// tokens against the records each note replaces, by cut and by v0.2.3 source-size tier; retrieval usage apart;
+// known usage of discarded work, read from the rows and each unit's call journal; calls without usage; cache
+// writes; and one net column. --session-settings name=value,... and --control <label> are recorded as given, so
+// that a candidate run and the control run it names compare on equal terms; the bench does not apply them.
+// The loopback reports usage proportional to each request, ceil(bytes / 3), and in the history condition reads the
+// probe's first gold evidence entry once before it answers, so every column has offline figures.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");
@@ -53,7 +60,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--session-settings name=value,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
 }
 
@@ -233,13 +240,14 @@ function condensedBytes(lines) {
 		.reduce((total, entry) => total + Buffer.byteLength(JSON.stringify(entry.message)), previous);
 }
 
-/** Size, section counts and cited IDs of a committed note; never its text. */
-function noteShape(note, contextBytes) {
+/** Size, section counts and cited IDs of a committed note, and the budget its checkpoint froze; never its text. */
+function noteShape(note, contextBytes, budget) {
 	const items = NOTE_SECTIONS.flatMap((section) => (Array.isArray(note[section]) ? note[section] : []));
 	const bytes = Buffer.byteLength(JSON.stringify(note));
 	return {
 		bytes,
 		contextBytes,
+		budget: budget ? { tier: budget.tier, sourceTokens: budget.sourceTokens, previousTokens: budget.previousTokens, baseTokens: budget.baseTokens, hardTokens: budget.hardTokens } : null,
 		ratio: contextBytes ? Number((bytes / contextBytes).toFixed(4)) : null,
 		facts: Object.fromEntries(NOTE_SECTIONS.map((section) => [section, Array.isArray(note[section]) ? note[section].length : 0])),
 		quoted: items.filter((item) => typeof item?.quote === "string").length,
@@ -306,10 +314,11 @@ async function worker() {
 	}
 	const stock = await import(pathToFileURL(join(stockRoot, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "index.js")).href);
 
-	// Loopback: the gold writer for scripted cuts and a fixed unknown answer for probes. In repair mode the writer's
-	// first call gets the planted candidate, and only the quotation repair reaches the measured model: from here,
-	// so the request is the one official Pi built for that model. `deepseek-local` answers it with the case's
-	// scripted repair and never leaves this machine.
+	// Loopback: the gold writer for scripted cuts and a fixed unknown answer for probes, after one read of the probe's
+	// first evidence entry when context_history is active. In repair mode the writer's first call gets the planted
+	// candidate, and only the quotation repair reaches the measured model: from here, so the request is the one
+	// official Pi built for that model. `deepseek-local` answers it with the case's scripted repair and never leaves
+	// this machine.
 	const { gold } = readFixture(action.fixture);
 	const repairSettings = [];
 	let forwarded = 0;
@@ -352,14 +361,31 @@ async function worker() {
 				.filter((entry) => entry.type === "message")
 				.map((entry) => entry.id),
 		);
+		// Usage proportional to the request, so a smaller request reads as smaller offline. No cache is simulated.
+		const usage = (answer) => {
+			const prompt = Math.ceil(Buffer.byteLength(serialized + JSON.stringify(payload.tools ?? [])) / 3);
+			const completion = Math.ceil(Buffer.byteLength(answer) / 3);
+			return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion };
+		};
+		const chunk = (delta, finish, reported) =>
+			`data: ${JSON.stringify({ id: "bench", object: "chat.completion.chunk", created: 1, model: payload.model, choices: [{ index: 0, delta, finish_reason: finish }], ...(reported ? { usage: reported } : {}) })}\n\n`;
+		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+		// A history probe first reads its first gold evidence entry once, so retrieval and page-back carry figures.
+		const evidence = action.type === "probe" && action.probe ? gold.probes.find((probe) => probe.id === action.probe)?.evidence[0] : undefined;
+		const messages = payload.messages ?? [];
+		const answered = messages.slice(messages.findLastIndex((message) => message.role === "user") + 1).some((message) => message.role === "tool");
+		if (!writer && evidence && !answered && (payload.tools ?? []).some((tool) => tool.function?.name === "context_history")) {
+			const call = JSON.stringify({ operation: "read", entryId: evidence });
+			response.write(chunk({ role: "assistant", tool_calls: [{ index: 0, id: "bench_read_1", type: "function", function: { name: "context_history", arguments: call } }] }, null));
+			response.write(chunk({}, "tool_calls", usage(call)));
+			response.end("data: [DONE]\n\n");
+			return;
+		}
 		const text = writer
 			? JSON.stringify(goldNote(gold, action.cutIndex ?? 0, readable))
 			: JSON.stringify({ status: "unknown" });
-		const chunk = (delta, finish, usage) =>
-			`data: ${JSON.stringify({ id: "bench", object: "chat.completion.chunk", created: 1, model: payload.model, choices: [{ index: 0, delta, finish_reason: finish }], ...(usage ? { usage } : {}) })}\n\n`;
-		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 		response.write(chunk({ role: "assistant", content: text }, null));
-		response.write(chunk({}, "stop", { prompt_tokens: 100, completion_tokens: 30, total_tokens: 130 }));
+		response.write(chunk({}, "stop", usage(text)));
 		response.end("data: [DONE]\n\n");
 	});
 	server.listen(0, "127.0.0.1");
@@ -442,8 +468,10 @@ async function worker() {
 			writerCalls: writer.writerCalls ?? 0,
 			phases: (writer.writerCallDetails ?? []).map((call) => call.phase),
 			// Per call: the effort asked for, the reasoning the request carried, how it ended, the schema envelope
-			// removed from its note and its tokens.
-			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, envelope: call.envelope ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
+			// removed from its note and its tokens; input is null when the call carried no usage report.
+			calls: (writer.writerCallDetails ?? []).map((call) => ({ phase: call.phase, ms: call.ms ?? null, effort: call.effort ?? null, sent: call.sent ?? null, stopReason: call.stopReason ?? null, envelope: call.envelope ?? null, input: call.usage?.input ?? null, cacheRead: call.usage?.cacheRead ?? null, cacheWrite: call.usage?.cacheWrite ?? null, output: call.usage?.output ?? null, reasoning: call.usage?.reasoning ?? null })),
+			// `complete` when the compaction committed a prepared candidate instead of calling the writer.
+			path: after.lastCompaction?.path ?? null,
 			repairKind: writer.repairKind ?? null,
 			quotations: writer.quotations ?? null,
 			scope: writer.scope ?? null,
@@ -457,8 +485,9 @@ async function worker() {
 			...(action.provider === "relay" ? { relayResponses: responseItems } : {}),
 		};
 		if (result.ok) {
-			const note = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details.note;
-			if (note) result.note = noteShape(note, contextBytes);
+			const details = readLines(action.sessionFile).findLast((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")?.details;
+			const note = details?.note;
+			if (note) result.note = noteShape(note, contextBytes, details.noteBudget);
 			// Synthetic text, scored by the parent and never written to the run's files.
 			if (note && action.type === "repair") result.committedNote = note;
 		}
@@ -470,6 +499,8 @@ async function worker() {
 		const before = sessionManager.getBranch().length;
 		let rounds = 0;
 		const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+		// Each response's usage; null when it carried none, which Pi leaves at zero, as the preview's writer reads it.
+		const roundUsage = [];
 		session.subscribe((event) => {
 			if (event.type !== "message_end" || event.message?.role !== "assistant") return;
 			rounds++;
@@ -481,6 +512,8 @@ async function worker() {
 				usage.cacheWrite += reported.cacheWrite ?? 0;
 				usage.cost += reported.cost?.total ?? 0;
 			}
+			const known = reported && [reported.input, reported.output, reported.cacheRead, reported.cacheWrite, reported.totalTokens, reported.cost?.total].some((value) => value);
+			roundUsage.push(known ? { input: reported.input ?? 0, output: reported.output ?? 0, cacheRead: reported.cacheRead ?? 0, cacheWrite: reported.cacheWrite ?? 0, reasoning: reported.reasoning ?? 0 } : null);
 			if (rounds >= PROBE_ROUNDS) session.abort();
 		});
 		let error;
@@ -495,6 +528,16 @@ async function worker() {
 		const calls = assistants.flatMap((entry) =>
 			entry.message.content.filter((block) => block.type === "toolCall" && block.name === "context_history").map((block) => block.arguments?.operation ?? "invalid"),
 		);
+		// Each context_history call: its operation, the entry a read named, and the bytes of the call and its result.
+		const results = new Map(added.filter((entry) => entry.type === "message" && entry.message.role === "toolResult").map((entry) => [entry.message.toolCallId, entry.message]));
+		const retrieval = assistants.flatMap((entry) =>
+			entry.message.content
+				.filter((block) => block.type === "toolCall" && block.name === "context_history")
+				.map((block) => {
+					const returned = (results.get(block.id)?.content ?? []).filter((part) => part.type === "text").map((part) => part.text).join("\n");
+					return { operation: block.arguments?.operation ?? "invalid", entryId: typeof block.arguments?.entryId === "string" ? block.arguments.entryId : null, callBytes: Buffer.byteLength(JSON.stringify({ tool: block.name, arguments: block.arguments })), returnedBytes: Buffer.byteLength(returned) };
+				}),
+		);
 		const after = await status();
 		result = {
 			activeTools,
@@ -508,6 +551,8 @@ async function worker() {
 			reply: last && last.stopReason === "stop" ? last.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : undefined,
 			history: { search: calls.filter((op) => op === "search").length, read: calls.filter((op) => op === "read").length, list: calls.filter((op) => op === "list").length, other: calls.filter((op) => !["search", "read", "list"].includes(op)).length },
 			usage,
+			roundUsage,
+			retrieval,
 		};
 	}
 	session.dispose();
@@ -524,6 +569,7 @@ async function parent() {
 	const { scoreProbe, summarizePreview } = await import(pathToFileURL(join(root, "eval", "preview", "scorer.ts")).href);
 	const { ANSWER_CONTRACT } = await import(pathToFileURL(join(root, "eval", "preview", "schema.ts")).href);
 	const { REPAIR_CASES_VERSION, repairCases, scoreRepair, summarizeRepairs } = await import(pathToFileURL(join(root, "eval", "preview", "repair.ts")).href);
+	const { cutMeasure, overheadReport, parseCallJournal } = await import(pathToFileURL(join(root, "eval", "preview", "overhead.ts")).href);
 	const packageDir = resolve(argument("--package-dir"));
 	const stockRoot = resolve(argument("--stock-root"));
 	const outputDir = resolve(argument("--output-dir"));
@@ -538,6 +584,15 @@ async function parent() {
 	const label = argument("--label", "run");
 	const unitMinutes = Number(argument("--unit-minutes", "10"));
 	if (!(unitMinutes > 0)) throw new Error("--unit-minutes must be positive");
+	// The session settings a run is labelled with, such as previewReduction=off for a control, and the label of the
+	// control run a candidate compares with. Recorded as given; the units run with the package's own settings.
+	const sessionSettings = {};
+	for (const item of argument("--session-settings", "").split(",").filter(Boolean)) {
+		const match = item.match(/^([A-Za-z][\w.-]*)=([^=]+)$/);
+		if (!match) throw new Error("--session-settings takes name=value pairs separated by commas");
+		sessionSettings[match[1]] = match[2];
+	}
+	const control = argument("--control", "") || null;
 	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
 	if (!["loopback", "deepseek", "deepseek-local", "codex", "relay"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local, codex or relay");
 	if (provider === "deepseek-local" && mode !== "repair") throw new Error("--provider deepseek-local serves only --mode repair");
@@ -615,11 +670,26 @@ async function parent() {
 		}, unitMinutes * 60_000);
 		const [code] = await once(child, "close");
 		clearTimeout(timer);
+		// The unit's call journal, content-free, read before its directory goes: a crashed or timed-out unit's
+		// calls and the usage they settled with stay in the report.
+		const journal = readJournal(agentDir);
 		rmSync(agentDir, { recursive: true, force: true });
 		if (timedOut) used.timedOut++;
 		const line = stdout.split("\n").find((item) => item.startsWith("BENCH_RESULT "));
-		if (!line) return { crashed: true, ...(timedOut ? { timedOut } : {}), exitCode: code, stderr: stderr.slice(-600) };
-		return JSON.parse(line.slice("BENCH_RESULT ".length));
+		if (!line) return { crashed: true, ...(timedOut ? { timedOut } : {}), exitCode: code, stderr: stderr.slice(-600), journal };
+		return { ...JSON.parse(line.slice("BENCH_RESULT ".length)), journal };
+	}
+
+	/** Every call the preview journaled in one unit's agent directory: purpose, phase, outcome and usage. */
+	function readJournal(agentDir) {
+		const directory = join(agentDir, "context-memory-preview", "calls");
+		let names;
+		try {
+			names = readdirSync(directory).filter((name) => name.endsWith(".jsonl")).sort();
+		} catch {
+			return [];
+		}
+		return names.flatMap((name) => parseCallJournal(readFileSync(join(directory, name), "utf8")));
 	}
 
 	/** Measured requests and catalog cost, counted as each unit settles. */
@@ -630,6 +700,8 @@ async function parent() {
 		used.costUsd += result.usage?.cost?.total ?? result.usage?.cost ?? 0;
 	}
 
+	/** Warm-up rows; the overhead report reads only the preparation calls their journals may hold. */
+	const warmups = [];
 	/**
 	 * In a warm run, one request over a copy of `file` with the session's own tools, as the main model's last turn
 	 * would be, so that the writer's attempts at this cut find the history's prefix cached.
@@ -640,7 +712,9 @@ async function parent() {
 		spend(result, provider !== "loopback");
 		used.warmups++;
 		used.warmupCostUsd += result.usage?.cost ?? 0;
-		record("warmups.jsonl", { fixture: fixture.gold.id, cut: cut + 1, reached: result.reached ?? false, rounds: result.rounds ?? 0, crashed: result.crashed ?? false, usage: result.usage ?? null });
+		const row = { fixture: fixture.gold.id, cut: cut + 1, reached: result.reached ?? false, rounds: result.rounds ?? 0, crashed: result.crashed ?? false, usage: result.usage ?? null, journal: result.journal ?? [] };
+		warmups.push(row);
+		record("warmups.jsonl", row);
 	}
 
 	async function pool(units, work) {
@@ -741,7 +815,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "probes" ? { chainAttempts } : {}), build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "writer" || mode === "repair" ? { attempts } : {}), ...(mode === "probes" ? { chainAttempts } : {}), concurrency, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, sessionSettings, control, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.
@@ -764,6 +838,8 @@ async function parent() {
 					continue;
 				}
 				const baseFile = await base(fixture, k);
+				// What this cut's checkpoint releases and its v0.2.3 tier; the same for every attempt on a copy.
+				const measure = cutMeasure(readLines(baseFile).slice(1));
 				await warm(fixture, k, baseFile);
 				await pool(
 					Array.from({ length: attempts }, (_, attempt) => attempt),
@@ -771,7 +847,7 @@ async function parent() {
 						const file = copy(baseFile, `${id}-cut${k + 1}-attempt${attempt + 1}`);
 						const result = await run({ type: "compact", provider, fixture: id, cutIndex: k, sessionFile: file, thinking });
 						spend(result, provider !== "loopback");
-						const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...result, note: noteRow(fixture, k, result.note) };
+						const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...measure, ...result, note: noteRow(fixture, k, result.note) };
 						delete row.diagnostics;
 						rows.push(row);
 						record("writer.jsonl", row);
@@ -832,6 +908,8 @@ async function parent() {
 			overall: group(rows),
 			byCut: Object.fromEntries([...new Set(rows.map((row) => `${row.fixture}-cut${row.cut}`))].map((key) => [key, group(rows.filter((row) => `${row.fixture}-cut${row.cut}` === key))])),
 		};
+		const ordered = [...rows].sort((a, b) => fixtures.indexOf(a.fixture) - fixtures.indexOf(b.fixture) || a.cut - b.cut || a.attempt - b.attempt);
+		report.overhead = overheadReport({ attempts: ordered, warmups });
 	}
 
 	if (mode === "repair") {
@@ -906,6 +984,7 @@ async function parent() {
 		const calls = { history: { questions: 0, search: 0, read: 0, list: 0, other: 0 }, none: { questions: 0, search: 0, read: 0, list: 0, other: 0 } };
 		const missed = { history: { cited: [], uncited: [] }, none: { cited: [], uncited: [] } };
 		const compactions = [];
+		const probeRows = [];
 		for (const id of fixtures) {
 			const fixture = readFixture(id);
 			const ids = new Set(fixture.entries.map((entry) => entry.id));
@@ -922,10 +1001,11 @@ async function parent() {
 					continue;
 				}
 				writeLines(file, lines);
+				const measure = cutMeasure(lines.slice(1));
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...measure, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], path: result.path ?? null, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, journal: result.journal ?? [], note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});
@@ -946,14 +1026,16 @@ async function parent() {
 				const units = probes.flatMap((probe) => ["history", "none"].map((condition) => ({ probe, condition })));
 				await pool(units, async ({ probe, condition }) => {
 					const copied = copy(snapshot, `${probe.id}-${condition}`);
-					const result = await run({ type: "probe", provider, fixture: id, sessionFile: copied, condition, prompt: `${probe.prompt}\n\n${ANSWER_CONTRACT}`, thinking });
+					const result = await run({ type: "probe", provider, fixture: id, probe: probe.id, sessionFile: copied, condition, prompt: `${probe.prompt}\n\n${ANSWER_CONTRACT}`, thinking });
 					spend(result, provider !== "loopback");
 					const score = scoreProbe(fixture.gold, probe, result.reached ? (result.reply ?? "") : undefined, ids);
 					scores[condition].push(score);
 					calls[condition].questions++;
 					for (const op of ["search", "read", "list", "other"]) calls[condition][op] += result.history?.[op] ?? 0;
 					(probe.evidence.some((entry) => cited.has(entry)) || probe.expected.type === "unknown" ? missed[condition].cited : missed[condition].uncited).push(score);
-					record("probes.jsonl", { probe: probe.id, kind: probe.kind, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage });
+					const row = { probe: probe.id, kind: probe.kind, fixture: id, cut: k + 1, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage, roundUsage: result.roundUsage ?? [], retrieval: result.retrieval ?? [], journal: result.journal ?? [] };
+					probeRows.push(row);
+					record("probes.jsonl", row);
 					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null, errorMessage: result.errorMessage ?? null });
 				});
 				if (k + 1 < fixture.gold.checkpoints.length) lines = [...lines, ...segment(fixture, k, lines.at(-1).id)];
@@ -969,6 +1051,7 @@ async function parent() {
 			),
 			missedEntry: Object.fromEntries(Object.entries(missed).map(([condition, value]) => [condition, { cited: rate(value.cited), uncited: rate(value.uncited) }])),
 		};
+		report.overhead = overheadReport({ attempts: compactions, probes: probeRows, warmups });
 	}
 
 	report.used = { ...used, costUsd: Number(used.costUsd.toFixed(4)), warmupCostUsd: Number(used.warmupCostUsd.toFixed(4)), minutes: Number(((Date.now() - started) / 60_000).toFixed(1)) };

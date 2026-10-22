@@ -3,27 +3,37 @@
 This directory measures the independent preview, the package that runs on official Pi. It is separate from the
 frozen F1 to F3 fixtures in `eval/fixtures`, which evaluate the resident runtime pinned in `eval/runtime.ts`; nothing
 here changes those fixtures, their scorer or the pin. See the [0.5.0 plan](../../docs/context-memory/v0.5.0-plan.md),
-work packages W0 and W3.
+work packages W0 and W3. P4 and the token-overhead report belong to the
+[0.6.0 plan](../../docs/context-memory/v0.6.0-plan.md), work package WP1.
 
 ## Fixtures
 
-`generate.ts` writes three invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
-and fails on any byte difference. `fixtures/manifest.json` pins every file by SHA-256.
+`generate.ts` writes four invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
+and fails on any byte difference. Each fixtures version has its own manifest, which pins its files by SHA-256:
+`fixtures/manifest.json` pins P1 to P3 under `0.5-preview-fixtures.1`, and `fixtures/manifest-0.6.json` pins P4
+under `0.6-preview-fixtures.1`, so P1 to P3 keep their bytes and their pins.
 
 | Fixture | Source tokens | Checkpoints | What it stresses |
 | --- | ---: | ---: | --- |
 | P1 | about 70,000 | 3 | A timeout revised three times and reverted; a withdrawn subtask; a failed approach the user forbids retrying; a user ruling echoed verbatim by the assistant and inside a tool output; a deploy instruction that only a log line gives |
 | P2 | about 51,000 | 2 | Decisions and errors among long tool outputs; a corrected threshold and due date; a file the user forbids creating |
 | P3 | about 44,000 | 3 | Answers a note cannot hold: exact values among 400 endpoint latencies, 200 audited packages and 900 log lines; twelve edit and write calls and four failed tool calls to count and tell apart; a timeout raised for every service and then restored for one |
+| P4 | about 70,000 | 3 | Answers in the entries a deterministic reduction would replace: a configuration, a source file and a runbook read again after they changed, and long test, log, search and load outputs that later turns consumed; user rulings and a failed command as controls; prompts naming request and merchant IDs that only tool outputs hold |
 
 P1 and P2 test what a note keeps; with no tools, the notes alone answered nearly all their probes in the first
 provider run. P3 tests retrieval: most of its answers are exact values or inventories that only `context_history`
-can recover, so the gap between the two probe conditions and the calls per question are its measures.
+can recover, so the gap between the two probe conditions and the calls per question are its measures. P4 tests
+reductions and excerpts: at least 17 of its answers live only in tool results that a later result of the same
+tool on the same target superseded, or after which two turns completed, and every other answer stays in view
+through a user ruling, assistant text, a failed command's output or a file's latest read; `preview.test.ts` checks
+both. Its records advance a clock, 15 seconds apart with one gap of 95 minutes before a user message, so an
+idle-gap rule can be measured; P1 to P3 carry one fixed time.
 
 Source tokens are `ceil(UTF-8 bytes / 3)` of the readable text, the preview's own size proxy. Each checkpoint
-follows a completed assistant turn. Every tool call has exactly one result.
+follows a completed assistant turn. Every tool call has exactly one result. Every cut of P1 to P4 releases fewer
+than 80,000 source tokens, so all of them fall in the first v0.2.3 note-budget tier.
 
-The 75 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
+The 108 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
 `{"status":"unknown"}`. Values are numbers, booleans, short text with listed accepted forms, or an option letter.
 Probe kinds (current and previous values, counts, constraints, forbidden retries, withdrawn work, attribution,
 authority, absent answers, continuation and facts) live only in the gold files. A test keeps them out of every
@@ -72,6 +82,9 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | `repair` | For each case of `repair.ts` at each cut, the writer's first call gets the case's planted candidate and only the quotation repair reaches the measured model, `--attempts` times per case. Reports scores by template, refusals by code, and for the repair calls their stop reasons, the effort asked for and the reasoning settings each request carried, output and reasoning tokens, time and cost |
 
 `--provider loopback`, the default, answers locally and never contacts a model service; it checks the harness.
+It reports usage proportional to each request, `ceil(bytes / 3)` of the messages and tools sent and of its answer,
+with no cache, and in the `context_history` condition it first reads the probe's first gold evidence entry once and
+then answers unknown, as before, so every column of the token-overhead report has offline figures.
 In `repair` mode, `--provider deepseek-local` loads Pi's catalog model `deepseek/deepseek-flash` with its own
 compatibility settings and level map, moves only its address to the bench, and answers the repair with the case's
 scripted repair: it shows what official Pi sends for each `--thinking` level without any request leaving the
@@ -109,6 +122,36 @@ apply, `summary.json` names the relay's host under `endpoint`, and writer rows a
 usage of its own: compare refusals, notes and probe scores with other runs, but not its cache share or cost, which
 are catalog estimates over the relay's counts.
 
+### Token-overhead report
+
+Writer and probes runs end `summary.json` with `overhead` (report `0.6-overhead-report.1`), which `overhead.ts`
+computes from the run's own rows. Nothing in it calls a model, so a loopback run gives every column figures and
+`packages/coding-agent/test/context-memory-preview-bench-report.test.ts` checks its arithmetic on scripted rows. It
+holds `overall`, `byCut` (keyed `P1-cut1` and so on, with the cut's `tier` and `sourceTokens`), and `byTier`: the
+four v0.2.3 note-budget tiers with their source-token bounds, the cuts that fell in each, the writer column, and
+the committed notes' estimated tokens beside the base and hard allowances their checkpoints froze. Each section has:
+
+| Column | What it counts |
+| --- | --- |
+| `writer` | Committed work: the calls of attempts that committed, except declined tool calls. Their `input`, `cacheRead`, `cacheWrite`, `cacheWrite1h`, `output`, `reasoning` and `totalInput` tokens, the same figures `perCheckpoint` and `perNoteByte`, and the notes' bytes and estimated tokens against the records they replace. `replacedTokens` is what each checkpoint released, the readable tokens `selectNoteBudget` receives, plus the previous note |
+| `retrieval` | The probes' `context_history` calls by operation, the estimated tokens of each call and of what it returned, and the probes' own provider usage per condition. Never pooled with writer usage |
+| `discarded` | Known usage of work that committed no note, each call once: `refused` attempts, `crashed` or timed-out units, `toolCallDeclined` responses inside committed attempts, and `preparation` calls whose candidate no checkpoint used. `repairNotCommitted` is the repair-phase share of the first two |
+| `usageMissing` | Calls without a usage report: their `count`, by `phases` (`generate`, `repair`, `probe`) and by `purposes` (`compaction`, `preparation`, `probe`). Such a call adds nothing to any total, and each column's own `usageMissing` says how many of its calls it could not count |
+| `cache` | Cache reads, writes and 1-hour writes over every call in the section. A write figure reads `not reported` when no call reported one, rather than zero, since Pi records an unreported count as 0 |
+| `net` | `savedTokens`, the estimated tokens committed checkpoints removed (the records replaced less the note, once per checkpoint), less `pageBackTokens`: what retrieval read back in (`pageBack.history`) and the excerpts the preview appended (`pageBack.excerpts`, none before WP4). The difference is `netTokens` |
+
+Tokens are the provider's as Pi records them; estimates are `ceil(UTF-8 bytes / 3)`, the preview's own. A crashed
+or timed-out unit leaves no row of calls, so the bench reads each unit's call journal, content-free, before it
+removes the unit's agent directory; rows keep it as `journal`. Pi's per-call record does not carry 1-hour cache
+writes, so `cacheWrite1h` comes from each attempt's summed usage and stays with the attempt. In writer mode every
+attempt on a cut counts, so the sums cover `--attempts` copies of each cut; compare the per-checkpoint figures.
+
+Two runs compare on equal terms when `summary.json` records the same mode, provider, model, thinking, cache,
+fixtures, attempts, concurrency and Pi version. `--session-settings name=value,...` labels the session settings a run
+stands for, such as `previewReduction=off` for a control, under `sessionSettings` (empty: the package's defaults),
+and `--control <label>` names the run a candidate compares with under `control`. Both are recorded as given: the
+bench writes no `pi-context-memory.json`, so the label must describe what the units actually ran with.
+
 ### Quotation-repair cases
 
 `repair.ts` (cases `0.5.1-repair-cases.1`) plants one to three failing quotations in a faithful note for each
@@ -124,7 +167,7 @@ fixture cut, chosen deterministically from the cut's own entries:
 | `combined` | A misattribution, a spacing fault and a paraphrase in one note | Passes all three |
 
 A case is kept only when the preview's own diagnosis classifies each planted quotation as intended; templates a cut
-cannot carry are listed as skipped. The fixtures yield 38 cases. Scoring needs no judge: `silentLoss` counts
+cannot carry are listed as skipped. P1 to P3 yield 38 cases. Scoring needs no judge: `silentLoss` counts
 committed notes without a ruling a user gave, `promoted` counts instructions quoted only from assistant or tool text,
 and `keptUnsupported` counts an order no user gave kept without a quotation. A refused note passes nothing and loses
 nothing silently. Each case's scripted repair passes, which `repair.test.ts` checks against the preview's own repair

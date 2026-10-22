@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { textTokens } from "../config.ts";
-import type { HistorySnapshot } from "../history.ts";
+import { type HistoryExcerpt, type HistoryPage, type HistorySnapshot, queryHistory } from "../history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
 import { hashEntries, noteSections, sourceRole, sourceText } from "../notes.ts";
 
@@ -10,10 +10,69 @@ import { hashEntries, noteSections, sourceRole, sourceText } from "../notes.ts";
 export const HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"] as const;
 export type HistoryViewKind = (typeof HISTORY_VIEW_KINDS)[number];
 type NoteKind = (typeof noteSections)[number];
-/** Part of every cursor signature: a cursor indexes this version's ordering. */
+/** Part of every cursor signature: a cursor indexes this version's ordering. Prices and marks do not reorder it. */
 const VIEW_VERSION = "view-v2";
 const EXCERPT_CHARS = 400;
 const EDIT_TOOLS = new Set(["edit", "write"]);
+/**
+ * The most a low-detail read returns of an entry, in estimated tokens of its JSON-escaped text. A proposal: whether
+ * low detail becomes the default for reads, and at what bound, is the maintainer's decision from the probes (M8).
+ */
+export const LOW_DETAIL_TOKENS = 200;
+
+/** Whether an entry's full text is in the model's current context. */
+export type InContext = (entryId: string) => boolean;
+const NONE_IN_CONTEXT: InContext = () => false;
+
+/**
+ * Entries whose full text the model holds: in the active projection and not reduced. A reduced entry shows only its
+ * one line in context, so it is not marked. Reductions are the caller's to supply; until they exist, none is.
+ */
+export function inContextEntries(
+	projection: Pick<SessionProjection, "entries">,
+	isReduced: (entryId: string) => boolean = () => false,
+): InContext {
+	const active = new Set(
+		projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
+	);
+	return (entryId) => active.has(entryId) && !isReduced(entryId);
+}
+
+/**
+ * Estimated tokens of what `context_history` read returns for `entry` in full: every page of an unchanged `read`,
+ * measured as the tool's text. The read runs on a one-entry copy of the snapshot, so its cost does not grow with the
+ * branch, and the branch position is put back, so each page has the bytes the real read returns. An entry `read`
+ * refuses, one without text or with an ID the query schema rejects, costs nothing to read.
+ */
+export function readTokens(snapshot: HistorySnapshot, entry: SessionEntry, position: number): number {
+	if (!sourceText(entry) || entry.id.length > 64) return 0;
+	const single: HistorySnapshot = { ...snapshot, entries: [entry] };
+	let tokens = 0;
+	let cursor: string | undefined;
+	do {
+		const page = queryHistory(single, { operation: "read", entryId: entry.id, ...(cursor ? { cursor } : {}) });
+		tokens += textTokens(JSON.stringify({ ...page, entries: page.entries.map((hit) => ({ ...hit, position })) }));
+		cursor = page.cursor;
+	} while (cursor);
+	return tokens;
+}
+
+/**
+ * The longest `text.slice(start, end)` of at most `limit` characters that `fits`, which must hold for every shorter
+ * slice it holds for.
+ */
+export function longestFitting(text: string, start: number, limit: number, fits: (slice: string) => boolean): string {
+	let low = start;
+	let high = Math.min(text.length, start + limit);
+	while (low < high) {
+		const middle = Math.ceil((low + high) / 2);
+		if (fits(text.slice(start, middle))) low = middle;
+		else high = middle - 1;
+	}
+	// Never end between the two halves of a surrogate pair.
+	const code = text.charCodeAt(low - 1);
+	return text.slice(start, low > start && code >= 0xd800 && code <= 0xdbff ? low - 1 : low);
+}
 
 /** The preview's `context_history` parameters: search and read as before, and a typed list. */
 export const previewHistorySchema = Type.Object(
@@ -48,6 +107,12 @@ export const previewHistorySchema = Type.Object(
 			}),
 		),
 		grantId: Type.Optional(Type.String({ maxLength: 128 })),
+		detail: Type.Optional(
+			Type.Union([Type.Literal("low"), Type.Literal("full")], {
+				description:
+					"For read: low returns the start of the entry and its full cost; full, the default, all of it.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -65,8 +130,29 @@ interface Excerpt {
 	text: string;
 }
 
+/** The cost of a full read and whether it is needed; added to each item of a page and each search hit. */
+interface Priced {
+	/** Estimated tokens `read` returns for the entry in full; for a fact, for all its sources together. */
+	readTokens: number;
+	/** The entry, or every source of a fact, is already in the current context in full. */
+	inContext?: true;
+}
+
+/** A search hit with what reading its entry in full costs, and whether the model already holds it. */
+export interface PricedHit extends HistoryExcerpt, Priced {}
+
+export interface PricedSearchPage extends Omit<HistoryPage, "entries"> {
+	entries: PricedHit[];
+}
+
+/** A low-detail read: the start of one entry, bounded by `LOW_DETAIL_TOKENS`, with the full read's cost stated. */
+export interface LowDetailPage extends Omit<HistoryPage, "entries" | "cursor"> {
+	detail: "low";
+	entries: (PricedHit & { complete: boolean })[];
+}
+
 /** A fact a committed checkpoint recorded. The summary is the writer's wording; the excerpt is the evidence. */
-export interface NoteViewItem {
+export interface NoteViewItem extends Priced {
 	kind: NoteKind;
 	summary: string;
 	quote?: string;
@@ -89,7 +175,7 @@ export interface NoteViewItem {
 	excerpt: Excerpt;
 }
 
-export interface EditViewItem {
+export interface EditViewItem extends Priced {
 	kind: "edits";
 	entryId: string;
 	position: number;
@@ -99,7 +185,7 @@ export interface EditViewItem {
 	outcome: "ok" | "error" | "no-result";
 }
 
-export interface ErrorViewItem {
+export interface ErrorViewItem extends Priced {
 	kind: "errors";
 	entryId: string;
 	role: string;
@@ -110,6 +196,9 @@ export interface ErrorViewItem {
 }
 
 export type HistoryViewItem = NoteViewItem | EditViewItem | ErrorViewItem;
+/** An item before its page prices it: only the items a page returns are read for their cost. */
+type NoteDraft = Omit<NoteViewItem, keyof Priced>;
+type ViewDraft = NoteDraft | Omit<EditViewItem, keyof Priced> | Omit<ErrorViewItem, keyof Priced>;
 
 export interface HistoryViewPage {
 	sessionId: string;
@@ -155,12 +244,12 @@ const matches = (text: string, terms: readonly string[]) => {
  * revisions marked from every section's `supersedes`. Checkpoints were validated when the session became ready;
  * malformed values are skipped rather than trusted, and only sources on this branch are listed.
  */
-function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: readonly string[]): NoteViewItem[] {
+function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: readonly string[]): NoteDraft[] {
 	const position = new Map(entries.map((entry, index) => [entry.id, index]));
 	// Every section's distinct facts, in their latest restatement, so a revision can be matched to the facts it
 	// may replace.
 	const distinct = new Map<string, { section: NoteKind; sources: string[]; supersedes: string[] }>();
-	const recorded = new Map<string, { item: Omit<NoteViewItem, "inLatestCheckpoint">; lastSeen: number }>();
+	const recorded = new Map<string, { item: Omit<NoteDraft, "inLatestCheckpoint">; lastSeen: number }>();
 	let latest = -1;
 	entries.forEach((entry, index) => {
 		if (entry.type !== "compaction" || !isRecord(entry.details)) return;
@@ -242,7 +331,7 @@ function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: read
 	});
 }
 
-function editItems(entries: readonly SessionEntry[]): EditViewItem[] {
+function editItems(entries: readonly SessionEntry[]): Omit<EditViewItem, keyof Priced>[] {
 	const results = new Map<string, boolean>();
 	for (const entry of entries)
 		if (entry.type === "message" && entry.message.role === "toolResult")
@@ -268,8 +357,8 @@ function editItems(entries: readonly SessionEntry[]): EditViewItem[] {
 	});
 }
 
-function errorItems(entries: readonly SessionEntry[], terms: readonly string[]): ErrorViewItem[] {
-	return entries.flatMap((entry, position): ErrorViewItem[] => {
+function errorItems(entries: readonly SessionEntry[], terms: readonly string[]): Omit<ErrorViewItem, keyof Priced>[] {
+	return entries.flatMap((entry, position): Omit<ErrorViewItem, keyof Priced>[] => {
 		if (entry.type !== "message") return [];
 		const message = entry.message;
 		if (message.role === "toolResult" && message.isError)
@@ -299,13 +388,13 @@ function errorItems(entries: readonly SessionEntry[], terms: readonly string[]):
 }
 
 /** Newest first: the latest source of a fact, or the record's own position. */
-function newest(item: HistoryViewItem): number {
+function newest(item: ViewDraft): number {
 	return item.kind === "edits" || item.kind === "errors"
 		? item.position
 		: Math.max(...item.sources.map((source) => source.position));
 }
 
-function searchable(item: HistoryViewItem, entries: readonly SessionEntry[]): string {
+function searchable(item: ViewDraft, entries: readonly SessionEntry[]): string {
 	if (item.kind === "edits") return `${item.tool} ${item.path}`;
 	if (item.kind === "errors") return `${item.tool ?? ""} ${sourceText(entries[item.position])}`;
 	return [item.summary, item.quote ?? "", ...item.sources.map((source) => sourceText(entries[source.position]))].join(
@@ -313,15 +402,40 @@ function searchable(item: HistoryViewItem, entries: readonly SessionEntry[]): st
 	);
 }
 
+/** Prices drafts against one snapshot, reading each entry's cost once. */
+function pricer(snapshot: HistorySnapshot, inContext: InContext): (draft: ViewDraft) => HistoryViewItem {
+	const costs = new Map<number, number>();
+	const cost = (position: number) => {
+		let tokens = costs.get(position);
+		if (tokens === undefined) {
+			tokens = readTokens(snapshot, snapshot.entries[position], position);
+			costs.set(position, tokens);
+		}
+		return tokens;
+	};
+	const mark = (held: boolean) => (held ? { inContext: true as const } : {});
+	return (draft) => {
+		if (draft.kind === "edits" || draft.kind === "errors")
+			return { ...draft, readTokens: cost(draft.position), ...mark(inContext(draft.entryId)) };
+		return {
+			...draft,
+			readTokens: draft.sources.reduce((sum, source) => sum + cost(source.position), 0),
+			...mark(draft.sources.every((source) => inContext(source.entryId))),
+		};
+	};
+}
+
 /**
  * One kind of item on the snapshot's branch, newest first, computed on every call: nothing is stored, so nothing
  * can go stale, and only entries in the snapshot are listed. A cursor is bound to the snapshot, the kind, the query
- * and the view version; after the branch grows it continues on the prefix it was issued for.
+ * and the view version; after the branch grows it continues on the prefix it was issued for. Each returned item
+ * states `readTokens` and, when its entries are already in context in full, `inContext`.
  */
 export function listHistory(
 	snapshot: HistorySnapshot,
 	request: Pick<PreviewHistoryQuery, "kind" | "query" | "cursor">,
 	budgetTokens = 4000,
+	inContext: InContext = NONE_IN_CONTEXT,
 ): HistoryViewPage {
 	const kind = request.kind;
 	if (!kind) throw new Error("HISTORY_KIND_REQUIRED: list needs a kind");
@@ -357,7 +471,7 @@ export function listHistory(
 	}
 	const terms = viewTerms(request.query ?? "");
 	const entries = snapshot.entries;
-	const all: HistoryViewItem[] =
+	const all: ViewDraft[] =
 		kind === "edits"
 			? editItems(entries)
 			: kind === "errors"
@@ -373,11 +487,13 @@ export function listHistory(
 		kind,
 		items: [],
 	};
+	const price = pricer(snapshot, inContext);
 	let remaining = Math.max(512, Math.min(4000, budgetTokens)) - 350;
 	for (; index < items.length; index++) {
-		const tokens = textTokens(JSON.stringify(items[index]));
+		const item = price(items[index]);
+		const tokens = textTokens(JSON.stringify(item));
 		if (tokens > remaining && page.items.length) break;
-		page.items.push(items[index]);
+		page.items.push(item);
 		remaining -= tokens;
 	}
 	if (index < items.length)
@@ -394,4 +510,74 @@ export function listHistory(
 		page.message =
 			"No items of this kind on this branch. The list comes from earlier checkpoints and tool records and can miss what a writer left out; search before concluding the history lacks it.";
 	return page;
+}
+
+/**
+ * A `context_history` search page with each hit priced and marked. The hits, their order and the cursor are the
+ * shared search's own; a hit's position indexes the snapshot, or the prefix a cursor pinned, which starts it.
+ */
+export function priceSearch(
+	page: HistoryPage,
+	snapshot: HistorySnapshot,
+	inContext: InContext = NONE_IN_CONTEXT,
+): PricedSearchPage {
+	return {
+		...page,
+		entries: page.entries.map((hit) => {
+			const entry = snapshot.entries[hit.position];
+			const tokens = entry?.id === hit.entryId ? readTokens(snapshot, entry, hit.position) : 0;
+			return { ...hit, readTokens: tokens, ...(inContext(hit.entryId) ? { inContext: true as const } : {}) };
+		}),
+	};
+}
+
+/**
+ * Low detail for `read`: the start of the entry, at most `LOW_DETAIL_TOKENS` estimated tokens of its text, with what
+ * the full read costs. Refused as `read` refuses, the newest entry under a duplicated ID first; it has no
+ * continuation, since the full read pages the entry from its start.
+ */
+export function readLowDetail(
+	snapshot: HistorySnapshot,
+	request: Pick<PreviewHistoryQuery, "entryId" | "cursor">,
+	inContext: InContext = NONE_IN_CONTEXT,
+): LowDetailPage {
+	if (request.cursor)
+		throw new Error("HISTORY_QUERY_INVALID: a low-detail read has no continuation; read with detail full instead");
+	if (!request.entryId) throw new Error("HISTORY_ENTRY_REQUIRED");
+	const position = snapshot.entries.findLastIndex((entry) => entry.id === request.entryId);
+	const entry = snapshot.entries[position];
+	const text = entry ? sourceText(entry) : "";
+	if (!entry || !text) throw new Error("HISTORY_SCOPE_DENIED: entry is not in this readable scope");
+	const head = longestFitting(
+		text,
+		0,
+		LOW_DETAIL_TOKENS * 3,
+		(slice) => textTokens(JSON.stringify(slice)) <= LOW_DETAIL_TOKENS,
+	);
+	const tokens = readTokens(snapshot, entry, position);
+	const complete = head.length === text.length;
+	return {
+		sessionId: snapshot.sessionId,
+		leafId: snapshot.leafId,
+		scopeHash: snapshot.scopeHash,
+		detail: "low",
+		entries: [
+			{
+				entryId: entry.id,
+				parentId: entry.parentId,
+				role: sourceRole(entry),
+				position,
+				offset: 0,
+				text: head,
+				complete,
+				readTokens: tokens,
+				...(inContext(entry.id) ? { inContext: true as const } : {}),
+			},
+		],
+		...(complete
+			? {}
+			: {
+					message: `Low detail: the start of the entry only. Reading it in full returns about ${tokens} tokens; read it again with detail full if it is needed.`,
+				}),
+	};
 }

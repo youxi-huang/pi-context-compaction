@@ -39,6 +39,7 @@ const CASES = [
 	{ name: "failed-compaction-notices", variants: ["extension"] },
 	{ name: "work-notes", variants: ["extension"] },
 	{ name: "prepared-candidate", variants: ["extension"] },
+	{ name: "reduction", variants: ["extension"] },
 	{ name: "long-session-overhead", variants: ["extension"], timeoutMs: 1_200_000 },
 ];
 
@@ -917,6 +918,46 @@ async function worker() {
 				await open(stock.SessionManager.open(manager.getSessionFile()));
 				const restarted = await status();
 				check("journal-survives-restart", "After a restart the call record is unchanged", JSON.stringify(restarted.calls) === JSON.stringify(afterCancel.calls), { before: afterCancel.calls, after: restarted.calls });
+				break;
+			}
+			case "reduction": {
+				// WP2: with previewReduction on, a consumed tool result reduces to one line in the request view only.
+				// The session file keeps the original, context_history reads it back in full, and status reports counts.
+				writeSettings(true);
+				writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ previewReduction: { enabled: true } }));
+				await open(newSession());
+				await seed();
+				toolCalls = [{ name: "context_history", args: () => ({ operation: "read", entryId: logUserId() }) }];
+				const readTurn = await prompt("Read the local check log back in full.");
+				const resultEntry = () => manager.getBranch().find((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === "context_history");
+				const original = () => JSON.stringify(resultEntry()?.message.content ?? "");
+				observe("context_history read turn", { sent: readTurn.sent, resultBytes: original().length });
+				// One later finished turn consumes the result; the requests after it carry the reduced view.
+				const consumed = await prompt("Summarize what the read returned.");
+				const first = await prompt("Continue checking the service.");
+				const firstPayload = lastMainPayload;
+				const second = await prompt("Continue checking once more.");
+				const secondPayload = lastMainPayload;
+				// The read page's "offset" field sits beyond the stub's quoted head and appears only in the
+				// full page JSON, so it marks the original result; the stub replaces it in requests only.
+				const stubbed = firstPayload.includes("context_history reads this entry back in full") && firstPayload.includes(resultEntry()?.id ?? "<none>") && !firstPayload.includes("offset");
+				observe("reduced requests", { stubbed, firstBytes: firstPayload.length, secondBytes: secondPayload.length });
+				check(
+					"reduction-stable-prefix",
+					"A consumed tool result is replaced by its one-line stub in the provider request only, the session file keeps the original, and the reduced prefix extends byte for byte between requests",
+					readTurn.reached && consumed.completed && first.completed && second.completed && first.marker === null && stubbed && original().includes("offset") && readFileSync(manager.getSessionFile(), "utf8").includes("offset") && secondPayload.startsWith(firstPayload.slice(0, -1)),
+					{ stubbed, marker: first.marker },
+				);
+				const historyTool = session.agent.state.tools.find((tool) => tool.name === "context_history");
+				const readback = JSON.stringify(await historyTool?.execute("synthetic-reduction-readback", { operation: "read", entryId: resultEntry()?.id }));
+				const status = JSON.parse((await command("/compaction-status")).output);
+				observe("readback and status", { readbackBytes: readback.length, reduction: status.reduction });
+				check(
+					"reduction-readback",
+					"context_history returns the reduced entry's original text in full, and status reports content-free reduction counts",
+					readback.includes("log 00000") && readback.includes("offset") && !readback.includes("context_history reads this entry back in full") && status.reduction?.enabled === true && status.reduction.entriesReduced >= 1 && status.reduction.estimatedTokensRemoved > 0 && status.reduction.readBacks >= 1 && JSON.stringify(Object.keys(status.reduction).sort()) === JSON.stringify(["enabled", "entriesReduced", "estimatedTokensRemoved", "readBacks"].sort()),
+					{ reduction: status.reduction },
+				);
 				break;
 			}
 			case "long-session-overhead": {

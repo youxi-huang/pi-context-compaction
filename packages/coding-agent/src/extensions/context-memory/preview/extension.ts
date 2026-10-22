@@ -4,8 +4,9 @@ import { freezeHistory, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
+import { readExcerptSettings } from "./excerpts.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
-import { listHistory, previewHistorySchema } from "./history-view.ts";
+import { listHistory, previewHistorySchema, priceSearch, readLowDetail } from "./history-view.ts";
 import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
 import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
@@ -41,6 +42,8 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		journal,
 		preparation: new PreviewPreparation({ enabled: preparation.enabled, settingsError: preparation.error, journal }),
 		workNotes: preparation.notes,
+		excerpts: readExcerptSettings(agentDir),
+		reduction: preparation.reduction,
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {
@@ -198,7 +201,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		name: "context_history",
 		label: "Context history",
 		description:
-			"Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked; sourceRevisedBy means a later fact revised the item's source entry without saying which fact it replaced, so check the excerpt. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
+			"Search or read original history on the current branch, or list one kind of item newest first: constraints (instructions), decisions (reasons), failedPaths, files, nextSteps, state, edits or errors, with superseded items marked; sourceRevisedBy means a later fact revised the item's source entry without saying which fact it replaced, so check the excerpt. A list comes from earlier checkpoints and tool records and can miss what a writer left out; search to check. Returns entry IDs, roles, branch positions and continuation cursors. Search hits and list items state readTokens, the cost of reading the entry in full, and inContext when it is already in your context. Search is ranked; use position for chronology. Never infer missing or truncated evidence. Parent grants are not supported by this preview.",
 		promptGuidelines: [
 			"Search context_history for earlier decisions and evidence omitted by compaction, then read the matching original entry ID. Follow a cursor by repeating the same operation, query and entryId with that cursor.",
 			"To see how a decision, constraint or setting changed, list its kind with a query; read the cited entry before relying on it.",
@@ -209,14 +212,26 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			controller.assertReady(ctx);
 			if (request.grantId)
 				throw new Error("HISTORY_SCOPE_DENIED: parent-history grants are unsupported in this preview");
+			const { kind, detail, ...query } = request;
+			if (detail !== undefined && request.operation !== "read")
+				throw new Error("HISTORY_QUERY_INVALID: detail applies to read only");
+			const snapshot = freezeHistory(ctx.sessionManager);
+			const inContext = controller.inContext(ctx);
 			if (request.operation === "list") {
-				const view = listHistory(freezeHistory(ctx.sessionManager), request);
+				const view = listHistory(snapshot, request, undefined, inContext);
 				return { content: [{ type: "text", text: JSON.stringify(view) }], details: view };
 			}
-			const { kind, ...query } = request;
 			if (kind !== undefined) throw new Error("HISTORY_QUERY_INVALID: kind applies to list only");
-			const page = queryHistory(freezeHistory(ctx.sessionManager), query);
-			return { content: [{ type: "text", text: JSON.stringify(page) }], details: page };
+			if (detail === "low") {
+				const low = readLowDetail(snapshot, query, inContext);
+				return { content: [{ type: "text", text: JSON.stringify(low) }], details: low };
+			}
+			// A full read is returned exactly as before; search hits gain their price and mark.
+			const page = queryHistory(snapshot, query);
+			// A full read of an entry the reduced view replaces is a counted page-back; counts only.
+			if (query.operation === "read" && query.entryId) controller.recordHistoryRead(ctx, query.entryId);
+			const result = query.operation === "search" ? priceSearch(page, snapshot, inContext) : page;
+			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 	});
 }

@@ -1,5 +1,39 @@
 # Validation record
 
+## 0.6.0 offline implementation: overhead report, deterministic reductions, retrieval candidates, 2026-10-22 UTC
+
+The [v0.6.0 plan](v0.6.0-plan.md)'s WP1, WP2 and WP4 are implemented in the
+independent preview behind `previewReduction` and `previewExcerpts`, both off
+by default; the bench gains the token-overhead report and the evaluation set
+the P4 fixture under its own fixtures version. WP3 and every provider bench
+remain open. The resident runtime, its build fingerprint, the checkpoint
+schema, P1 to P3, the frozen F-series and the evaluation pin are unchanged.
+Everything below is synthetic, scripted evidence under `PI_OFFLINE=1` with a
+zero model budget: it establishes mechanics and report arithmetic, never
+provider quality, pause or cache behavior.
+
+Integration wiring: the reduction runs before the excerpt decision in
+`controller.context`, so the excerpt's shown-term check reads the reduced
+stubs, and the retrieval `inContext` predicate defaults to the reduction view,
+so a reduced entry is unmarked and may be quoted by an excerpt. A checkpoint
+written over a reduced view is byte-identical to one written without it, which
+`context-memory-preview-reduction.test.ts` checks.
+
+| Command | Result and exit code |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs ci`, commit 644fc13 | Exit 0, all 20 steps. Fingerprint unchanged; `context-memory-check` with the three new test files (reduction, excerpt, bench report); stock-Pi acceptance 32 passed, 0 failed on official Pi 1.3.0 with cross-version checkpoints, 28 passed, 0 failed on each of 1.2.0 and 1.1.0; strict scenarios 152 passed, 0 failed, 0 known gaps, including the new `reduction-stable-prefix` and `reduction-readback`; release prepare; full offline evaluation |
+| GitHub `Context compaction` workflow on the same commit | Success (the same sequence on a fresh runner) |
+| Writer bench, loopback, P1 to P4, `--attempts 2` | Exit 0. 22 of 22 committed. Writer input 639,066 tokens (29,048.5 per checkpoint, 13.27 per note byte), output 16,052; notes 16,052 tokens against 480,198 replaced (ratio 0.0334); saved 464,146 net; `usageMissing` 0; nothing discarded; cache writes read "not reported", as the loopback reports none; all 11 cuts fall in source-size tier 1 |
+| Probes bench, loopback, P1 to P4 | Exit 0. 11 of 11 committed. 108 history questions, 97 `read` calls, 2,619 call tokens, 89,039 returned tokens charged as page-back; net 143,034 saved. P3 cut 3 nets −3,800, since that cut releases few tokens, and the P4 cuts net 14,138, 3,829 and 4,106 |
+
+These two loopback runs, with both switches at their off defaults, are the
+mechanism-free offline baseline the WP1 gate requires; candidate runs are
+labelled with `--session-settings` and compared under `--control`. No P1 to
+P4 cut releases more than tier 1's bound, so a tier refinement under M6 has
+no evidence from this set yet. The bench does not yet write the labelled
+session settings into a unit's `pi-context-memory.json`; a candidate run
+needs that wiring before its label means the switch was on.
+
 ## Sources-repair candidate beside v0.5.3 through a relay, DeepSeek V4.1 Flash and GPT-6 Luna, official Pi 1.3.0, 2026-10-21 UTC
 
 This is a real-provider run, recorded apart from the synthetic evidence below. It compares the v0.5.3 release

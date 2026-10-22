@@ -109,6 +109,25 @@ export interface ContextEditRecord extends RecordBase {
 	replacement: { content: string | RecordContentBlock[] } | null;
 }
 
+/**
+ * The projected view of one record: the request messages a host derives from it after context
+ * edits. Read by `inContextEntries` (history-view.ts) and the cut selection (cuts.ts); a host's
+ * native projection entry satisfies this shape. A record projected to no messages is not in
+ * context. `TMessage` stays the host's own projected-message type and is never converted; modules
+ * that read message fields narrow it to reduction.ts's `ReducibleMessage`, that shape's home.
+ */
+export interface ProjectedRecord<TMessage = unknown> {
+	/** The stored record that owns this projected contribution. */
+	readonly sourceEntry: { readonly id: string };
+	/** Model-visible messages; empty for state-only records and omissions. */
+	readonly messages: readonly TMessage[];
+}
+
+/** The projection fields the core reads: one branch's projected records, in branch order. */
+export interface RecordProjection<TMessage = unknown> {
+	readonly entries: readonly ProjectedRecord<TMessage>[];
+}
+
 /** One record of a branch: the ancestor chain from the session's first record to one leaf. */
 export type SessionRecord =
 	| MessageRecord

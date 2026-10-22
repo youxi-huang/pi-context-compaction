@@ -1,12 +1,16 @@
-import type { ThinkingLevel } from "@earendil-works/pi-ai";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { type MemoryNote, noteBytes, sourceText, validateNote } from "../../../../../compaction-core/src/notes.ts";
-import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
-import { type NoteBudget, storedNoteLimit } from "../config.ts";
-import { hashEntries } from "../identity.ts";
+// Lifted whole from the preview into the host-neutral core (v0.7.0 WP2 step 4, K11: it lifts as it
+// stands): `freezePreparationInput`, `finalizePreparation`, `classifyPreparation`, `reusablePrefix`
+// and their shapes. The host's `SessionEntry` type import became the structural record shapes in
+// records.ts, Pi's `ThinkingLevel` the equal `WriterEffort` union below, and the shared
+// config/identity imports moved to the core's copies. Logic, bounds and thrown messages are
+// unchanged (rule K2).
+import { type NoteBudget, storedNoteLimit } from "./config.ts";
+import { hashEntries } from "./identity.ts";
+import { type MemoryNote, noteBytes, sourceText, validateNote } from "./notes.ts";
+import type { SessionRecord } from "./records.ts";
 
-/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
-const asRecord = (entry: SessionEntry): SessionRecord => entry as unknown as SessionRecord;
+/** The writer effort levels the identity check accepts: exactly Pi's `ThinkingLevel` or `"off"`. */
+export type WriterEffort = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 type Frozen<T> = T extends object ? { readonly [Key in keyof T]: Frozen<T[Key]> } : T;
 
@@ -15,7 +19,7 @@ export interface PreparationWriterIdentity {
 	role: "session" | "fixed";
 	/** Resolved provider/model, never the unresolved `session` selector. */
 	model: string;
-	effort: ThinkingLevel | "off";
+	effort: WriterEffort;
 	policyHash: string;
 	promptHash: string;
 	schemaHash: string;
@@ -26,7 +30,7 @@ export interface PreparationWriterIdentity {
 export interface PreparationInput {
 	sessionId: string;
 	epoch: number;
-	branch: readonly SessionEntry[];
+	branch: readonly SessionRecord[];
 	coveredThrough: string;
 	/** Cumulative delivered-source horizon, including inherited checkpoint provenance; no semantic attestation. */
 	processedUserEntryIds: readonly string[];
@@ -53,13 +57,13 @@ export interface PreparationSnapshot {
 	readonly writer: Readonly<PreparationWriterIdentity>;
 	readonly noteBudget: Readonly<NoteBudget>;
 	/** Deeply frozen at runtime; avoid recursively mapping upstream extensible message payload types. */
-	readonly sources: readonly Readonly<SessionEntry>[];
+	readonly sources: readonly Readonly<SessionRecord>[];
 }
 
 export interface PreparationProvenance {
 	writerRole: PreparationWriterIdentity["role"];
 	writerModel: string;
-	writerEffort: ThinkingLevel | "off";
+	writerEffort: WriterEffort;
 	/** Identifiers link paid dispatches to their call journal records. */
 	callIds: readonly string[];
 }
@@ -82,7 +86,7 @@ export interface PreparedCandidate {
 export interface PreparationSubmission {
 	sessionId: string;
 	epoch: number;
-	branch: readonly SessionEntry[];
+	branch: readonly SessionRecord[];
 	writer: PreparationWriterIdentity;
 	noteBudget: NoteBudget;
 	customInstructions?: string;
@@ -131,7 +135,7 @@ function uniqueIds(ids: readonly string[]): boolean {
 	return ids.every((id) => typeof id === "string" && id.length > 0) && new Set(ids).size === ids.length;
 }
 
-function linearBranch(branch: readonly SessionEntry[]): boolean {
+function linearBranch(branch: readonly SessionRecord[]): boolean {
 	return (
 		branch.length > 0 &&
 		uniqueIds(branch.map((entry) => entry.id)) &&
@@ -139,7 +143,7 @@ function linearBranch(branch: readonly SessionEntry[]): boolean {
 	);
 }
 
-function lastCheckpoint(branch: readonly SessionEntry[]): { id: string; hash: string } | null {
+function lastCheckpoint(branch: readonly SessionRecord[]): { id: string; hash: string } | null {
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index];
 		if (entry.type === "compaction") return { id: entry.id, hash: hashEntries([entry]) };
@@ -219,7 +223,7 @@ export function freezePreparationInput(input: PreparationInput): PreparationSnap
 			coveredThrough: input.coveredThrough,
 			sourceHash: hashEntries(sources),
 			entryIds: sources.map((entry) => entry.id),
-			originalIds: sources.filter((entry) => sourceText(asRecord(entry))).map((entry) => entry.id),
+			originalIds: sources.filter((entry) => sourceText(entry)).map((entry) => entry.id),
 		},
 		userHorizon: { entryIds: horizon, hash: hashEntries(horizon) },
 		writer: writerIdentity(input.writer),
@@ -247,7 +251,7 @@ export function finalizePreparation(input: PreparationSnapshot, result: Preparat
 		throw new Error("CONTEXT_PREPARATION_PROVENANCE: missing or ambiguous call accounting links");
 	const note = validateNote(
 		structuredClone(result.note),
-		structuredClone(input.sources) as unknown as SessionRecord[],
+		structuredClone(input.sources),
 		storedNoteLimit(input.noteBudget),
 	);
 	const noteHash = hashEntries([note]);
@@ -316,7 +320,7 @@ export function classifyPreparation(
 export function reusablePrefix(
 	candidate: PreparedCandidate,
 	classification: CandidateClassification,
-	branch: readonly SessionEntry[],
+	branch: readonly SessionRecord[],
 ): number | undefined {
 	if (
 		classification.status !== "stale-reusable" ||

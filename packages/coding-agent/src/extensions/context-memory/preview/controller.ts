@@ -18,6 +18,17 @@ import {
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import {
+	checkpointInterval as coreCheckpointInterval,
+	chooseCut as coreChooseCut,
+	prefixCut as corePrefixCut,
+} from "../../../../../compaction-core/src/cuts.ts";
+import {
+	assertToolPairs,
+	assertRecoveryEdits as coreAssertRecoveryEdits,
+	requestLimit as coreRequestLimit,
+} from "../../../../../compaction-core/src/guards.ts";
+import { type InContext, inContextEntries } from "../../../../../compaction-core/src/history-view.ts";
+import {
 	checkpointLineage,
 	compactedSourceTokens,
 	hashEntries,
@@ -29,6 +40,11 @@ import {
 	validateMemoryCheckpoints,
 	validateNote,
 } from "../../../../../compaction-core/src/notes.ts";
+import {
+	freezePreparationInput,
+	type PreparationSubmission,
+	reusablePrefix,
+} from "../../../../../compaction-core/src/preparation-candidate.ts";
 import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import {
 	applyReduction,
@@ -61,10 +77,8 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { type AppendedExcerpt, selectExcerpts, unusedExcerpts } from "./excerpts.ts";
-import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
-import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
 import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
 import {
@@ -117,74 +131,34 @@ export function reportPreviewError(
 	notify(ctx, blockedNotice(code, durable, reason, version, repeated), repeated ? "warning" : "error");
 }
 
-export function assertToolPairs(messages: readonly AgentMessage[]): void {
-	const pending = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "assistant") {
-			if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: missing tool results before an assistant turn");
-			for (const part of message.content) if (part.type === "toolCall") pending.add(part.id);
-		} else if (message.role === "toolResult") {
-			if (!pending.delete(message.toolCallId)) throw new Error("CONTEXT_TOOL_BOUNDARY: an unmatched tool result");
-		} else if (message.role === "user" && pending.size) {
-			throw new Error("CONTEXT_TOOL_BOUNDARY: user input interrupts an unfinished tool batch");
-		}
-	}
-	if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the tool batch to finish");
-}
+/** The core's tool-pairing guard, re-exported: Pi's `AgentMessage` satisfies its projected-message shape. */
+export { assertToolPairs };
 
 /**
- * Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. The cut
- * follows the previous checkpoint: stock Pi keeps every entry from the cut onwards, so an earlier
- * checkpoint inside that range would reappear as a second summary.
+ * The core's cut selection at the Pi boundary: the branch is widened, never converted (records.ts),
+ * and Pi's own projection builder and token estimator are bound here.
  */
 export function chooseCut(
 	branch: readonly SessionEntry[],
 	keepRecentTokens: number,
 	projection: SessionProjection = buildSessionProjection([...branch]),
 ): number {
-	if (keepRecentTokens <= 0) return branch.length;
-	const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
-	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
-	const starts = branch.flatMap((entry, index) =>
-		index > previous && entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length
-			? [index]
-			: [],
-	);
-	if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
-	let accumulated = 0;
-	for (let index = branch.length - 1; index >= 0; index--) {
-		if (branch[index].type === "compaction") continue;
-		accumulated += (projected.get(branch[index].id) ?? []).reduce((sum, message) => sum + estimateTokens(message), 0);
-		if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
-	}
-	return starts[starts.length - 1];
+	return coreChooseCut(asRecords(branch), keepRecentTokens, projection, estimateTokens);
 }
 
-/**
- * The latest turn start at or before `coveredIndex + 1` and `cut`, so that only covered entries leave
- * context. It must follow the previous checkpoint: stock Pi keeps every entry from the cut onwards,
- * so an earlier checkpoint inside that range would reappear as a second summary.
- */
+/** The core's prefix cut at the Pi boundary; the branch is widened, never converted (records.ts). */
 export function prefixCut(
 	branch: readonly SessionEntry[],
 	projection: SessionProjection,
 	coveredIndex: number,
 	cut: number,
 ): number | undefined {
-	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
-	const projected = new Set(
-		projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
-	);
-	for (let index = Math.min(cut, coveredIndex + 1); index > previous; index--) {
-		const entry = branch[index];
-		if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
-	}
-	return undefined;
+	return corePrefixCut(asRecords(branch), projection, coveredIndex, cut);
 }
 
 /** The interval a preparation belongs to: the latest checkpoint on the branch, or none yet. */
 export function checkpointInterval(branch: readonly SessionEntry[]): string {
-	return branch.findLast((entry) => entry.type === "compaction")?.id ?? "none";
+	return coreCheckpointInterval(asRecords(branch));
 }
 
 /**
@@ -206,10 +180,7 @@ function piTokens(text: string): number {
  * turn or before a prompt, so a request below it is never stopped. The model's output maximum does not lower it.
  */
 export function requestLimit(model: { contextWindow: number }): number {
-	const limit = model.contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
-	if (!Number.isFinite(limit) || limit < 2048)
-		throw new Error("CONTEXT_CAPACITY: model window is too small or unknown");
-	return limit;
+	return coreRequestLimit(model, DEFAULT_COMPACTION_SETTINGS.reserveTokens);
 }
 
 /** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
@@ -231,27 +202,7 @@ function fittedSummary(
 
 /** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
 export function assertRecoveryEdits(branch: readonly SessionEntry[]): void {
-	let lastMessage: SessionEntry | undefined;
-	for (const entry of branch) {
-		if (entry.type === "context_edit") {
-			if (
-				entry.replacement !== null ||
-				!lastMessage ||
-				lastMessage?.id !== entry.targetId ||
-				lastMessage.type !== "message" ||
-				lastMessage.message.role !== "assistant" ||
-				lastMessage.message.stopReason !== "error" ||
-				lastMessage.message.content.some((part) => part.type === "toolCall")
-			) {
-				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported");
-			}
-		} else if (entry.type === "message") {
-			lastMessage = entry;
-		} else if (entry.type === "compaction") {
-			// Judge an edit against checkpoints preceding it, including after later compactions are appended.
-			lastMessage = undefined;
-		}
-	}
+	coreAssertRecoveryEdits(asRecords(branch));
 }
 
 /** Abort guards can leave new user input on disk; recovery must keep that whole unfinished turn. */
@@ -520,7 +471,7 @@ export class PreviewMemoryController {
 		return {
 			sessionId: ctx.sessionManager.getSessionId(),
 			epoch: this.preparation.currentEpoch,
-			branch,
+			branch: asRecords(branch),
 			writer: {
 				role: this.config.writerModel === SESSION_WRITER ? "session" : "fixed",
 				model: modelName(model),
@@ -572,7 +523,7 @@ export class PreviewMemoryController {
 			const uncovered = asEntries(writerSources(asRecords(branch), previous));
 			const input = freezePreparationInput({
 				...submission,
-				branch,
+				branch: asRecords(branch),
 				coveredThrough: leafId,
 				processedUserEntryIds: branch
 					.filter((entry) => entry.type === "message" && entry.message.role === "user")
@@ -1303,7 +1254,7 @@ export class PreviewMemoryController {
 				return undefined;
 			};
 			if (path === "sync" && available && interrupted === undefined) {
-				const end = reusablePrefix(available.candidate, available.classification, branch);
+				const end = reusablePrefix(available.candidate, available.classification, asRecords(branch));
 				if (end !== undefined && !commitPrefix(available.written.note, end, 0.8)) path = "prefix";
 			}
 			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.

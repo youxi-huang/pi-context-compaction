@@ -1,9 +1,8 @@
 import { buildSessionProjection, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { textTokens } from "../src/extensions/context-memory/config.ts";
-import { type HistorySnapshot, queryHistory } from "../src/extensions/context-memory/history.ts";
-import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "../src/extensions/context-memory/identity.ts";
-import { hashEntries, type MemoryNote, type NoteFact, sourceText } from "../src/extensions/context-memory/notes.ts";
+// The history view now lives in the core (v0.7.0 WP2 step 4); its snapshot, `queryHistory` and note helpers are the
+// core's retyped copies, and the Pi entries built below are widened at the snapshot, never converted (records.ts).
+import { type HistorySnapshot, queryHistory } from "../../compaction-core/src/history.ts";
 import {
 	type EditViewItem,
 	type ErrorViewItem,
@@ -15,7 +14,11 @@ import {
 	priceSearch,
 	readLowDetail,
 	viewTerms,
-} from "../src/extensions/context-memory/preview/history-view.ts";
+} from "../../compaction-core/src/history-view.ts";
+import { hashEntries, type MemoryNote, type NoteFact, sourceText } from "../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../compaction-core/src/records.ts";
+import { textTokens } from "../src/extensions/context-memory/config.ts";
+import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "../src/extensions/context-memory/identity.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 const usage = {
@@ -123,11 +126,12 @@ class Branch {
 	}
 
 	snapshot(): HistorySnapshot {
+		const entries = this.entries as unknown as SessionRecord[];
 		return {
 			sessionId: "view-session",
 			leafId: this.entries.at(-1)?.id ?? null,
-			scopeHash: hashEntries(this.entries),
-			entries: this.entries,
+			scopeHash: hashEntries(entries),
+			entries,
 		};
 	}
 }

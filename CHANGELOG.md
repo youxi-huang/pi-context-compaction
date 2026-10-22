@@ -23,6 +23,8 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - The preview bench records each attempt's schema counts and sums them per cut and overall under `schemaRefusals`, and counts sources repairs beside quotation and size repairs. The stock-Pi scenarios add `sources-repair-refused` and `sources-repair-commits`.
 - The preview bench's relay can measure another catalog model under the ID the relay serves it as, with `--relay-model` and `--relay-id`, for example `deepseek/deepseek-flash` served as a self-hosted `dsv41f-xp`. The catalog's API, compatibility settings, level map and prices stay, so the limits use its prices; without the flags the relay measures `openai/gpt-6-luna` as before.
+- CI skips its full pipeline for a change that touches nothing but Markdown under `docs/` or the repository root. `CHANGELOG.md` and `docs/context-memory/extension-preview.md` still run everything, because release preparation reads the first and the package README is built from the second, and the publication workflow re-verifies every release on its tag as before.
+- `context-memory-ops.mjs` exits 3 instead of 1 at the fingerprint gate, so a caller can tell a held fingerprint from a failed check, and the operations runbook maps each change type to its narrowest command.
 
 ## [v0.5.3] — 2026-10-21
 

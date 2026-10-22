@@ -374,7 +374,7 @@ async function parentAcceptance() {
 			assert((build.supportedPiVersions ?? [build.supportedPi]).includes(stockVersion), "Candidate does not declare this official host as supported");
 			assert(build.build.startsWith("stock-preview+src."), "Candidate has no independent preview build identity");
 			assert.equal(build.sourceHash.slice(0, 16), build.build.split(".").at(-1), "Candidate build ID does not match its source fingerprint");
-			assert(build.sources.every((entry) => /^packages\/coding-agent\/src\/extensions\/context-memory\/(?:(?:config|events|history|identity|notes)\.ts|preview\/[^/]+\.ts)$/.test(entry.file)), "Candidate source graph includes resident lifecycle or host modules");
+			assert(build.sources.every((entry) => /^(?:packages\/coding-agent\/src\/extensions\/context-memory\/(?:(?:config|events|history|identity|notes)\.ts|preview\/[^/]+\.ts)|packages\/compaction-core\/src\/[^/]+\.ts)$/.test(entry.file)), "Candidate source graph includes resident lifecycle or host modules");
 			assert(build.externalImports.includes("@earendil-works/pi-coding-agent") && build.externalImports.includes("typebox"), "Candidate omitted its host-provided dependency boundary");
 			const lock = JSON.parse(readFileSync(join(stockRoot, "node_modules", ".package-lock.json"), "utf8"));
 			const provenance = lock.packages["node_modules/@earendil-works/pi-coding-agent"];

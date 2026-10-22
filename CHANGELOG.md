@@ -23,6 +23,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - The preview bench records each attempt's schema counts and sums them per cut and overall under `schemaRefusals`, and counts sources repairs beside quotation and size repairs. The stock-Pi scenarios add `sources-repair-refused` and `sources-repair-commits`.
 - The preview bench's relay can measure another catalog model under the ID the relay serves it as, with `--relay-model` and `--relay-id`, for example `deepseek/deepseek-flash` served as a self-hosted `dsv41f-xp`. The catalog's API, compatibility settings, level map and prices stay, so the limits use its prices; without the flags the relay measures `openai/gpt-6-luna` as before.
+- The offline evaluation's scripted writer no longer cites part of the run directory's random UUID as an entry ID. About one UUID in 900 holds a run such as `bff1-12345`, which the writer's prompt carries before every fixture ID; the note then cited `f1-12345` and `verify` failed with `CONTEXT_NOTE_SCOPE`. A regression covers the case.
 
 ## [v0.5.3] — 2026-10-21
 

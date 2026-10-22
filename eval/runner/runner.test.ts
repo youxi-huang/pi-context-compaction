@@ -239,6 +239,24 @@ describe("runner tool and output enforcement", () => {
 		expect(records[0].usage).toBeNull();
 		expect(records[0].error).toContain("EVAL_REQUEST_TIMEOUT");
 	});
+	it("cites a fixture entry from the scripted writer, never an ID-shaped run directory before it", async () => {
+		// The run directory's UUID precedes every fixture ID in a writer request; this one holds f1-12345.
+		const workspace = "/tmp/F1-project-r1-bd0354d5-bbaa-44ce-bff1-12345a6b7c8d/F1-cp1-writer/workspace";
+		const response = await scriptedTransport().complete({
+			purpose: "writer",
+			context: {
+				messages: [
+					{ role: "system", content: `<cwd> ${workspace} </cwd>`, timestamp: 0 },
+					{ role: "user", content: "Entries to condense:\nf1-00001 Inventory recorded.", timestamp: 0 },
+				],
+			},
+			model: testModel,
+			maxTokens: 4096,
+			signal: new AbortController().signal,
+		});
+		const text = response.content.map((part) => (part.type === "text" ? part.text : "")).join("");
+		expect(JSON.parse(text).state[0].sources).toEqual(["f1-00001"]);
+	});
 	it("scores successful continuation from actual tool execution, not from a promised action", async () => {
 		const root = artifactDirectory("stage2-continuation-success-");
 		const base = scriptedTransport();

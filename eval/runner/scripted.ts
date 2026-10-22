@@ -13,7 +13,9 @@ export function scriptedTransport(): Transport {
 		mode: "scripted",
 		async complete(request) {
 			if (request.purpose === "writer") {
-				const source = /f[123]-\d{5}/.exec(JSON.stringify(request.context))?.[0];
+				// The run directory's UUID precedes every fixture ID and can hold an ID-shaped run, as in bff1-12345.
+				// A hex digit never precedes a fixture ID.
+				const source = /(?<![0-9a-f])f[123]-\d{5}/.exec(JSON.stringify(request.context))?.[0];
 				return scriptedReply(
 					source ? JSON.stringify(note(source)) : "Native scripted summary; consult the retained context.",
 				);

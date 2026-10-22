@@ -4,7 +4,7 @@
  * `sourceRole` in notes.ts, the checkpoint validation walk, and `queryHistory` in history.ts.
  * A host's native record satisfies these shapes — it is not converted into them (rule K4) — and
  * whatever fields the host stores beyond the ones named here travel with the record unchanged.
- * `preview/reduction.ts`'s `ReductionRecord` is the established pattern; these types are its
+ * `reduction.ts`'s `ReductionRecord` (lifted into this package) is the established pattern; these types are its
  * closure over the remaining classified modules.
  *
  * The union is closed over the six kinds the core distinguishes. A record of a kind outside it

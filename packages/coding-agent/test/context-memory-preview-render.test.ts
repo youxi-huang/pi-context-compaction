@@ -11,6 +11,7 @@ import {
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyReduction, reduceRecords } from "../../compaction-core/src/reduction.ts";
 import { DEFAULT_MEMORY_CONFIG, type NoteBudget } from "../src/extensions/context-memory/config.ts";
 import {
 	CONTEXT_KEEP_NONE,
@@ -28,7 +29,6 @@ import type { PreviewSession } from "../src/extensions/context-memory/preview/co
 import { PreviewMemoryController } from "../src/extensions/context-memory/preview/controller.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 import { readPreparationSettings } from "../src/extensions/context-memory/preview/preparation.ts";
-import { applyReduction, reduceRecords } from "../src/extensions/context-memory/preview/reduction.ts";
 import {
 	citedRole,
 	projectSummary,

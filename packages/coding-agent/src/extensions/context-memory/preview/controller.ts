@@ -17,6 +17,12 @@ import {
 	type SessionProjection,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
+import {
+	applyReduction,
+	declaredCacheLifetimeMs,
+	type ReductionView,
+	reduceRecords,
+} from "../../../../../compaction-core/src/reduction.ts";
 import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
 import { PROJECT_CODES } from "../events.ts";
 import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
@@ -49,7 +55,6 @@ import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
-import { applyReduction, declaredCacheLifetimeMs, type ReductionView, reduceRecords } from "./reduction.ts";
 import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
 import {

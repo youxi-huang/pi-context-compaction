@@ -14,10 +14,15 @@ owns the formats, the checks and the refusal classes. The
 Three conventions hold throughout:
 
 - **Checks are cited as code.** Every guarantee in this specification names the
-  function that enforces it, cited as module and export as they stand in the
-  reference implementation the 0.7.0 lifts move into this package (the
-  classification table of the v0.7.0 plan maps each module). A guarantee
-  without an existing check is not stated as guaranteed.
+  function that enforces it, cited as module and export. A bare module name is
+  this package's `src/`, where the 0.7.0 lifts landed it (the classification
+  table of the v0.7.0 plan maps each module's origin). A check that is host
+  work by construction — the controller's projection and payload guards
+  (`controller.ts` `PreviewMemoryController`), the durable failure store
+  (`failure-store.ts`), writer transport resolution (`preview/writer.ts`
+  `resolveWriterModel`) — is cited from the reference adapter under
+  `context-memory/preview/`. A guarantee without an existing check is not
+  stated as guaranteed.
 - **Refusals are classes, never text.** Every violation this specification
   names raises an error class from the closed set `PROJECT_CODES` in
   `events.ts`. The `CONTEXT_` and `HISTORY_` codes of that set are stable
@@ -34,7 +39,7 @@ The durable facts of a session are its records. They live in the host's own
 storage; the core keeps no copy of history, and every view the core computes
 is derived on demand and disposable (rule K5). The core never invents a record
 ID and cites only the host's own IDs; an adapter can always return the host's
-native record, because the model below is structural — the native record
+native record, because the model below is structural (`records.ts`) — the native record
 *satisfies* the shape, it is not converted into it (rule K4).
 
 A **branch** is a finite, ordered sequence of records: the ancestor chain from
@@ -54,8 +59,11 @@ Every record carries:
 | `timestamp` | string | The record's stored creation time, parseable to milliseconds. Time-dependent rules (the reduction's idle trigger) read gaps between consecutive records' timestamps, never a clock. |
 
 The native payload is the record itself: whatever fields the host stores
-beyond the ones named here travel with the record unchanged, are hashed as
-part of it, and are never rewritten by the core.
+beyond the ones named here travel with the record unchanged and are never
+rewritten by the core. Whether the source hash covers them depends on the
+serialization (see "The source hash"): the compatibility form hashes the
+host's full stored serialization, native fields included; the canonical form
+hashes the record model's structural fields only.
 
 ### Kinds
 
@@ -128,7 +136,7 @@ record's `kind` otherwise.
 A tool call and its result form one unit that is never split (rule K4). The
 call is a `toolCall` block inside an assistant message; the result is the
 `toolResult` record whose `toolCallId` matches the block's `id`.
-`controller.ts` `assertToolPairs` enforces the unit over a projected message
+`guards.ts` `assertToolPairs` enforces the unit over a projected message
 sequence and refuses with `CONTEXT_TOOL_BOUNDARY` when an assistant turn
 begins over unresolved calls, a result matches no pending call, user input
 interrupts an unfinished batch, or a batch is still open at the end. The
@@ -319,6 +327,9 @@ not part of this specification.
 (decision H2): RFC 8785 (JCS) canonical JSON of each record's normalized form
 — the structural fields the record model defines — framed per record with the
 same newline byte `hashEntries` uses, SHA-256 over the sequence, hex-encoded.
+It is implemented in `canonical.ts` (`hashCanonicalRecords`), and a host opts
+in through the `serialization` parameter of `latestMemory` and
+`validateMemoryCheckpoints`.
 Property 3 holds by the same one-pass construction. Under this form,
 reordering fields does not change the hash; changing any modeled field does.
 
@@ -446,15 +457,16 @@ the repair, and a second tool call refuses with `CONTEXT_WRITER_FAILED`.
 ### Writer preconditions
 
 Before any request: the writer must be resolvable and authenticated, else
-`CONTEXT_WRITER_UNAVAILABLE` (`writer.ts` `resolveWriterModel`); there must
+`CONTEXT_WRITER_UNAVAILABLE` (`preview/writer.ts` `resolveWriterModel`,
+transport work); there must
 be uncovered original evidence, else `CONTEXT_NO_NEW_SOURCE` (`writeMemory`);
 the request, its evidence and its output reservation must fit the writer's
 window, else `CONTEXT_WRITER_CAPACITY` (`writeMemory`); budget arguments must
 be valid integer counts, else `CONTEXT_CONFIG`. The cut that selects what
 leaves context must land on a turn start that follows the previous
-checkpoint, else `CONTEXT_NO_CUT` (`controller.ts` `chooseCut`); a prefix
+checkpoint, else `CONTEXT_NO_CUT` (`cuts.ts` `chooseCut`); a prefix
 commit uses the latest turn start inside the covered prefix
-(`controller.ts` `prefixCut`).
+(`cuts.ts` `prefixCut`).
 
 ## Commit and failure states
 
@@ -501,7 +513,7 @@ context must carry the validated checkpoint's summary — a missing or
 tampered rendering refuses with `CONTEXT_RECOVERY_MISSING`
 (`controller.ts` `PreviewMemoryController.context` and `.beforeRequest`) —
 and requests beyond the usable window refuse with `CONTEXT_INPUT_TOO_LARGE`
-(the guard, with the limit from `controller.ts` `requestLimit`) or
+(the guard, with the limit from `guards.ts` `requestLimit`) or
 `CONTEXT_PAYLOAD_TOO_LARGE` (the payload check in `.beforeRequest`). The
 reference store additionally uses adapter-local classes (prefixed
 `CONTEXT_PREVIEW_`) for faults of its own marker and readback machinery;
@@ -669,17 +681,17 @@ guarantee without an existing check is not in this table.
 | Continuation preserved: an in-task handover carries a nonempty next step and its pinned user requests, re-verified at every reopen | `writer.ts` `writeMemory`; `notes.ts` `validateMemoryCheckpoints` | `CONTEXT_CONTINUATION_MISSING` |
 | A repair never loses evidence: a quotation repair changes only `sources` and `quote` and cannot withdraw a user-quoted instruction; a size repair keeps every source ID, supersedes ID, quotation and occupied section | `quote-repair.ts` `applyQuoteRepair`; `writer.ts` `writeMemory` | `CONTEXT_NOTE_REPAIR_LOSS` |
 | A repair answer matches its schema and answers each named fact exactly once, nothing else spliced | `sources-repair.ts` `applySourcesRepair`; `quote-repair.ts` `applyQuoteRepair` | `CONTEXT_NOTE_INVALID` |
-| A tool call and its result are one unit, never split by a cut, a view or a request | `controller.ts` `assertToolPairs` | `CONTEXT_TOOL_BOUNDARY` |
+| A tool call and its result are one unit, never split by a cut, a view or a request | `guards.ts` `assertToolPairs` | `CONTEXT_TOOL_BOUNDARY` |
 | User messages carried on a notes checkpoint are verbatim, in order, within coverage, and the summary ends with their exact rendering | `work-notes.ts` `assertUserMessages` | `CONTEXT_NOTE_QUOTE` |
 | A work note carries data only — no instructions field — and passes the full note checks on its own branch | `work-notes.ts` `validateWorkNote` | `CONTEXT_NOTE_INVALID` |
 | A failed or unconfirmed compaction blocks the next request until explicit retry or recovery | `failure-store.ts` `PreviewFailureStore.assertReady` | `CONTEXT_BLOCKED` (or the recorded class) |
 | The validated checkpoint's rendering is present and untampered in the model's context and the provider payload | `controller.ts` `PreviewMemoryController.context`, `.beforeRequest` | `CONTEXT_RECOVERY_MISSING` |
-| A cut lands on a turn start after the previous checkpoint, keeping complete recent turns | `controller.ts` `chooseCut` | `CONTEXT_NO_CUT` |
+| A cut lands on a turn start after the previous checkpoint, keeping complete recent turns | `cuts.ts` `chooseCut` | `CONTEXT_NO_CUT` |
 | A checkpoint condenses new original evidence; summaries are never re-summarized alone | `writer.ts` `writeMemory` | `CONTEXT_NO_NEW_SOURCE` |
-| The writer is resolvable and authenticated before any attempt | `writer.ts` `resolveWriterModel` | `CONTEXT_WRITER_UNAVAILABLE` |
+| The writer is resolvable and authenticated before any attempt | `preview/writer.ts` `resolveWriterModel` | `CONTEXT_WRITER_UNAVAILABLE` |
 | Every writer request fits its bounded window, evidence and output reservation included | `writer.ts` `writeMemory` | `CONTEXT_WRITER_CAPACITY` |
 | A writer answer is settled: normal stop, no executed tool call; at most one declined call per compaction | `writer.ts` `writeMemory` | `CONTEXT_WRITER_FAILED` |
-| The model's window leaves a usable input allowance after the output reserve | `config.ts` `memoryBudget`; `controller.ts` `requestLimit` | `CONTEXT_CAPACITY` |
+| The model's window leaves a usable input allowance after the output reserve | `config.ts` `memoryBudget`; `guards.ts` `requestLimit` | `CONTEXT_CAPACITY` |
 | Requests beyond the usable allowance are stopped before dispatch; payloads beyond the window are stopped at the provider boundary | `controller.ts` `PreviewMemoryController.context` (limit from `requestLimit`), `.beforeRequest` | `CONTEXT_INPUT_TOO_LARGE`; `CONTEXT_PAYLOAD_TOO_LARGE` |
 | Budget inputs and writer budget arguments are valid integer counts | `config.ts` `selectNoteBudget`; `writer.ts` `writeMemory` | `CONTEXT_CONFIG` |
 | Retrieval is confined to the frozen branch snapshot; unreadable or out-of-scope records are refused | `history.ts` `queryHistory`; `history-view.ts` `readLowDetail` | `HISTORY_SCOPE_DENIED` |

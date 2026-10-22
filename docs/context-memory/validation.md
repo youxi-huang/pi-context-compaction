@@ -13,12 +13,17 @@ and keeps its own budgeted track.
 
 | Command | Result and exit code |
 | --- | --- |
-| `node scripts/context-memory-ops.mjs verify`, run after every landing (commits ad5684a through c96f438) | Exit 0 each time, all eight steps; "Published runtime fingerprint is unchanged" throughout; no `EVAL_FROZEN_INPUT_CHANGED`; the five shared extension files byte-identical at every step |
+| `node scripts/context-memory-ops.mjs verify`, run after every landing (commits ad5684a through c96f438) | Exit 0 each time, all eight steps; "Published runtime fingerprint is unchanged" throughout; the five shared extension files byte-identical at every step. `EVAL_FROZEN_INPUT_CHANGED` is `eval/check.mjs`'s check, not verify's: that run is the CI eval-full step, green on every push, and the review row below |
 | Equivalence runs, one per lift and one for the vector integration: both runners with `--equivalence-out` on pre- and post-lift candidates against official Pi 1.3.0, compared by `scripts/context-memory-equivalence-compare.mjs` | Equal on every pair at every step: bench writer 11 cases, repair 38, probes 36, five scenario cases (reduced battery of 51 records for the integration); zero differences across roughly 90 content-free records per side per step |
 | Writer split identity (step 5) | `writerContractHashes`: schemaHash identical pre and post; promptHash identical under any fixed artifact ID; a 48-scenario scripted comparison of the old and new preview writer produced byte-identical request, progress and outcome dumps (729,484 bytes each side) |
 | Stock acceptance and scenarios on the integrated tree (run by the integrating agent via `node scripts/context-memory-ops.mjs preview`, commit c96f438 pre-commit state) | Acceptance 32/28/28 passes with zero failures on official Pi 1.3.0, 1.2.0 and 1.1.0 including cross-version reopen; 152 scenario checks passed, 0 failed, 0 known gaps, strict profile accepted; release checks 31 passed; `preview-release-prepare` stopped only on the then-uncommitted tree |
 | Conformance audit (independent agent, worktree of codex/wp3-conformance-vectors 447484f) | All 34 vectors' expected outcomes re-derived independently with full agreement; mutation testing showed each deliberately weakened validator caught by its vectors; the JCS implementation probed against RFC 8785 (UTF-16 key order, ES number formatting, surrogate rejection) with no divergence; manifest SHA-256 recomputed and matched; the core notes change differentially verified byte-identical on its default path over 41 branches |
 | `node --experimental-strip-types eval/preview/pi-session.ts --check` and `eval/preview/generate.ts --check` (commit 2fec3ae) | Converted P1–P4 sessions match the pinned manifest hashes; generation reproduces the committed records and session bytes; exit 0 |
+| Final release review on f9f5b7f (independent read-only agent): `ops doctor`, `ops verify`, `ops preview`, `eval/check.mjs`, all offline with zero model budget | Exit 0 each: verify all eight steps; acceptance 32/32, 28/28 and 28/28 on official Pi 1.3.0, 1.2.0 and 1.1.0 with cross-host reopen; scenarios 152/152 on 1.3.0; eval 148 passed, 3 skipped (the zero-record vectors on the adapter path); CI verify and CodeQL green on the same commit |
+| End-to-end equivalence (review run): the released v0.6.0 extension package, whose extension source is byte-identical to the pre-lift base, against the f9f5b7f candidate `stock-preview+src.262d187e265fc08e`, official Pi 1.3.0 | All equal, comparator exit 0 per pair: full scenario suite 34 records, bench writer 64, repair 304, probes 158 per side. Covers the milestone end to end; the per-lift runs above were its stepwise precursors |
+| Strict scenarios on the older hosts (review run), official Pi 1.2.0 and 1.1.0 | 152/152 each, exit 0. Neither `ops preview` nor CI produces these; recorded as a follow-up below |
+| Cross-open against released builds (review run, official Pi 1.3.0): the acceptance worker's own cases chained over one reused agent directory and session file, switching the installed package between steps; released packages taken from the extension-v0.5.3 and extension-v0.4.3 tags | Three chains, exit 0 each, five checkpoints per chain with both build IDs present, history retrieval and further compaction passing: lifted → v0.5.3 → lifted; v0.5.3 → lifted → v0.5.3; v0.4.3 → lifted → v0.4.3. Not covered: Pi 1.2.0/1.1.0, and checkpoints written with work notes, preparation or continuation enabled |
+| Request-overhead target, measured in the three scenario runs above | 1–2 ms at 20 checkpoints against the 50 ms target, on all three hosts |
 
 Findings recorded for follow-up:
 
@@ -31,10 +36,36 @@ Findings recorded for follow-up:
   `undefined` throws a plain TypeError, not a refusal class); hosts must hash
   parsed JSON, as the conformance README states.
 - The specification's source-hash property 2 says "any covered record's stored
-  content", while the canonical form hashes modeled fields plus declared
-  native passthrough; the wording tension is recorded, not a code defect.
+  content", while the canonical form hashes the record model's structural
+  fields and excludes host-only ones. Resolved 2026-10-22: the record-model
+  paragraph now states which serialization hashes native fields.
 - `conformance/runner.ts` sits outside biome's include list (type-checked via
   the tests, never linted); worth adding when biome's config is next touched.
+- The preview bundle still ships the five shared resident files beside the
+  core copies, and preview modules import budget, event and history helpers
+  from the resident paths. Behavior is identical while K9 holds the copies
+  byte-identical, but a fix meant to land once in the core (K10) would miss
+  those paths; a 0.8.0 pass should repoint the preview's remaining resident
+  imports at the core.
+- `preview/render-projection.ts` is pure projection logic the plan expects in
+  the core by construction; it is outside the classification table and moves
+  with 0.8.0's rendering work.
+- The adapter conformance test re-implements the open-checkpoint path instead
+  of calling `assertPreviewSession`; worth unifying when that path next
+  changes.
+- Core `guards.ts` `assertRecoveryEdits` throws `CONTEXT_PREVIEW_UNSUPPORTED`
+  and `preparation-candidate.ts` throws the `CONTEXT_PREPARATION_*` family —
+  adapter-local classes outside the closed set, kept verbatim by the lift
+  rule (K2). Their admission is the deferred 0.8.0 closed-set decision the
+  specification's status records.
+- The import gate checks specifiers only; the core also uses Node globals
+  (`Buffer`, `performance`) that no specifier names. A globals check is a
+  candidate hardening for the gate.
+- Neither the cross-open against released builds nor the older-host scenario
+  runs come from committed machinery; both ran ad hoc in the final review.
+  Candidate machinery for 0.8.0: a worker step that fetches a released
+  extension tag's package and chains acceptance cases across package
+  switches, and per-host strict scenarios in `ops preview`.
 
 ## 0.6.0 wave 2: rendered-note candidates, bench candidate wiring and the first reduction comparison, 2026-10-22 UTC
 

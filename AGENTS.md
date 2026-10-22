@@ -9,6 +9,7 @@ The upstream development rules are kept for reference in [UPSTREAM_AGENTS.md](UP
 | Location | Contents |
 | --- | --- |
 | `packages/coding-agent/src/extensions/context-memory/` | The compaction runtime: writer, notes, storage, leases, history retrieval, grants, events, policy. |
+| `packages/compaction-core/` | The host-neutral core: record model, note validation, history retrieval, reduction, writer contract, canonical serialization, its specification under `spec/` and the conformance vectors under `conformance/`. |
 | `packages/coding-agent/test/context-memory*.test.ts` and `test/fixtures/context-memory-*` | The focused regressions for the resident runtime and independent preview. |
 | `scripts/context-memory-*.mjs`, `scripts/stamp-context-memory.mjs`, `scripts/security-regression-check.mjs` | Build stamping, model data, checks, migration and the event-log report. |
 | `docs/context-memory/` | Architecture, runbook, validation record, roadmap and the upstream delta; see [Documents](#documents). |

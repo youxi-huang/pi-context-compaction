@@ -2,8 +2,11 @@
 
 `0.7-conformance.1` implements the vectors half of WP3 from
 [the specification](../spec/specification.md). Every record and sentence is
-invented. These vectors exercise the core directly; the Pi converter and adapter
-path are a separate work package tracked in PR #84.
+invented. These vectors exercise the core directly. The Pi adapter path
+(`eval/preview/conformance-adapter.test.ts`) replays them through the fixture
+converter and the workspace host's session manager: 31 of the 34 agree by
+error class there, and the three zero-record vectors stay core-only, since the
+converter rightly rejects an empty records file.
 
 `manifest.json` maps each data filename to SHA-256 of its exact UTF-8 file bytes,
 including the final newline, like the preview fixture manifest. The test rejects

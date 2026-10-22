@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
 	assertPreviewFixture,
 	type Expected,
+	P4_FIXTURE_VERSION,
 	PREVIEW_FIXTURE_VERSION,
 	type PreviewFixture,
 	type PreviewProbe,
@@ -61,18 +62,38 @@ export function sourceTokens(entries: readonly Entry[]): number {
 	return entries.reduce((sum, entry) => sum + Math.ceil(Buffer.byteLength(readable(entry.message), "utf8") / 3), 0);
 }
 
+/** With a clock, consecutive records are this far apart unless an idle gap separates them. */
+const RECORD_STEP_MS = 15_000;
+
 class Session {
 	readonly entries: Entry[] = [];
 	private calls = 0;
 	readonly prefix: string;
+	readonly started: string;
+	/** P1 to P3 stamp every record with one fixed time; a session started at a given time advances a clock. */
+	private clock?: number;
 
-	constructor(prefix: string) {
+	constructor(prefix: string, start?: string) {
 		this.prefix = prefix;
+		this.started = start ?? time;
+		if (start !== undefined) this.clock = Date.parse(start);
+	}
+
+	/** The user stays away this long before the next record. */
+	idle(ms: number): void {
+		if (this.clock === undefined) throw new Error("EVAL_PREVIEW_CLOCK");
+		this.clock += ms;
 	}
 
 	private add(message: Record<string, unknown>): string {
 		const id = `${this.prefix}-${String(this.entries.length + 1).padStart(5, "0")}`;
-		this.entries.push({ type: "message", id, parentId: this.entries.at(-1)?.id ?? null, timestamp: time, message });
+		let timestamp = time;
+		if (this.clock !== undefined) {
+			this.clock += RECORD_STEP_MS;
+			timestamp = new Date(this.clock).toISOString();
+			message.timestamp = this.clock;
+		}
+		this.entries.push({ type: "message", id, parentId: this.entries.at(-1)?.id ?? null, timestamp, message });
 		return id;
 	}
 
@@ -210,6 +231,7 @@ function fixture(
 	session: Session,
 	cuts: readonly string[],
 	probes: readonly (readonly ProbeSpec[])[],
+	version: PreviewFixture["version"] = PREVIEW_FIXTURE_VERSION,
 ): { fixture: PreviewFixture; session: Session } {
 	const checkpoints = cuts.map((afterEntryId, index) => ({
 		id: `${id}-cp${index + 1}`,
@@ -230,7 +252,7 @@ function fixture(
 		})),
 	);
 	const value: PreviewFixture = {
-		version: PREVIEW_FIXTURE_VERSION,
+		version,
 		id,
 		description,
 		tokenMetric: "sum-ceil-utf8-source-bytes-div-3",
@@ -795,32 +817,395 @@ function configMigration() {
 	);
 }
 
+/** Sixty invented merchants; m-0417 and m-0857 are the two the P4 probes name. */
+const MERCHANTS = Array.from({ length: 60 }, (_, index) => {
+	const first = ["Aster", "Birch", "Copper", "Dunmore", "Ember", "Fennel", "Garnet", "Harbor", "Indigo", "Juniper", "Kerrow", "Marlow"];
+	const second = ["Bakery", "Books", "Foods", "Garden", "Hardware", "Lighting", "Music", "Outfitters", "Pharmacy", "Studio", "Supply"];
+	const planted: Record<number, string> = { 10: "Lindqvist Cycles", 21: "Okafor Textiles" };
+	return {
+		id: `m-${String(17 + 40 * index).padStart(4, "0")}`,
+		name: planted[index] ?? `${first[index % first.length]} ${second[(index * 7) % second.length]}`,
+		currency: ["EUR", "GBP", "SEK", "PLN", "CZK", "DKK"][index % 6],
+		settlement: index % 4 === 0 ? "weekly" : "daily",
+	};
+});
+
+function billingConfig(attempts: number, backoffMs: number): string {
+	return [
+		"# config/billing.yaml, generated from config/billing.template.yaml by make config",
+		"gateway:",
+		"  host: sandbox.pay.example",
+		"  timeout_ms: 2500",
+		"retry:",
+		`  attempts: ${attempts}`,
+		`  backoff_ms: ${backoffMs}`,
+		"  max_delay_ms: 8000",
+		"merchants:",
+		...MERCHANTS.flatMap((merchant) => [
+			`  - id: ${merchant.id}`,
+			`    name: ${merchant.name}`,
+			`    currency: ${merchant.currency}`,
+			`    settlement: ${merchant.settlement}`,
+		]),
+	].join("\n");
+}
+
+function billingClient(statuses: readonly number[]): string {
+	return [
+		"// src/billing/client.ts",
+		'import { request } from "./http";',
+		'import { backoff } from "./backoff";',
+		"",
+		`export const RETRYABLE_STATUSES = [${statuses.join(", ")}];`,
+		"",
+		"export async function sendCharge(ctx, charge) {",
+		"  for (let attempt = 1; ; attempt++) {",
+		'    const response = await request(ctx, "POST", "/v2/charges", charge);',
+		"    if (!RETRYABLE_STATUSES.includes(response.status) || attempt >= ctx.retry.attempts) return response;",
+		"    await backoff(ctx.retry, attempt);",
+		"  }",
+		"}",
+		"",
+		sourceFile("src/billing/client.ts helpers", 420, 101),
+	].join("\n");
+}
+
+function testRun(seed: number, lines: number, inserts: Record<number, string>, footer: string): string {
+	const next = sequence(seed);
+	const areas = ["charge", "refund", "webhook", "invoice", "ledger", "payout", "dispute", "currency"];
+	return [
+		...Array.from(
+			{ length: lines },
+			(_, index) =>
+				inserts[index] ??
+				`ok   test/billing/${areas[index % areas.length]}/case_${String(index).padStart(3, "0")}.test.ts (${Math.floor(next() * 400) + 3} ms)`,
+		),
+		footer,
+	].join("\n");
+}
+
+function gatewayLog(lines: number, seed: number): string {
+	const next = sequence(seed);
+	const hex = () => Math.floor(next() * 0xffffffff).toString(16).padStart(8, "0");
+	const exceeded = new Set(Array.from({ length: 13 }, (_, index) => 40 + 27 * index));
+	const body = Array.from({ length: lines }, (_, index) => {
+		const minute = String(Math.floor(index / 8) % 60).padStart(2, "0");
+		const second = String((index * 7) % 60).padStart(2, "0");
+		const stamp = `2026-01-11T${String(20 + Math.floor(index / 480)).padStart(2, "0")}:${minute}:${second}Z`;
+		const merchant = MERCHANTS[Math.floor(next() * MERCHANTS.length)].id;
+		const latency = Math.floor(next() * 900) + 40;
+		if (index === 233) return `${stamp} gateway req_7f3a91c2 merchant=m-0417 status=502 attempt=6 latency_ms=2511`;
+		if (exceeded.has(index)) return `${stamp} gateway req_${hex()} merchant=${merchant} status=503 attempt=5 latency_ms=${latency}`;
+		const failed = next() < 0.08;
+		return `${stamp} gateway req_${hex()} merchant=${merchant} status=${failed ? 502 : 200} attempt=${failed ? 2 + Math.floor(next() * 3) : 1} latency_ms=${latency}`;
+	});
+	return `${body.join("\n")}\ngateway-retry-audit: 14 requests exceeded the configured maximum attempts`;
+}
+
+function callerSearch(seed: number): string {
+	const next = sequence(seed);
+	const modules = ["billing", "checkout", "subscriptions", "invoices", "refunds", "marketplace", "admin", "reports"];
+	const names = ["charge", "flow", "handler", "jobs", "retry", "service", "sync", "webhook"];
+	const files = Array.from(
+		{ length: 40 },
+		(_, index) => `src/${modules[index % modules.length]}/${names[Math.floor(index / modules.length) % names.length]}-${index}.ts`,
+	);
+	files.splice(23, 0, "src/payouts/batch.ts");
+	const lines = files.flatMap((file) => {
+		if (file === "src/payouts/batch.ts") return [`${file}:211:    const receipt = await sendCharge(batchCtx, payout.charge);`];
+		const matches = 1 + Math.floor(next() * 6);
+		let line = 10 + Math.floor(next() * 40);
+		return Array.from({ length: matches }, () => {
+			line += 7 + Math.floor(next() * 60);
+			return `${file}:${line}:    await sendCharge(ctx, ${["order", "invoice", "renewal", "item"][line % 4]}.charge);`;
+		});
+	});
+	return [...lines, "", `${lines.length} matches`, `${lines.length} matched lines`, `${files.length} files contained matches`, "2817 files searched"].join("\n");
+}
+
+function coverageRun(seed: number): string {
+	const next = sequence(seed);
+	const files = ["backoff", "currency", "dispute", "http", "invoice", "ledger", "legacy-signer", "payout", "refund", "webhook"];
+	const table = files.map((file) => `src/billing/${file}.ts | ${(60 + next() * 39).toFixed(1)} % lines`);
+	table.splice(3, 0, "src/billing/client.ts | 87.4 % lines");
+	return testRun(seed, 380, {}, ["Tests: 380 passed, 380 total", "Coverage summary:", ...table, "Command exited with code 0"].join("\n"));
+}
+
+function loadRun(): string {
+	const next = sequence(131);
+	const ticks = Array.from({ length: 300 }, (_, index) => {
+		const stamp = `2026-01-12T11:${String(10 + Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}Z`;
+		return `${stamp} load-retry tick=${index} inflight=${Math.floor(next() * 40) + 5} completed=${Math.floor(next() * 30) + 2} p95_ms=${Math.floor(next() * 700) + 90}`;
+	});
+	// 20 x 84 + 40 x 83 = 5000 requests; 17 x 2 + 3 x 1 = 37 retried.
+	const merchants = MERCHANTS.map((merchant, index) => {
+		const retried = index % 3 === 0 ? (index < 51 ? 2 : 1) : 0;
+		const p99 = merchant.id === "m-0857" ? 1840 : Math.floor(next() * 900) + 200;
+		return `merchant=${merchant.id} requests=${index < 20 ? 84 : 83} retried=${retried} p50_ms=${Math.floor(next() * 80) + 40} p99_ms=${p99}`;
+	});
+	return [
+		"load-retry: sandbox run, 5000 requests over 60 merchants",
+		...ticks,
+		...merchants,
+		"load-retry: 5000 requests, 37 retried, 0 exceeded max attempts",
+		"Command exited with code 0",
+	].join("\n");
+}
+
+function guide(title: string, lines: number, seed: number, inserts: Record<number, string>): string {
+	const next = sequence(seed);
+	const verbs = ["Check", "Confirm", "Record", "Rotate", "Compare", "Archive", "Notify", "Restart"];
+	const nouns = ["the ledger export", "the webhook queue", "the sandbox keys", "the settlement batch", "the retry metrics", "the dashboard"];
+	return [
+		`# ${title}`,
+		...Array.from(
+			{ length: lines },
+			(_, index) =>
+				inserts[index] ??
+				(index % 12 === 0
+					? `## Procedure ${index / 12 + 1}`
+					: `- ${verbs[Math.floor(next() * verbs.length)]} ${nouns[Math.floor(next() * nouns.length)]} within ${Math.floor(next() * 50) + 5} minutes of step ${index}.`),
+		),
+	].join("\n");
+}
+
+function runbook(pageAfter: number): string {
+	return guide("Billing runbook (generated from docs/runbook.template.md)", 180, 149, {
+		1: "## Retry policy",
+		2: "Charges are retried with exponential backoff as configured in config/billing.yaml.",
+		3: "## Paging",
+		4: `On-call is paged after ${pageAfter} consecutive gateway failures.`,
+	});
+}
+
+/**
+ * A billing retry change whose answers sit in the entries a deterministic reduction would replace: a configuration,
+ * a source file and a runbook each read again after they changed, and long test, log, search and load outputs that
+ * later turns consumed. User rulings, a failed command and absent answers are the controls. The session keeps a clock,
+ * with one idle gap of more than an hour, and its prompts name identifiers only tool outputs hold.
+ */
+function billingRetries() {
+	const s = new Session("p4", "2026-01-12T09:00:00.000Z");
+	const before = [408, 409, 425, 429, 500, 502, 503, 504];
+	const after = [429, 500, 502, 503, 504];
+
+	// Segment 1
+	const rules = s.user(
+		"We're changing how the billing client retries charges. Ground rules for this task: do not modify anything under migrations/, keep the public API of src/billing/client.ts unchanged, and never call the live payment gateway; use the sandbox only. Start by reading src/billing/client.ts and config/billing.yaml.",
+	);
+	const first = s.tools("Reading the billing client and its configuration.", [
+		{ name: "read", args: { path: "src/billing/client.ts" }, result: billingClient(before) },
+		{ name: "read", args: { path: "config/billing.yaml" }, result: billingConfig(4, 250) },
+	]);
+	s.assistant("Both files are read. The retry loop lives in sendCharge, and its limits come from the retry section of the configuration.");
+	s.user("Run the billing test suite once before changing anything.");
+	const tests = s.tools("Running the billing tests.", [
+		{
+			name: "bash",
+			args: { command: "npm test -- billing" },
+			result: testRun(
+				113,
+				380,
+				{ 211: "(node:4182) DeprecationWarning: Buffer() is deprecated; called from src/billing/legacy-signer.ts:37" },
+				"Tests: 380 passed, 380 total\nCommand exited with code 0",
+			),
+		},
+	]);
+	s.assistant("The billing suite passes. There is one deprecation warning in the output.");
+	s.user("Read last night's gateway log next; ops says some charges were retried too often.");
+	const gateway = s.tools("Reading the gateway log.", [
+		{ name: "read", args: { path: "logs/gateway-2026-01-11.log" }, result: gatewayLog(420, 127) },
+	]);
+	s.assistant("The log shows some charges retried past the configured limit. I'll wait for your decision on the new limits.");
+	s.idle(95 * 60_000);
+	const limits = s.user(
+		"Set the retry attempts to 3 and the backoff to 400 ms. Regenerate the configuration with make config rather than editing the YAML by hand.",
+	);
+	s.tools("Regenerating the configuration.", [
+		{
+			name: "bash",
+			args: { command: "make config RETRY_ATTEMPTS=3 BACKOFF_MS=400" },
+			result: "Generated config/billing.yaml from config/billing.template.yaml.",
+		},
+	]);
+	const regenerated = s.tools("Reading the regenerated configuration.", [
+		{ name: "read", args: { path: "config/billing.yaml" }, result: billingConfig(3, 400) },
+	]);
+	const cut1 = s.assistant("The regenerated configuration is in place.");
+
+	// Segment 2
+	s.user("Now stop retrying on client errors: run the retry codemod on src/billing/client.ts, then check the file.");
+	const unchanged = s.tools("Reading the client before the codemod.", [
+		{ name: "read", args: { path: "src/billing/client.ts" }, result: billingClient(before) },
+	]);
+	s.tools("Running the codemod.", [
+		{
+			name: "bash",
+			args: { command: "node scripts/codemod-retry.js src/billing/client.ts" },
+			result: "codemod-retry: rewrote RETRYABLE_STATUSES and 3 call sites in src/billing/client.ts",
+		},
+	]);
+	const changed = s.tools("Reading the client after the codemod.", [
+		{ name: "read", args: { path: "src/billing/client.ts" }, result: billingClient(after) },
+	]);
+	s.assistant("The codemod narrowed the retryable statuses; sendCharge keeps its signature.");
+	s.user("Run the billing tests again with coverage.");
+	const coverage = s.tools("Running the billing tests with coverage.", [
+		{ name: "bash", args: { command: "npm test -- billing --coverage" }, result: coverageRun(137) },
+	]);
+	s.assistant("All billing tests pass with coverage collected.");
+	s.user("Search the codebase for other callers of sendCharge.");
+	const search = s.tools("Searching for callers.", [
+		{ name: "bash", args: { command: 'rg -n --stats "sendCharge\\(" src' }, result: callerSearch(139) },
+	]);
+	s.assistant("Several modules outside billing call sendCharge directly.");
+	const payouts = s.user("Leave src/payouts/ alone in this task; the payouts team owns it.");
+	s.assistant("Understood: no changes under src/payouts/.");
+	const migrate = s.tools("Checking pending migrations.", [
+		{
+			name: "bash",
+			args: { command: "npm run migrate:check" },
+			result:
+				"migrate:check: migration 0042_retry_columns.sql is not applied to the sandbox database\nCommand exited with code 4",
+			error: true,
+		},
+	]);
+	const cut2 = s.assistant(
+		"The migration check fails on an unapplied migration under migrations/, which this task must not touch, so I have left it.",
+	);
+
+	// Segment 3
+	s.user("Profile the retry path with the load script against the sandbox.");
+	const load = s.tools("Running the load script.", [
+		{ name: "bash", args: { command: "node scripts/load-retry.js --sandbox --requests 5000" }, result: loadRun() },
+	]);
+	s.assistant("The load run finished, and retries stayed within the new limit.");
+	const paging = s.user(
+		"Update the runbook for the new policy: on-call should now be paged after 3 consecutive gateway failures. docs/runbook.md is generated, so read it and the README first, then regenerate it.",
+	);
+	const docs = s.tools("Reading the README and the runbook.", [
+		{
+			name: "read",
+			args: { path: "docs/README.md" },
+			result: guide("Billing service", 260, 151, { 7: "Billing questions go to billing-dev@example.test." }),
+		},
+		{ name: "read", args: { path: "docs/runbook.md" }, result: runbook(6) },
+	]);
+	s.tools("Regenerating the runbook.", [
+		{
+			name: "bash",
+			args: { command: "node scripts/render-runbook.js --retry-attempts 3 --page-after 3" },
+			result: "render-runbook: wrote docs/runbook.md",
+		},
+	]);
+	const rendered = s.tools("Reading the regenerated runbook.", [
+		{ name: "read", args: { path: "docs/runbook.md" }, result: runbook(3) },
+	]);
+	s.assistant("The runbook now describes the new retry policy and paging rule.");
+	const next3 = s.user("Next: open the pull request with the test and load results attached.");
+	const cut3 = s.assistant("I'll open the pull request next.");
+
+	const oldConfig = first.results[1];
+	return fixture(
+		"P4",
+		"Billing retries: answers in a configuration, a source file and a runbook read again after they changed, and in long test, log, search and load outputs later turns consumed; user rulings and a failed command as controls; one idle gap of more than an hour.",
+		s,
+		[cut1, cut2, cut3],
+		[
+			[
+				{ kind: "previous", prompt: "Before the configuration was regenerated, how many retry attempts did config/billing.yaml set?", expected: number(4), evidence: [oldConfig] },
+				{ kind: "previous", prompt: "Before the configuration was regenerated, what backoff did it set, in milliseconds?", expected: number(250), evidence: [oldConfig] },
+				{ kind: "fact", prompt: "Which merchant ID does config/billing.yaml list for Lindqvist Cycles?", expected: text("m-0417"), evidence: [oldConfig, regenerated.results[0]] },
+				{ kind: "fact", prompt: "Which file did the deprecation warning in the first billing test run point to?", expected: text("src/billing/legacy-signer.ts", "legacy-signer.ts"), evidence: [tests.results[0]] },
+				{ kind: "fact", prompt: "What HTTP status did request req_7f3a91c2 receive in last night's gateway log?", expected: number(502), evidence: [gateway.results[0]] },
+				{ kind: "count", prompt: "According to last night's gateway log, how many requests exceeded the configured maximum attempts?", expected: number(14), evidence: [gateway.results[0]] },
+				{ kind: "current", prompt: "How many retry attempts does the configuration set now?", expected: number(3), evidence: [limits, regenerated.results[0]] },
+				{ kind: "constraint", prompt: "Under which directory must nothing be modified?", expected: text("migrations/", "migrations"), evidence: [rules] },
+				{ kind: "absent", prompt: "Which engineer was on call when request req_7f3a91c2 failed?", expected: unknown, evidence: [] },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["call the live gateway to reproduce the retries", "wait for the user's next instruction; the configuration is regenerated", "edit config/billing.yaml by hand", "apply the pending migration"], "B"),
+					evidence: [cut1],
+				},
+			],
+			[
+				{ kind: "previous", prompt: "Before the codemod ran, how many status codes did RETRYABLE_STATUSES in src/billing/client.ts list?", expected: number(8), evidence: [first.results[0], unchanged.results[0]] },
+				{ kind: "current", prompt: "How many status codes does RETRYABLE_STATUSES list now?", expected: number(5), evidence: [changed.results[0]] },
+				{ kind: "fact", prompt: "What line coverage, in percent, did the coverage run report for src/billing/client.ts?", expected: number(87.4), evidence: [coverage.results[0]] },
+				{ kind: "fact", prompt: "At which line of src/payouts/batch.ts does the search show sendCharge being called?", expected: number(211), evidence: [search.results[0]] },
+				{ kind: "count", prompt: "How many files contained matches in the search for sendCharge callers?", expected: number(41), evidence: [search.results[0]] },
+				{ kind: "forbidden", prompt: "May you modify files under src/payouts/ in this task?", expected: bool(false), evidence: [payouts] },
+				{ kind: "fact", prompt: "Which exit code did the migration check return?", expected: number(4), evidence: [migrate.results[0]] },
+				{ kind: "current", prompt: "How many retry attempts does the configuration set now?", expected: number(3), evidence: [limits, regenerated.results[0]], crossCheckpoint: true },
+				{ kind: "fact", prompt: "What HTTP status did request req_7f3a91c2 receive in last night's gateway log?", expected: number(502), evidence: [gateway.results[0]], crossCheckpoint: true },
+				{ kind: "absent", prompt: "What is the payouts team's escalation channel?", expected: unknown, evidence: [] },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["apply migration 0042 under migrations/", "change src/payouts/batch.ts to the new retry policy", "wait for the user's next instruction; the codemod and tests are done", "call the live gateway"], "C"),
+					evidence: [cut2],
+				},
+			],
+			[
+				{ kind: "fact", prompt: "What p99 latency, in milliseconds, did the load run report for merchant m-0857?", expected: number(1840), evidence: [load.results[0]] },
+				{ kind: "count", prompt: "How many requests were retried during the load run?", expected: number(37), evidence: [load.results[0]] },
+				{ kind: "previous", prompt: "Before the runbook was regenerated, after how many consecutive gateway failures did it say on-call is paged?", expected: number(6), evidence: [docs.results[1]] },
+				{ kind: "current", prompt: "After how many consecutive gateway failures is on-call paged now, according to the runbook?", expected: number(3), evidence: [paging, rendered.results[0]] },
+				{ kind: "fact", prompt: "Which address does docs/README.md give for billing questions?", expected: text("billing-dev@example.test"), evidence: [docs.results[0]] },
+				{ kind: "previous", prompt: "Before the configuration was regenerated, what backoff did it set, in milliseconds?", expected: number(250), evidence: [oldConfig], crossCheckpoint: true },
+				{ kind: "fact", prompt: "Which file did the deprecation warning in the first billing test run point to?", expected: text("src/billing/legacy-signer.ts", "legacy-signer.ts"), evidence: [tests.results[0]], crossCheckpoint: true },
+				{ kind: "constraint", prompt: "May the public API of src/billing/client.ts change in this task?", expected: bool(false), evidence: [rules], crossCheckpoint: true },
+				{ kind: "forbidden", prompt: "May you call the live payment gateway in this task?", expected: bool(false), evidence: [rules], crossCheckpoint: true },
+				{ kind: "absent", prompt: "At what time did the on-call engineer acknowledge the alert for merchant m-0857?", expected: unknown, evidence: [] },
+				{ kind: "absent", prompt: "Which reviewer approved the pull request?", expected: unknown, evidence: [] },
+				{
+					kind: "continuation",
+					...choice("Which action comes next in this task?", ["open the pull request with the test and load results", "run the load script against the live gateway", "edit docs/runbook.md by hand", "apply migration 0042"], "A"),
+					evidence: [next3],
+				},
+			],
+		],
+		P4_FIXTURE_VERSION,
+	);
+}
+
 function serialize(session: Session): string {
 	const header = {
 		type: "session",
 		version: 3,
-		id: `00000000-0000-4000-8000-0000000000${{ p1: "51", p2: "52", p3: "53" }[session.prefix]}`,
-		timestamp: time,
+		id: `00000000-0000-4000-8000-0000000000${{ p1: "51", p2: "52", p3: "53", p4: "54" }[session.prefix]}`,
+		timestamp: session.started,
 		cwd: `/synthetic/${session.prefix}`,
 	};
 	return `${[header, ...session.entries].map((line) => JSON.stringify(line)).join("\n")}\n`;
 }
 
-/** Every generated file by path relative to `fixtures/`, plus the manifest pinning their SHA-256. */
+/**
+ * Every generated file by path relative to `fixtures/`, plus one manifest per fixtures version pinning its files by
+ * SHA-256: `manifest.json` for P1 to P3, `manifest-0.6.json` for P4.
+ */
 export function generate(): Map<string, string> {
 	const files = new Map<string, string>();
-	for (const { fixture: value, session } of [ledgerSync(), stockReport(), configMigration()]) {
-		validate(value, session);
-		files.set(`${value.id}/session.jsonl`, serialize(session));
-		files.set(`${value.id}/gold.json`, `${JSON.stringify(value, null, "\t")}\n`);
+	const sets = [
+		{ version: PREVIEW_FIXTURE_VERSION, manifest: "manifest.json", fixtures: [ledgerSync(), stockReport(), configMigration()] },
+		{ version: P4_FIXTURE_VERSION, manifest: "manifest-0.6.json", fixtures: [billingRetries()] },
+	];
+	for (const set of sets) {
+		const pinned = new Map<string, string>();
+		for (const { fixture: value, session } of set.fixtures) {
+			if (value.version !== set.version) throw new Error(`EVAL_PREVIEW_VERSION:${value.id}`);
+			validate(value, session);
+			pinned.set(`${value.id}/session.jsonl`, serialize(session));
+			pinned.set(`${value.id}/gold.json`, `${JSON.stringify(value, null, "\t")}\n`);
+		}
+		const manifest = {
+			version: set.version,
+			files: Object.fromEntries(
+				[...pinned].map(([path, content]) => [path, createHash("sha256").update(content).digest("hex")]),
+			),
+		};
+		for (const [path, content] of pinned) files.set(path, content);
+		files.set(set.manifest, `${JSON.stringify(manifest, null, "\t")}\n`);
 	}
-	const manifest = {
-		version: PREVIEW_FIXTURE_VERSION,
-		files: Object.fromEntries(
-			[...files].map(([path, content]) => [path, createHash("sha256").update(content).digest("hex")]),
-		),
-	};
-	files.set("manifest.json", `${JSON.stringify(manifest, null, "\t")}\n`);
 	return files;
 }
 

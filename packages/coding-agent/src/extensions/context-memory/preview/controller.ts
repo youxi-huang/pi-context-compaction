@@ -44,9 +44,13 @@ import type {
 	PreviewReadback,
 	PreviewSession,
 } from "./contracts.ts";
+import { type AppendedExcerpt, selectExcerpts, unusedExcerpts } from "./excerpts.ts";
+import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
+import { applyReduction, declaredCacheLifetimeMs, type ReductionView, reduceRecords } from "./reduction.ts";
+import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
 import {
 	assertUserMessages,
@@ -352,6 +356,18 @@ export interface PreviewControllerOptions {
 	journal?: CallJournal;
 	/** Arm B: commit merged work notes without a writer call when the prefix path allows it. */
 	workNotes?: PreviewSwitch;
+	/** WP4's LCM-style excerpt after the user's prompt; off unless `previewExcerpts.enabled`. */
+	excerpts?: PreviewSwitch;
+	/**
+	 * Which entries the current context shows only reduced (WP2): their full text is not in context, so retrieval
+	 * leaves them unmarked and an excerpt may quote them. By default the predicate reads the reduction view;
+	 * with reductions off no entry is reduced. Tests may substitute it.
+	 */
+	reduced?: (ctx: ExtensionContext) => (entryId: string) => boolean;
+	/** WP2: deterministic reversible reductions of the projected view; off by default. */
+	reduction?: PreviewSwitch;
+	/** WP3: rendered-note candidates, projecting the stored summary for the model only; off by default. */
+	rendering?: RenderingSwitch;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -374,6 +390,17 @@ export class PreviewMemoryController {
 	private readonly preparation?: PreviewPreparation;
 	private readonly journal?: CallJournal;
 	private readonly workNotes: PreviewSwitch;
+	private readonly excerpts: PreviewSwitch;
+	private readonly reduced: (ctx: ExtensionContext) => (entryId: string) => boolean;
+	/** Per session and process: content-free counts of appended excerpts, for status. */
+	private readonly excerptCounts = new Map<
+		string,
+		{ appended: AppendedExcerpt[]; withheld: number; tokens: number }
+	>();
+	private readonly reduction: PreviewSwitch;
+	private readonly rendering: RenderingSwitch;
+	/** In-memory, per session: full read-backs of entries the reduced view replaces. Counts only. */
+	private readonly reducedReadBacks = new Map<string, number>();
 	private readonly lastCompaction = new Map<
 		string,
 		{
@@ -394,6 +421,72 @@ export class PreviewMemoryController {
 		this.preparation = options.preparation;
 		this.journal = options.journal;
 		this.workNotes = options.workNotes ?? { enabled: false };
+		this.excerpts = options.excerpts ?? { enabled: false };
+		this.reduction = options.reduction ?? { enabled: false };
+		this.rendering = options.rendering ?? RENDERING_OFF;
+		this.reduced =
+			options.reduced ??
+			((ctx) => {
+				const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+				const reducedIds = new Set((view?.entries ?? []).map((entry) => entry.recordId));
+				return (entryId: string) => reducedIds.has(entryId);
+			});
+	}
+
+	/**
+	 * The deterministic reduced view of this branch, or none. Off, invalid or absent configuration
+	 * and any classification error all leave requests unreduced: a reduction has no failure state
+	 * and never stands in for a failed compaction.
+	 */
+	private reducedView(
+		branch: readonly SessionEntry[],
+		model: { promptCache?: { short?: number; long?: number } } | undefined,
+	): ReductionView | undefined {
+		if (!this.reduction.enabled) return undefined;
+		try {
+			const view = reduceRecords(branch, declaredCacheLifetimeMs(model));
+			return view.entries.length ? view : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * The checkpoint text the model sees (WP3): the stored summary byte for byte, or the rendered-note
+	 * projection derived from the stored note, lineage and records by the pure `projectSummary`. Both
+	 * recovery-presence guards derive their expectation here, so the payload stays bound to the
+	 * committed note. Off, invalid or absent configuration and any projection error all leave the
+	 * stored rendering in place: a projection has no failure state of its own.
+	 */
+	private projectedSummary(
+		checkpoint: NonNullable<ReturnType<typeof latestMemory>>,
+		branch: readonly SessionEntry[],
+	): string {
+		if (!this.rendering.enabled || !this.rendering.candidates.length) return checkpoint.entry.summary;
+		try {
+			return projectSummary({
+				summary: checkpoint.entry.summary,
+				note: checkpoint.memory.note,
+				entryId: checkpoint.entry.id,
+				branch,
+				candidates: this.rendering.candidates,
+			});
+		} catch {
+			return checkpoint.entry.summary;
+		}
+	}
+
+	/** Count a full read-back of an entry the current reduced view replaces; counts only, no content. */
+	recordHistoryRead(ctx: ExtensionContext, entryId: string): void {
+		try {
+			if (!this.reduction.enabled) return;
+			const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+			if (!view?.entries.some((entry) => entry.recordId === entryId)) return;
+			const sessionId = ctx.sessionManager.getSessionId();
+			this.reducedReadBacks.set(sessionId, (this.reducedReadBacks.get(sessionId) ?? 0) + 1);
+		} catch {
+			// Counting is advisory; the read itself is served from the original records regardless.
+		}
 	}
 
 	bindTools(tools: () => Tool[]): void {
@@ -482,7 +575,11 @@ export class PreviewMemoryController {
 				streamSimple: registry.streamSimple.bind(registry),
 			};
 			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
-			const messages = structuredClone(convertToLlm(projection.messages));
+			// The prepared writer call reads the same reduced prefix the session's own requests carry (G4).
+			const reductionView = this.reducedView(branch, ctx.model);
+			const messages = structuredClone(
+				convertToLlm(reductionView ? applyReduction(projection.messages, reductionView) : projection.messages),
+			);
 			const prefix = getInitialSystemMessage(messages)
 				? { messages, sessionId }
 				: { messages, sessionId, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
@@ -651,11 +748,45 @@ export class PreviewMemoryController {
 		}
 		const sessionId = ctx.sessionManager.getSessionId();
 		const lastCompaction = this.lastCompaction.get(sessionId);
+		const excerpted = this.excerptCounts.get(sessionId);
 		let calls: ReturnType<CallJournal["summary"]> | undefined;
 		try {
 			calls = this.journal?.summary(sessionId);
 		} catch {
 			// The journal is advisory for status; its own gap state is reported when it can be read.
+		}
+		// Content-free reduction counts: never entry text or IDs.
+		let reduction:
+			| {
+					enabled: boolean;
+					reason?: string;
+					entriesReduced?: number;
+					estimatedTokensRemoved?: number;
+					readBacks?: number;
+			  }
+			| undefined;
+		if (this.reduction.enabled) {
+			let view: ReductionView | undefined;
+			try {
+				view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model ?? undefined);
+			} catch {
+				// A reduction has no failure state; status then reports an unreduced view.
+			}
+			reduction = {
+				enabled: true,
+				entriesReduced: view?.entries.length ?? 0,
+				estimatedTokensRemoved: view?.tokensRemoved ?? 0,
+				readBacks: this.reducedReadBacks.get(sessionId) ?? 0,
+			};
+		} else if (this.reduction.error) {
+			reduction = { enabled: false, reason: this.reduction.error };
+		}
+		// Content-free rendering state (WP3): the switch and its candidate names, never summary text.
+		let rendering: { enabled: boolean; candidates?: string[]; reason?: string } | undefined;
+		if (this.rendering.enabled) {
+			rendering = { enabled: true, candidates: [...this.rendering.candidates] };
+		} else if (this.rendering.error) {
+			rendering = { enabled: false, reason: this.rendering.error };
 		}
 		return {
 			build: diagnosis.build,
@@ -678,8 +809,19 @@ export class PreviewMemoryController {
 			...(diagnosis.reason ? { reason: diagnosis.reason } : {}),
 			manualCompaction: diagnosis.manualCompaction,
 			...(prepared ? { preparation: prepared } : {}),
+			...(reduction ? { reduction } : {}),
+			...(rendering ? { rendering } : {}),
 			...(calls ? { calls } : {}),
 			...(lastCompaction ? { lastCompaction } : {}),
+			// Counts only, never record text or IDs; `tokens` is retrieval usage, apart from any writer usage.
+			excerpts: {
+				enabled: this.excerpts.enabled,
+				...(this.excerpts.error ? { error: this.excerpts.error } : {}),
+				appended: excerpted?.appended.length ?? 0,
+				unused: excerpted ? unusedExcerpts(excerpted.appended, ctx.sessionManager.getBranch()) : 0,
+				withheld: excerpted?.withheld ?? 0,
+				tokens: excerpted?.tokens ?? 0,
+			},
 		};
 	}
 
@@ -882,24 +1024,94 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return messages;
 		}
-		this.guard(ctx, () => {
+		let projected = messages;
+		let headroom = 0;
+		const ready = this.guard(ctx, () => {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			if (checkpoint) {
+				// WP3: the expected text is derived from the committed note by the same pure function as
+				// `beforeRequest`'s payload check. Pi restores the stored bytes from the session; the second
+				// pass of this handler (`context_with_system`) sees the projection the first pass substituted.
+				// Anything else is a tampered rendering and is refused.
+				const expected = this.projectedSummary(checkpoint, ctx.sessionManager.getBranch());
 				const restored = messages.filter((message) => message.role === "compactionSummary");
-				if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary) {
+				if (
+					restored.length !== 1 ||
+					(restored[0].summary !== checkpoint.entry.summary && restored[0].summary !== expected)
+				) {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
 				}
+				if (restored[0].summary !== expected) {
+					const stored = restored[0];
+					projected = messages.map((message) => (message === stored ? { ...stored, summary: expected } : message));
+				}
 			}
-			assertToolPairs(messages);
+			// The reduced view changes only the projection: summaries are never reduced, pairing is kept,
+			// and the token estimate below measures what the request actually carries. Order cannot matter:
+			// reduction touches only tool results and the WP3 projection only the compactionSummary message.
+			const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model);
+			if (view) projected = applyReduction(projected, view);
+			assertToolPairs(projected);
 			const estimate =
-				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
-			if (estimate > requestLimit(ctx.model)) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+				projected.reduce((sum, message) => sum + estimateTokens(message), 0) +
+				(getInitialSystemMessage(projected) ? 0 : piTokens(ctx.getSystemPrompt()));
+			const limit = requestLimit(ctx.model);
+			if (estimate > limit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+			headroom = limit - estimate;
 		});
 		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
 		// under another role would change their authority and invalidate the provider prefix cache.
-		return messages;
+		// Reduction runs first, so the excerpt's shown-term check reads the reduced stubs (G4, WP4 seam).
+		return ready && this.excerpts.enabled ? this.withExcerpts(projected, ctx, headroom) : projected;
+	}
+
+	/** Whether an entry's full text is in this session's current context: projected and not reduced. Built on first use. */
+	inContext(ctx: ExtensionContext): InContext {
+		let marks: InContext | undefined;
+		return (entryId) => {
+			marks ??= inContextEntries(ctx.sessionManager.buildSessionProjection(), this.reduced(ctx));
+			return marks(entryId);
+		};
+	}
+
+	/**
+	 * WP4's excerpt, appended after the user's prompt on the request that ends with it, the turn's first. Every
+	 * message before it is the session's own projection, unchanged, so the provider's cached prefix is untouched; the
+	 * turn's later requests end in tool results and carry none, so no request's prefix ever holds one. Pi uses the
+	 * returned messages for this request only, so the excerpt enters no session record. It is appended only within the
+	 * request limit, and any failure leaves the request as it was: excerpts never enter the failure contract.
+	 */
+	private withExcerpts(messages: AgentMessage[], ctx: ExtensionContext, headroom: number): AgentMessage[] {
+		try {
+			if (messages.at(-1)?.role !== "user") return messages;
+			const session = ctx.sessionManager;
+			const outside = [
+				...(getInitialSystemMessage(messages) ? [] : [ctx.getSystemPrompt()]),
+				...this.activeTools().map(
+					(tool) => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`,
+				),
+			];
+			const appended = selectExcerpts({
+				messages,
+				outside,
+				branch: session.getBranch(),
+				inContext: this.inContext(ctx),
+			});
+			if (!appended || estimateTokens(appended.message) > headroom) return messages;
+			const sessionId = session.getSessionId();
+			const counts = this.excerptCounts.get(sessionId) ?? { appended: [], withheld: 0, tokens: 0 };
+			const anchorId = session.getLeafId();
+			for (const item of appended.items) {
+				if ("withheld" in item) counts.withheld++;
+				else counts.appended.push({ entryId: item.entryId, anchorId });
+			}
+			counts.tokens += appended.tokens;
+			this.excerptCounts.set(sessionId, counts);
+			return [...messages, appended.message];
+		} catch {
+			return messages;
+		}
 	}
 
 	beforeRequest(payload: unknown, ctx: ExtensionContext): void {
@@ -908,7 +1120,14 @@ export class PreviewMemoryController {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			const serialized = JSON.stringify(payload);
-			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1))) {
+			// The same derivation as `context`: with a rendering candidate active the payload must carry the
+			// projection of the committed note, so a stored-only or tampered rendering is refused here too.
+			if (
+				checkpoint &&
+				!serialized?.includes(
+					JSON.stringify(this.projectedSummary(checkpoint, ctx.sessionManager.getBranch())).slice(1, -1),
+				)
+			) {
 				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost the validated checkpoint");
 			}
 			// JSON escaping and tool schemas sit outside Pi's estimate, so only a payload beyond the window is stopped here.
@@ -1015,7 +1234,12 @@ export class PreviewMemoryController {
 					projectedMessages.pop();
 				} else break;
 			}
-			const prefixMessages = convertToLlm(projectedMessages);
+			// G4: the writer's session prefix shares the context projection's reduced view byte for byte,
+			// so the writer continues the session's cache. Sources, hashes and readback stay on originals.
+			const reductionView = this.reducedView(branch, ctx.model);
+			const prefixMessages = convertToLlm(
+				reductionView ? applyReduction(projectedMessages, reductionView) : projectedMessages,
+			);
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
 			// The session's ID travels with the prefix, as Pi sends it with each of the session's requests.

@@ -25,6 +25,28 @@ and report the discrepancy. Preview install/acceptance commands come from
 [extension-preview.md](extension-preview.md); evaluation commands come from
 [eval/README.md](../../eval/README.md).
 
+## Scale the check to the change
+
+Run the narrowest command that observes the change. CI runs the full pipeline
+on every pull request and push to main, and skips it only when a change touches
+nothing but Markdown under `docs/` or the repository root; `CHANGELOG.md` and
+`docs/context-memory/extension-preview.md` always run it, because release
+preparation reads the first and the package README is built from the second.
+The publication workflow re-verifies every release on its tag regardless.
+
+| Change | Minimal local check |
+| --- | --- |
+| Markdown only, outside the two files above | None; `doctor` if worktree state is in doubt. |
+| Extension or host source, shared tests, check scripts | `verify` |
+| Preview source, preview scripts, scenarios, release tooling | `verify`, then `preview` |
+| Evaluation fixtures, scorer, runners, `eval/` scripts | `eval --full` |
+| CI workflows, `context-memory-ops.mjs` itself, or in doubt | `ci` |
+
+When the supported-host matrix outgrows one pull-request run (the 0.9.0 and
+0.10.0 adapters), the intended split is: pull requests keep the primary host
+and the conformance vectors, and the full matrix runs on merges to main and in
+the release workflow. Today's matrix is small enough to run everywhere.
+
 All child commands receive `PI_OFFLINE=1`, `EVAL_PROVIDER_MODE=scripted`, and
 `EVAL_MODEL_CALL_BUDGET=0`. Stock-Pi acceptance uses its existing isolated loopback
 services and synthetic credentials; it is not a real-provider result.
@@ -51,13 +73,13 @@ Full logs live under `os.tmpdir()`, separated by user uid and invocation.
 Use `--verbose` to stream output; `doctor --verbose` shows the inventory.
 Doctor reports readiness without installing or requiring a clean checkout.
 Duplicate filenames fail immediately. Other failures print the step's exit code,
-duration and last 40 log lines. Exit 0 means completion, 1 marks the fingerprint
+duration and last 40 log lines. Exit 0 means completion, 3 marks the fingerprint
 gate, 2 means invalid usage; a failed command retains its own exit code.
 
 Preview `--prepare` requires a clean committed checkout. It only prepares local
 archives and never publishes. Do not bypass its clean-source check.
 
-The v0.5.3 independent extension keeps a source fingerprint to bind package
+The v0.6.0 independent extension keeps a source fingerprint to bind package
 acceptance and scenario evidence to its exact inputs. Host file hashes before
 and after acceptance check that testing did not patch official Pi. Checkpoint
 source hashes protect persisted evidence and recovery. These checks cover
@@ -72,7 +94,7 @@ Stop maintenance decisions at either gate and wait for the maintainer:
    `packages/coding-agent/src/extensions/context-memory/build.ts` means a
    fingerprinted runtime or host input changed. Checks may finish, but do not
    commit the new fingerprint without explicit approval in this task. The script
-   warns, returns 1 after remaining checks, and never commits or restores it.
+   warns, returns 3 after remaining checks, and never commits or restores it.
 2. `EVAL_FROZEN_INPUT_CHANGED` means the evaluated input differs from its frozen
    contract. Do not change the pin in `eval/runtime.ts` or alter tests to bypass
    the failure. Report the evidence and wait for the maintainer's decision.

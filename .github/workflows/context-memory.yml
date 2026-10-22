@@ -15,7 +15,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.diff.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - name: Detect a change of Markdown documents alone
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # CHANGELOG.md feeds release preparation and extension-preview.md becomes
+          # the package README, so a change to either runs the full pipeline.
+          range=""
+          if [ "$EVENT" = "pull_request" ]; then
+            range="origin/$BASE_REF...HEAD"
+          elif [ "$EVENT" = "push" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
+          fi
+          docs_only=false
+          if [ -n "$range" ]; then
+            changed="$(git diff --name-only "$range")"
+            if [ -n "$changed" ] \
+              && ! printf '%s\n' "$changed" | grep -qvE '^(docs/.+\.md|[^/]+\.md)$' \
+              && ! printf '%s\n' "$changed" | grep -qxE 'CHANGELOG\.md|docs/context-memory/extension-preview\.md'; then
+              docs_only=true
+            fi
+          fi
+          echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
   verify:
+    # A skipped verify reports as a passed check; the publication workflow
+    # re-verifies every release on its tag either way.
+    needs: scope
+    if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

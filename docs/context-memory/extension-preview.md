@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.3
+# Independent extension preview — v0.6.0
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.6.0 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.3 supports manual and completed-turn threshold compaction.** Optional
+**v0.6.0 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.3
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.6.0
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.3
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.6.0
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.3 lists
+Check that the installed preview lists the new Pi version first; v0.6.0 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.3)
+The [v0.6.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.6.0)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -443,16 +443,18 @@ prefix and notes checkpoints cover what their candidate or notes saw.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
 
-## Optional reduction and excerpt experiments
+## Optional reduction, excerpt and rendering experiments
 
-The unreleased 0.6.0 work adds two further opt-in switches beside
-`previewPreparation`, each off by default and disabled by any invalid value
-without affecting requests or the compaction failure contract:
+v0.6.0 adds three further opt-in switches beside `previewPreparation`; the
+pinned v0.5.3 tag and earlier do not contain them. Each is off by default and
+disabled by any invalid value without affecting requests or the compaction
+failure contract:
 
 ```json
 {
   "previewReduction": { "enabled": true },
-  "previewExcerpts": { "enabled": true }
+  "previewExcerpts": { "enabled": true },
+  "previewRendering": { "enabled": true, "candidates": ["lineage-once"] }
 }
 ```
 
@@ -481,13 +483,24 @@ only its ID, nothing is written to the session, and every earlier message is
 unchanged, so the cached prefix is untouched. `/compaction-status` reports
 counts under `excerpts`.
 
+With `previewRendering` on, the summary the model sees is derived from the
+stored note and lineage by a pure function while the stored checkpoint bytes
+never change, and the recovery guards accept and require that same
+derivation, so a tampered rendering is still refused. Its candidates are
+selectable one at a time: `folded-failed-paths` folds failed paths whose
+sources precede the previous checkpoint to one line with their source IDs,
+`lineage-once` renders guidance once and folds repeated lineage state lines
+with every anchor kept, and `cited-roles` shows the roles of the records each
+fact cites, computed from the records. `/compaction-status` reports the
+active candidates under `rendering`.
+
 `context_history` results now state `readTokens`, the estimated cost of a
 full read, and mark hits whose entries are already in context; `read`
 accepts `detail: "low"` for a bounded opening with the full cost stated, and
 `full` remains the default. Synthetic regressions and scenarios establish
 these mechanics; token savings and recovery on a real provider are
-unmeasured, and both switches stay off until that measurement supports a
-default.
+unmeasured, and all three switches stay off until that measurement supports
+a default.
 
 ### Work notes (arm B)
 

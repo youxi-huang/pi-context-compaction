@@ -44,6 +44,7 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		workNotes: preparation.notes,
 		excerpts: readExcerptSettings(agentDir),
 		reduction: preparation.reduction,
+		rendering: preparation.rendering,
 	});
 	const disabled = config?.enabled === false;
 	pi.registerCommand("compaction-status", {

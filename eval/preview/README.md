@@ -147,10 +147,13 @@ writes, so `cacheWrite1h` comes from each attempt's summed usage and stays with 
 attempt on a cut counts, so the sums cover `--attempts` copies of each cut; compare the per-checkpoint figures.
 
 Two runs compare on equal terms when `summary.json` records the same mode, provider, model, thinking, cache,
-fixtures, attempts, concurrency and Pi version. `--session-settings name=value,...` labels the session settings a run
-stands for, such as `previewReduction=off` for a control, under `sessionSettings` (empty: the package's defaults),
-and `--control <label>` names the run a candidate compares with under `control`. Both are recorded as given: the
-bench writes no `pi-context-memory.json`, so the label must describe what the units actually ran with.
+fixtures, attempts, concurrency and Pi version. `--session-settings name=value,...` names preview switches
+(`previewReduction`, `previewExcerpts`, `previewPreparation`, `previewWorkNotes`, each `on` or `off`), writes them
+into every unit's `pi-context-memory.json`, and records the label under `sessionSettings` with the written switches
+under `unitSettings`; an unknown name or value stops the run before any unit starts. `--control <label>` names the
+run a candidate compares with under `control`. Without the flag no settings file is written and units run on the
+package's defaults. Absolute loopback token counts shift by a few tokens with the output directory's path length,
+which enters Pi's system prompt, so compared runs should use labels of equal length.
 
 ### Quotation-repair cases
 

@@ -50,6 +50,7 @@ import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
 import { applyReduction, declaredCacheLifetimeMs, type ReductionView, reduceRecords } from "./reduction.ts";
+import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
 import {
 	assertUserMessages,
@@ -365,6 +366,8 @@ export interface PreviewControllerOptions {
 	reduced?: (ctx: ExtensionContext) => (entryId: string) => boolean;
 	/** WP2: deterministic reversible reductions of the projected view; off by default. */
 	reduction?: PreviewSwitch;
+	/** WP3: rendered-note candidates, projecting the stored summary for the model only; off by default. */
+	rendering?: RenderingSwitch;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -395,6 +398,7 @@ export class PreviewMemoryController {
 		{ appended: AppendedExcerpt[]; withheld: number; tokens: number }
 	>();
 	private readonly reduction: PreviewSwitch;
+	private readonly rendering: RenderingSwitch;
 	/** In-memory, per session: full read-backs of entries the reduced view replaces. Counts only. */
 	private readonly reducedReadBacks = new Map<string, number>();
 	private readonly lastCompaction = new Map<
@@ -419,6 +423,7 @@ export class PreviewMemoryController {
 		this.workNotes = options.workNotes ?? { enabled: false };
 		this.excerpts = options.excerpts ?? { enabled: false };
 		this.reduction = options.reduction ?? { enabled: false };
+		this.rendering = options.rendering ?? RENDERING_OFF;
 		this.reduced =
 			options.reduced ??
 			((ctx) => {
@@ -443,6 +448,31 @@ export class PreviewMemoryController {
 			return view.entries.length ? view : undefined;
 		} catch {
 			return undefined;
+		}
+	}
+
+	/**
+	 * The checkpoint text the model sees (WP3): the stored summary byte for byte, or the rendered-note
+	 * projection derived from the stored note, lineage and records by the pure `projectSummary`. Both
+	 * recovery-presence guards derive their expectation here, so the payload stays bound to the
+	 * committed note. Off, invalid or absent configuration and any projection error all leave the
+	 * stored rendering in place: a projection has no failure state of its own.
+	 */
+	private projectedSummary(
+		checkpoint: NonNullable<ReturnType<typeof latestMemory>>,
+		branch: readonly SessionEntry[],
+	): string {
+		if (!this.rendering.enabled || !this.rendering.candidates.length) return checkpoint.entry.summary;
+		try {
+			return projectSummary({
+				summary: checkpoint.entry.summary,
+				note: checkpoint.memory.note,
+				entryId: checkpoint.entry.id,
+				branch,
+				candidates: this.rendering.candidates,
+			});
+		} catch {
+			return checkpoint.entry.summary;
 		}
 	}
 
@@ -751,6 +781,13 @@ export class PreviewMemoryController {
 		} else if (this.reduction.error) {
 			reduction = { enabled: false, reason: this.reduction.error };
 		}
+		// Content-free rendering state (WP3): the switch and its candidate names, never summary text.
+		let rendering: { enabled: boolean; candidates?: string[]; reason?: string } | undefined;
+		if (this.rendering.enabled) {
+			rendering = { enabled: true, candidates: [...this.rendering.candidates] };
+		} else if (this.rendering.error) {
+			rendering = { enabled: false, reason: this.rendering.error };
+		}
 		return {
 			build: diagnosis.build,
 			enabled: this.config?.enabled ?? true,
@@ -773,6 +810,7 @@ export class PreviewMemoryController {
 			manualCompaction: diagnosis.manualCompaction,
 			...(prepared ? { preparation: prepared } : {}),
 			...(reduction ? { reduction } : {}),
+			...(rendering ? { rendering } : {}),
 			...(calls ? { calls } : {}),
 			...(lastCompaction ? { lastCompaction } : {}),
 			// Counts only, never record text or IDs; `tokens` is retrieval usage, apart from any writer usage.
@@ -992,15 +1030,28 @@ export class PreviewMemoryController {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			if (checkpoint) {
+				// WP3: the expected text is derived from the committed note by the same pure function as
+				// `beforeRequest`'s payload check. Pi restores the stored bytes from the session; the second
+				// pass of this handler (`context_with_system`) sees the projection the first pass substituted.
+				// Anything else is a tampered rendering and is refused.
+				const expected = this.projectedSummary(checkpoint, ctx.sessionManager.getBranch());
 				const restored = messages.filter((message) => message.role === "compactionSummary");
-				if (restored.length !== 1 || restored[0].summary !== checkpoint.entry.summary) {
+				if (
+					restored.length !== 1 ||
+					(restored[0].summary !== checkpoint.entry.summary && restored[0].summary !== expected)
+				) {
 					throw new Error("CONTEXT_RECOVERY_MISSING: the validated checkpoint is missing from model context");
+				}
+				if (restored[0].summary !== expected) {
+					const stored = restored[0];
+					projected = messages.map((message) => (message === stored ? { ...stored, summary: expected } : message));
 				}
 			}
 			// The reduced view changes only the projection: summaries are never reduced, pairing is kept,
-			// and the token estimate below measures what the request actually carries.
+			// and the token estimate below measures what the request actually carries. Order cannot matter:
+			// reduction touches only tool results and the WP3 projection only the compactionSummary message.
 			const view = this.reducedView(ctx.sessionManager.getBranch(), ctx.model);
-			if (view) projected = applyReduction(messages, view);
+			if (view) projected = applyReduction(projected, view);
 			assertToolPairs(projected);
 			const estimate =
 				projected.reduce((sum, message) => sum + estimateTokens(message), 0) +
@@ -1069,7 +1120,14 @@ export class PreviewMemoryController {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			const serialized = JSON.stringify(payload);
-			if (checkpoint && !serialized?.includes(JSON.stringify(checkpoint.entry.summary).slice(1, -1))) {
+			// The same derivation as `context`: with a rendering candidate active the payload must carry the
+			// projection of the committed note, so a stored-only or tampered rendering is refused here too.
+			if (
+				checkpoint &&
+				!serialized?.includes(
+					JSON.stringify(this.projectedSummary(checkpoint, ctx.sessionManager.getBranch())).slice(1, -1),
+				)
+			) {
 				throw new Error("CONTEXT_RECOVERY_MISSING: the provider payload lost the validated checkpoint");
 			}
 			// JSON escaping and tool schemas sit outside Pi's estimate, so only a payload beyond the window is stopped here.

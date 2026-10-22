@@ -602,7 +602,9 @@ async function worker() {
 			roundUsage,
 			retrieval,
 			reduction: after.reduction ?? null,
-			// Estimated tokens of the excerpts the preview appended to this probe's requests: page-back, as retrieval is.
+			// The excerpt counts, and the estimated tokens of the excerpts the preview appended to this probe's
+			// requests: page-back, as retrieval is.
+			excerpts: after.excerpts ?? null,
 			excerptTokens: after.excerpts?.tokens ?? 0,
 		};
 	}
@@ -1080,7 +1082,7 @@ async function parent() {
 					calls[condition].questions++;
 					for (const op of ["search", "read", "list", "other"]) calls[condition][op] += result.history?.[op] ?? 0;
 					(probe.evidence.some((entry) => cited.has(entry)) || probe.expected.type === "unknown" ? missed[condition].cited : missed[condition].uncited).push(score);
-					const row = { probe: probe.id, kind: probe.kind, fixture: id, cut: k + 1, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage, roundUsage: result.roundUsage ?? [], retrieval: result.retrieval ?? [], reduction: result.reduction ?? null, excerptTokens: result.excerptTokens ?? 0, journal: result.journal ?? [] };
+					const row = { probe: probe.id, kind: probe.kind, fixture: id, cut: k + 1, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage, roundUsage: result.roundUsage ?? [], retrieval: result.retrieval ?? [], reduction: result.reduction ?? null, excerpts: result.excerpts ?? null, excerptTokens: result.excerptTokens ?? 0, journal: result.journal ?? [] };
 					probeRows.push(row);
 					record("probes.jsonl", row);
 					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null, errorMessage: result.errorMessage ?? null });

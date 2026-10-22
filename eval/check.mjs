@@ -14,7 +14,7 @@ for (const args of [
 	["--experimental-strip-types", "eval/generate-fixtures.ts", "--check"],
 	["--experimental-strip-types", "eval/preview/generate.ts", "--check"],
 	["--experimental-strip-types", "eval/preview/pi-session.ts", "--check"],
-	["node_modules/vitest/dist/cli.js", "run", "--config", "packages/coding-agent/vitest.config.ts", "eval/fixture.test.ts", "eval/scorer.test.ts", "eval/report.test.ts", "eval/pi/preflight.test.ts", "eval/pi/structure.test.ts", "eval/stage0/interface-gate.test.ts", "eval/runner/frozen.test.ts", "eval/runner/runner.test.ts", "eval/live/live.test.ts", "eval/live/diagnostics.test.ts", "eval/preview/preview.test.ts", "eval/preview/records.test.ts", "eval/preview/repair.test.ts"],
+	["node_modules/vitest/dist/cli.js", "run", "--config", "packages/coding-agent/vitest.config.ts", "eval/fixture.test.ts", "eval/scorer.test.ts", "eval/report.test.ts", "eval/pi/preflight.test.ts", "eval/pi/structure.test.ts", "eval/stage0/interface-gate.test.ts", "eval/runner/frozen.test.ts", "eval/runner/runner.test.ts", "eval/live/live.test.ts", "eval/live/diagnostics.test.ts", "eval/preview/preview.test.ts", "eval/preview/records.test.ts", "eval/preview/conformance-adapter.test.ts", "eval/preview/repair.test.ts"],
 ]) {
 	const result = spawnSync(process.execPath, args, { cwd: root, env, stdio: "inherit" });
 	if (result.error) throw result.error;

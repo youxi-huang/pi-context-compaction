@@ -22,7 +22,7 @@ export interface PreviewSwitch {
 
 const settingsCache = new Map<string, PreviewSwitch & { notes: PreviewSwitch }>();
 
-function previewSwitch(section: unknown): PreviewSwitch {
+export function previewSwitch(section: unknown): PreviewSwitch {
 	if (section === undefined) return { enabled: false };
 	return isRecord(section) && (section.enabled === undefined || typeof section.enabled === "boolean")
 		? { enabled: section.enabled === true }

@@ -44,6 +44,8 @@ import type {
 	PreviewReadback,
 	PreviewSession,
 } from "./contracts.ts";
+import { type AppendedExcerpt, selectExcerpts, unusedExcerpts } from "./excerpts.ts";
+import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
 import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
@@ -352,6 +354,13 @@ export interface PreviewControllerOptions {
 	journal?: CallJournal;
 	/** Arm B: commit merged work notes without a writer call when the prefix path allows it. */
 	workNotes?: PreviewSwitch;
+	/** WP4's LCM-style excerpt after the user's prompt; off unless `previewExcerpts.enabled`. */
+	excerpts?: PreviewSwitch;
+	/**
+	 * Which entries the current context shows only reduced (WP2): their full text is not in context, so retrieval
+	 * leaves them unmarked and an excerpt may quote them. Until reductions are wired, no entry is reduced.
+	 */
+	reduced?: (ctx: ExtensionContext) => (entryId: string) => boolean;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -374,6 +383,13 @@ export class PreviewMemoryController {
 	private readonly preparation?: PreviewPreparation;
 	private readonly journal?: CallJournal;
 	private readonly workNotes: PreviewSwitch;
+	private readonly excerpts: PreviewSwitch;
+	private readonly reduced: (ctx: ExtensionContext) => (entryId: string) => boolean;
+	/** Per session and process: content-free counts of appended excerpts, for status. */
+	private readonly excerptCounts = new Map<
+		string,
+		{ appended: AppendedExcerpt[]; withheld: number; tokens: number }
+	>();
 	private readonly lastCompaction = new Map<
 		string,
 		{
@@ -394,6 +410,8 @@ export class PreviewMemoryController {
 		this.preparation = options.preparation;
 		this.journal = options.journal;
 		this.workNotes = options.workNotes ?? { enabled: false };
+		this.excerpts = options.excerpts ?? { enabled: false };
+		this.reduced = options.reduced ?? (() => () => false);
 	}
 
 	bindTools(tools: () => Tool[]): void {
@@ -651,6 +669,7 @@ export class PreviewMemoryController {
 		}
 		const sessionId = ctx.sessionManager.getSessionId();
 		const lastCompaction = this.lastCompaction.get(sessionId);
+		const excerpted = this.excerptCounts.get(sessionId);
 		let calls: ReturnType<CallJournal["summary"]> | undefined;
 		try {
 			calls = this.journal?.summary(sessionId);
@@ -680,6 +699,15 @@ export class PreviewMemoryController {
 			...(prepared ? { preparation: prepared } : {}),
 			...(calls ? { calls } : {}),
 			...(lastCompaction ? { lastCompaction } : {}),
+			// Counts only, never record text or IDs; `tokens` is retrieval usage, apart from any writer usage.
+			excerpts: {
+				enabled: this.excerpts.enabled,
+				...(this.excerpts.error ? { error: this.excerpts.error } : {}),
+				appended: excerpted?.appended.length ?? 0,
+				unused: excerpted ? unusedExcerpts(excerpted.appended, ctx.sessionManager.getBranch()) : 0,
+				withheld: excerpted?.withheld ?? 0,
+				tokens: excerpted?.tokens ?? 0,
+			},
 		};
 	}
 
@@ -882,7 +910,8 @@ export class PreviewMemoryController {
 			this.standAside(ctx, reason);
 			return messages;
 		}
-		this.guard(ctx, () => {
+		let headroom = 0;
+		const ready = this.guard(ctx, () => {
 			const checkpoint = this.assertReady(ctx);
 			if (!ctx.model || !this.config) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 			if (checkpoint) {
@@ -895,11 +924,61 @@ export class PreviewMemoryController {
 			const estimate =
 				messages.reduce((sum, message) => sum + estimateTokens(message), 0) +
 				(getInitialSystemMessage(messages) ? 0 : piTokens(ctx.getSystemPrompt()));
-			if (estimate > requestLimit(ctx.model)) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+			const limit = requestLimit(ctx.model);
+			if (estimate > limit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
+			headroom = limit - estimate;
 		});
 		// Note candidates already appear in context as the model's own tool calls. Re-injecting them
 		// under another role would change their authority and invalidate the provider prefix cache.
-		return messages;
+		return ready && this.excerpts.enabled ? this.withExcerpts(messages, ctx, headroom) : messages;
+	}
+
+	/** Whether an entry's full text is in this session's current context: projected and not reduced. Built on first use. */
+	inContext(ctx: ExtensionContext): InContext {
+		let marks: InContext | undefined;
+		return (entryId) => {
+			marks ??= inContextEntries(ctx.sessionManager.buildSessionProjection(), this.reduced(ctx));
+			return marks(entryId);
+		};
+	}
+
+	/**
+	 * WP4's excerpt, appended after the user's prompt on the request that ends with it, the turn's first. Every
+	 * message before it is the session's own projection, unchanged, so the provider's cached prefix is untouched; the
+	 * turn's later requests end in tool results and carry none, so no request's prefix ever holds one. Pi uses the
+	 * returned messages for this request only, so the excerpt enters no session record. It is appended only within the
+	 * request limit, and any failure leaves the request as it was: excerpts never enter the failure contract.
+	 */
+	private withExcerpts(messages: AgentMessage[], ctx: ExtensionContext, headroom: number): AgentMessage[] {
+		try {
+			if (messages.at(-1)?.role !== "user") return messages;
+			const session = ctx.sessionManager;
+			const outside = [
+				...(getInitialSystemMessage(messages) ? [] : [ctx.getSystemPrompt()]),
+				...this.activeTools().map(
+					(tool) => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`,
+				),
+			];
+			const appended = selectExcerpts({
+				messages,
+				outside,
+				branch: session.getBranch(),
+				inContext: this.inContext(ctx),
+			});
+			if (!appended || estimateTokens(appended.message) > headroom) return messages;
+			const sessionId = session.getSessionId();
+			const counts = this.excerptCounts.get(sessionId) ?? { appended: [], withheld: 0, tokens: 0 };
+			const anchorId = session.getLeafId();
+			for (const item of appended.items) {
+				if ("withheld" in item) counts.withheld++;
+				else counts.appended.push({ entryId: item.entryId, anchorId });
+			}
+			counts.tokens += appended.tokens;
+			this.excerptCounts.set(sessionId, counts);
+			return [...messages, appended.message];
+		} catch {
+			return messages;
+		}
 	}
 
 	beforeRequest(payload: unknown, ctx: ExtensionContext): void {

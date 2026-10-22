@@ -1,10 +1,10 @@
-# Independent extension preview — v0.5.3
+# Independent extension preview — v0.6.0
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.5.3 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.6.0 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.5.3 supports manual and completed-turn threshold compaction.** Optional
+**v0.6.0 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,7 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.5.3
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.6.0
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -41,12 +41,12 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.5.3
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.6.0
 preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.5.3 lists
+Check that the installed preview lists the new Pi version first; v0.6.0 lists
 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
@@ -64,7 +64,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.5.3 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.5.3)
+The [v0.6.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.6.0)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -118,8 +118,15 @@ a schema envelope names its shape under `envelope`, `type` or `schema`. For the 
 `CONTEXT_NOTE_SCOPE`, `scope` counts the cited IDs that name no entry on the
 branch (`missing`) and those of entries without readable text (`unreadable`,
 with their kinds under `unreadableKinds`), and how many of either sit in
-`supersedes`; it never names the IDs. Pi maps a level the model does not declare
-to a supported one, so `sent` can differ from `effort`.
+`supersedes`; it never names the IDs. For the first candidate refused on the
+note schema, `schema` counts its facts without sources by section (`uncited`)
+and says whether the note fails the schema for another reason too (`other`);
+it never names the facts. Pi maps a level the model does not declare to a
+supported one, so `sent` can differ from `effort`. Since Pi 1.3.0, a model that
+changes effort mid-conversation, such as GPT-6 Luna, receives a fixed
+`reasoning.effort` of `medium` and the requested level in a
+`configuration_update` input item; `sent.effort` then reports that item's level
+and `sent.fixedEffort` the fixed one.
 
 Pi decides whether there is anything to compact before calling the extension.
 With default settings Pi keeps the most recent 20,000 estimated tokens
@@ -249,9 +256,20 @@ message contains refuses the note with `CONTEXT_NOTE_REPAIR_LOSS`, since a
 misquoted rule is still a rule. Re-citing it or dropping its quote remains
 possible. Since 0.5.1 the quotation repair runs without reasoning, whatever the
 writer's effort: it rebinds at most five quotations, and on DeepSeek it passed
-as often without reasoning as at `high`, at a quarter of the output. `noteRepair` governs this repair and the size repair, and a
-compaction spends at most one of them. A second failure blocks as before. The
-extension never moves a quotation to another entry on its own: text found
+as often without reasoning as at `high`, at a quarter of the output.
+
+Every fact in a note, next steps included, must cite at least one entry. When
+a candidate's only fault against the schema is facts without sources, for at
+most five facts, the writer gets one repair request, also without reasoning,
+that names those facts beside the entries they may cite: the active requests
+and other user messages in full, excerpts of the entries the rest of the note
+cites, and the uncovered entries by their opening words. The answer may add
+sources only, and the whole note is checked again. A fact cannot be withdrawn
+here: most such facts are next steps, and dropping unfinished work to avoid
+citing it would commit a note that lost it silently. `noteRepair` governs
+this repair, the quotation repair and the size repair, and a compaction spends
+at most one of them. A second failure blocks as before. The extension never
+moves a quotation to another entry or supplies a source on its own: text found
 only in an assistant message or a tool output is not a user ruling.
 
 The session writer's request is the session's own system prompt, tools and
@@ -264,7 +282,7 @@ session has already warmed: on DeepSeek, 95 to 97% of the writer's input over
 192 compactions. The closing message tells
 the model to call no tool. A tool call is never run: the first is answered as
 unavailable and the same request continues once. That continuation does not
-spend the size or quotation repair, so a compaction makes at most three writer
+spend the compaction's one repair, so a compaction makes at most three writer
 calls. A second tool call, or one with `noteRepair` off, refuses the note with
 `CONTEXT_WRITER_FAILED`. On DeepSeek about one writer response in twenty called
 a tool.
@@ -424,6 +442,65 @@ Checkpoints from the complete and synchronous paths cover the whole branch;
 prefix and notes checkpoints cover what their candidate or notes saw.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
+
+## Optional reduction, excerpt and rendering experiments
+
+v0.6.0 adds three further opt-in switches beside `previewPreparation`; the
+pinned v0.5.3 tag and earlier do not contain them. Each is off by default and
+disabled by any invalid value without affecting requests or the compaction
+failure contract:
+
+```json
+{
+  "previewReduction": { "enabled": true },
+  "previewExcerpts": { "enabled": true },
+  "previewRendering": { "enabled": true, "candidates": ["lineage-once"] }
+}
+```
+
+With `previewReduction` on, the request's projection replaces two kinds of
+tool results with one line each — an earlier read of a file that was read
+again later, and a consumed result after which a later turn completed — naming
+the tool, its target, the first line of its result and the record ID, which
+`context_history` reads back in full. The reduction is recomputed from the
+records on every request and never stored: the session file is untouched, the
+same records always produce the same bytes, appending turns never un-reduces
+an entry, and an entry is first reduced only when little follows it on the
+branch or after a long recorded idle gap, so the provider's cached prefix
+stays stable. User messages, assistant text, checkpoint summaries, error
+results and the sole evidence of a committed fact are never reduced, tool
+calls stay paired with their results, and a failed compaction blocks exactly
+as before. `/compaction-status` reports content-free counts under
+`reduction`.
+
+With `previewExcerpts` on, when the user's prompt names an identifier-shaped
+term that only compacted or reduced entries hold, the request ending with
+that prompt gains one short original excerpt at its end, labelled as
+historical evidence with its record ID and role, never as an instruction. At
+most two excerpts of at most 200 estimated tokens each are appended, a
+deterministic secret filter withholds a matching record entirely and names
+only its ID, nothing is written to the session, and every earlier message is
+unchanged, so the cached prefix is untouched. `/compaction-status` reports
+counts under `excerpts`.
+
+With `previewRendering` on, the summary the model sees is derived from the
+stored note and lineage by a pure function while the stored checkpoint bytes
+never change, and the recovery guards accept and require that same
+derivation, so a tampered rendering is still refused. Its candidates are
+selectable one at a time: `folded-failed-paths` folds failed paths whose
+sources precede the previous checkpoint to one line with their source IDs,
+`lineage-once` renders guidance once and folds repeated lineage state lines
+with every anchor kept, and `cited-roles` shows the roles of the records each
+fact cites, computed from the records. `/compaction-status` reports the
+active candidates under `rendering`.
+
+`context_history` results now state `readTokens`, the estimated cost of a
+full read, and mark hits whose entries are already in context; `read`
+accepts `detail: "low"` for a bounded opening with the full cost stated, and
+`full` remains the default. Synthetic regressions and scenarios establish
+these mechanics; token savings and recovery on a real provider are
+unmeasured, and all three switches stay off until that measurement supports
+a default.
 
 ### Work notes (arm B)
 

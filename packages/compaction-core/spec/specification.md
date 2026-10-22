@@ -1,8 +1,11 @@
 # Source-linked context compaction: core specification
 
-Status: draft for the 0.7.0 release, work package WP0 of the
-[v0.7.0 plan](../../../docs/context-memory/v0.7.0-plan.md); the maintainer's
-review is the completion gate. This document states the method without naming a
+Status: accepted for the 0.7.0 release, work package WP0 of the
+[v0.7.0 plan](../../../docs/context-memory/v0.7.0-plan.md); maintainer review
+completed 2026-10-22. The closed set enters this specification as
+`PROJECT_CODES` stands at that date; admitting the adapter-local preparation
+and recovery families is deferred, a candidate decision for 0.8.0 when
+preparation becomes load-bearing. This document states the method without naming a
 host: a host supplies records, extension points and transport, and the core
 owns the formats, the checks and the refusal classes. The
 [roadmap](../../../docs/context-memory/roadmap.md#architectural-direction)'s
@@ -296,7 +299,10 @@ the hash exists for exactly that case. Its required properties:
 
 Validation compares, never recomputes around: a stored `sourceHash` that does
 not equal the hash of the current covered prefix refuses with
-`CONTEXT_SOURCE_CHANGED`.
+`CONTEXT_SOURCE_CHANGED`. An invalid prefix boundary, by contrast, is a caller
+fault, not a refusal: `hashEntryPrefixes` raises an internal invariant error
+(`CONTEXT_SOURCE_PREFIX`) outside the closed set, and no conformance vector
+matches on it.
 
 **The Pi adapter** satisfies the properties with `identity.ts` `hashEntries`
 over the native entries: SHA-256 over the sequence of

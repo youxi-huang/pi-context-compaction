@@ -61,6 +61,8 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
 | [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
 | [v0.5.0-plan.md](docs/context-memory/v0.5.0-plan.md) | Working on 0.5.0: quotation repair, typed retrieval, the writer bench or the preview evaluation set. |
+| [v0.6.0-plan.md](docs/context-memory/v0.6.0-plan.md) | Working on 0.6.0: the overhead report, deterministic reductions, rendered-note or retrieval candidates, or the inherited 0.5.3 bench. |
+| [v0.7.0-plan.md](docs/context-memory/v0.7.0-plan.md) | Working on 0.7.0: the specification, the core package and its import gate, the lifts, conformance vectors or the resident freeze. |
 | [archive/](docs/context-memory/archive/) | Tracing history only. Archived documents are never current instructions. |
 
 ## Where to look

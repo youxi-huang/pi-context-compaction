@@ -10,6 +10,7 @@ import {
 	type PreparationSubmission,
 	type PreparedCandidate,
 } from "./preparation-candidate.ts";
+import { RENDERING_OFF, type RenderingSwitch, renderingSwitch } from "./render-projection.ts";
 import type { WriteMemoryResult, WriterCallHooks } from "./writer.ts";
 
 /** A run still going after this long is cancelled; its calls stay in the journal. */
@@ -20,9 +21,12 @@ export interface PreviewSwitch {
 	error?: "invalid-config";
 }
 
-const settingsCache = new Map<string, PreviewSwitch & { notes: PreviewSwitch }>();
+const settingsCache = new Map<
+	string,
+	PreviewSwitch & { notes: PreviewSwitch; reduction: PreviewSwitch; rendering: RenderingSwitch }
+>();
 
-function previewSwitch(section: unknown): PreviewSwitch {
+export function previewSwitch(section: unknown): PreviewSwitch {
 	if (section === undefined) return { enabled: false };
 	return isRecord(section) && (section.enabled === undefined || typeof section.enabled === "boolean")
 		? { enabled: section.enabled === true }
@@ -30,22 +34,35 @@ function previewSwitch(section: unknown): PreviewSwitch {
 }
 
 /**
- * `previewPreparation.enabled` (arm A) and `previewWorkNotes.enabled` (arm B) in pi-context-memory.json, latched
- * for the process like the other settings. Keys from the earlier experiment (call, token and cost budgets) are
- * ignored; an invalid value disables its switch.
+ * `previewPreparation.enabled` (arm A), `previewWorkNotes.enabled` (arm B), `previewReduction.enabled`
+ * (WP2) and `previewRendering` with its candidate names (WP3) in pi-context-memory.json, latched for the
+ * process like the other settings. Keys from the earlier experiment (call, token and cost budgets) are
+ * ignored; an invalid value disables its switch without touching requests or the failure contract.
  */
-export function readPreparationSettings(agentDir: string): PreviewSwitch & { notes: PreviewSwitch } {
+export function readPreparationSettings(
+	agentDir: string,
+): PreviewSwitch & { notes: PreviewSwitch; reduction: PreviewSwitch; rendering: RenderingSwitch } {
 	const path = join(agentDir, "pi-context-memory.json");
 	const cached = settingsCache.get(path);
 	if (cached) return cached;
-	let result: PreviewSwitch & { notes: PreviewSwitch };
+	let result: PreviewSwitch & { notes: PreviewSwitch; reduction: PreviewSwitch; rendering: RenderingSwitch };
 	try {
 		const value: unknown = JSON.parse(readBoundedFile(path, 64 * 1024, "preparation-config").toString("utf8"));
 		const record = isRecord(value) ? value : {};
-		result = { ...previewSwitch(record.previewPreparation), notes: previewSwitch(record.previewWorkNotes) };
+		result = {
+			...previewSwitch(record.previewPreparation),
+			notes: previewSwitch(record.previewWorkNotes),
+			reduction: previewSwitch(record.previewReduction),
+			rendering: renderingSwitch(record.previewRendering),
+		};
 	} catch (error) {
 		const off: PreviewSwitch = missing(error) ? { enabled: false } : { enabled: false, error: "invalid-config" };
-		result = { ...off, notes: off };
+		result = {
+			...off,
+			notes: off,
+			reduction: off,
+			rendering: { ...RENDERING_OFF, ...(off.error ? { error: off.error } : {}) },
+		};
 	}
 	settingsCache.set(path, result);
 	return result;

@@ -1,13 +1,19 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { buildSessionProjection, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import type { HistorySnapshot } from "../src/extensions/context-memory/history.ts";
+import { textTokens } from "../src/extensions/context-memory/config.ts";
+import { type HistorySnapshot, queryHistory } from "../src/extensions/context-memory/history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION } from "../src/extensions/context-memory/identity.ts";
-import { hashEntries, type MemoryNote, type NoteFact } from "../src/extensions/context-memory/notes.ts";
+import { hashEntries, type MemoryNote, type NoteFact, sourceText } from "../src/extensions/context-memory/notes.ts";
 import {
 	type EditViewItem,
 	type ErrorViewItem,
+	inContextEntries,
+	LOW_DETAIL_TOKENS,
 	listHistory,
 	type NoteViewItem,
+	previewHistorySchema,
+	priceSearch,
+	readLowDetail,
 	viewTerms,
 } from "../src/extensions/context-memory/preview/history-view.ts";
 
@@ -385,5 +391,146 @@ describe("typed history view", () => {
 		expect(page.items.length).toBeGreaterThan(0);
 		// Reported, not asserted: machines differ. The plan's threshold for persisting the view is 200 ms.
 		console.log(`history view: ${snapshot.entries.length} entries, one list call ${elapsed.toFixed(1)} ms`);
+	});
+});
+
+/** Every page an unchanged full `read` returns for the entry, as the tool's text. */
+function fullRead(snapshot: HistorySnapshot, entryId: string): string[] {
+	const pages: string[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = queryHistory(snapshot, { operation: "read", entryId, ...(cursor ? { cursor } : {}) });
+		pages.push(JSON.stringify(page));
+		cursor = page.cursor;
+	} while (cursor);
+	return pages;
+}
+
+const fullCost = (snapshot: HistorySnapshot, entryId: string) =>
+	fullRead(snapshot, entryId).reduce((sum, page) => sum + textTokens(page), 0);
+
+/** A failing suite whose long log spans several read pages, a short error, and a checkpoint over both. */
+function failures(): Branch {
+	const branch = new Branch();
+	branch.user("u1", "Run the integration suite and fix what fails.");
+	branch.assistant("a1", "Running the suite.", [{ id: "t1", name: "bash" }]);
+	const log = Array.from({ length: 1200 }, (_, line) => `line ${line}: assertion failed in retry_budget`).join("\n");
+	branch.result("r1", "t1", "bash", log, true);
+	branch.assistant("a2", "Editing the limit.", [{ id: "t2", name: "edit", path: "src/limits.ts" }]);
+	branch.result("r2", "t2", "edit", "Edit failed: text not found", true);
+	branch.user("z1", `重试预算日志 ${"失败".repeat(3000)}`);
+	branch.assistant("a3", "Noted.");
+	branch.checkpoint("cp", { state: [fact("The suite fails on the retry budget.", ["u1", "r1"])] });
+	branch.user("u2", "Try the edit again.");
+	branch.assistant("a4", "Retrying the edit.", [{ id: "t3", name: "edit", path: "src/limits.ts" }]);
+	branch.result("r3", "t3", "edit", "Edit failed: retry_budget is read-only", true);
+	return branch;
+}
+
+describe("retrieval cost and context marks", () => {
+	it("states readTokens as the estimate of every page a full read returns", () => {
+		const snapshot = failures().snapshot();
+		const errors = listHistory(snapshot, { kind: "errors" }).items as ErrorViewItem[];
+		expect(errors.map((item) => item.entryId)).toEqual(["r3", "r2", "r1"]);
+		for (const item of errors) expect(item.readTokens).toBe(fullCost(snapshot, item.entryId));
+		// The long log spans pages; its cost is its escaped bytes plus a bounded overhead per page.
+		const log = sourceText(snapshot.entries[2]);
+		const pages = fullRead(snapshot, "r1").length;
+		expect(pages).toBeGreaterThan(3);
+		const long = errors.find((item) => item.entryId === "r1")!;
+		expect(long.readTokens).toBeGreaterThanOrEqual(textTokens(JSON.stringify(log)));
+		expect(long.readTokens - textTokens(JSON.stringify(log))).toBeLessThanOrEqual(pages * 200);
+		// Multi-byte text pages by bytes, and its cost follows.
+		const chinese = snapshot.entries.findIndex((entry) => entry.id === "z1");
+		expect(fullRead(snapshot, "z1").length).toBeGreaterThan(1);
+		const hits = priceSearch(queryHistory(snapshot, { operation: "search", query: "重试" }), snapshot);
+		expect(hits.entries.find((hit) => hit.entryId === "z1")).toMatchObject({
+			position: chinese,
+			readTokens: fullCost(snapshot, "z1"),
+		});
+		// Search hits carry the same price as list items, and a fact sums its sources.
+		const search = priceSearch(queryHistory(snapshot, { operation: "search", query: "retry_budget" }), snapshot);
+		expect(search.entries.length).toBeGreaterThan(1);
+		for (const hit of search.entries) expect(hit.readTokens).toBe(fullCost(snapshot, hit.entryId));
+		const [state] = listHistory(snapshot, { kind: "state" }).items as NoteViewItem[];
+		expect(state.readTokens).toBe(fullCost(snapshot, "u1") + fullCost(snapshot, "r1"));
+		const edits = listHistory(snapshot, { kind: "edits" }).items as EditViewItem[];
+		for (const item of edits) expect(item.readTokens).toBe(fullCost(snapshot, item.entryId));
+	});
+
+	it("bounds a low-detail read and states the cost of the full one", () => {
+		const snapshot = failures().snapshot();
+		const low = readLowDetail(snapshot, { entryId: "r1" });
+		const [hit] = low.entries;
+		const log = sourceText(snapshot.entries[2]);
+		expect(low.detail).toBe("low");
+		expect(log.startsWith(hit.text)).toBe(true);
+		expect(textTokens(JSON.stringify(hit.text))).toBeLessThanOrEqual(LOW_DETAIL_TOKENS);
+		expect(textTokens(JSON.stringify(log.slice(0, hit.text.length + 1)))).toBeGreaterThan(LOW_DETAIL_TOKENS);
+		expect(hit).toMatchObject({ entryId: "r1", role: "toolResult", position: 2, offset: 0, complete: false });
+		expect(hit.readTokens).toBe(fullCost(snapshot, "r1"));
+		expect(low.message).toContain(`about ${hit.readTokens} tokens`);
+		expect(low).not.toHaveProperty("cursor");
+		// A short entry comes back whole, with nothing more to read.
+		const short = readLowDetail(snapshot, { entryId: "r2" });
+		expect(short.entries[0]).toMatchObject({ text: "Edit failed: text not found", complete: true });
+		expect(short.message).toBeUndefined();
+		// The bound never splits a character.
+		const emoji = new Branch();
+		emoji.user("e1", "\u{1F600}".repeat(400));
+		const cut = readLowDetail(emoji.snapshot(), { entryId: "e1" }).entries[0].text;
+		expect(cut.length).toBeGreaterThan(0);
+		expect(cut).toBe("\u{1F600}".repeat(cut.length / 2));
+		// Refused as read refuses, and without a continuation.
+		expect(() => readLowDetail(snapshot, {})).toThrow("HISTORY_ENTRY_REQUIRED");
+		expect(() => readLowDetail(snapshot, { entryId: "missing" })).toThrow("HISTORY_SCOPE_DENIED");
+		expect(() => readLowDetail(snapshot, { entryId: "cp" })).toThrow("HISTORY_SCOPE_DENIED");
+		expect(() => readLowDetail(snapshot, { entryId: "r1", cursor: "x" })).toThrow("HISTORY_QUERY_INVALID");
+		// Full stays the default: low is offered only on request.
+		expect(JSON.stringify(previewHistorySchema.properties.detail)).toContain('"low"');
+		expect(previewHistorySchema.required ?? []).not.toContain("detail");
+	});
+
+	it("marks entries in the active projection and leaves compacted and reduced entries unmarked", () => {
+		const branch = failures();
+		const snapshot = branch.snapshot();
+		const projection = buildSessionProjection(branch.entries);
+		const inContext = inContextEntries(projection);
+		const marks = (items: readonly { entryId: string; inContext?: true }[]) =>
+			items.map((item) => [item.entryId, item.inContext ?? false]);
+		// The checkpoint released everything before it; what follows is in context.
+		expect(marks(listHistory(snapshot, { kind: "errors" }, 4000, inContext).items as ErrorViewItem[])).toEqual([
+			["r3", true],
+			["r2", false],
+			["r1", false],
+		]);
+		expect(marks(listHistory(snapshot, { kind: "edits" }, 4000, inContext).items as EditViewItem[])).toEqual([
+			["a4", true],
+			["a2", false],
+		]);
+		const search = priceSearch(
+			queryHistory(snapshot, { operation: "search", query: "retry_budget" }),
+			snapshot,
+			inContext,
+		);
+		expect(Object.fromEntries(marks(search.entries))).toEqual({ r3: true, r1: false });
+		// A fact is marked only when every source is in context in full.
+		const [state] = listHistory(snapshot, { kind: "state" }, 4000, inContext).items as NoteViewItem[];
+		expect(state.inContext).toBeUndefined();
+		expect(listHistory(snapshot, { kind: "state" }, 4000, () => true).items[0].inContext).toBe(true);
+		expect(listHistory(snapshot, { kind: "state" }, 4000, (id) => id === "u1").items[0].inContext).toBeUndefined();
+		// A reduced entry shows only its one line in context, so it is not marked; its neighbours still are.
+		const reduced = inContextEntries(projection, (id) => id === "r3");
+		expect(marks(listHistory(snapshot, { kind: "errors" }, 4000, reduced).items as ErrorViewItem[])).toEqual([
+			["r3", false],
+			["r2", false],
+			["r1", false],
+		]);
+		expect(marks(listHistory(snapshot, { kind: "edits" }, 4000, reduced).items as EditViewItem[])[0]).toEqual([
+			"a4",
+			true,
+		]);
+		// Without a predicate nothing is claimed to be in context.
+		expect(listHistory(snapshot, { kind: "errors" }).items.some((item) => item.inContext)).toBe(false);
 	});
 });

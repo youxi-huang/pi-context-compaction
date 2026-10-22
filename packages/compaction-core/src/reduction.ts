@@ -1,7 +1,10 @@
-import { CONTEXT_MEMORY_KIND, CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
+import { CONTEXT_MEMORY_KIND, CONTEXT_NOTE_TYPE, isRecord } from "./identity.ts";
 
 /**
  * Deterministic reversible context reductions (v0.6.0 WP2).
+ *
+ * Lifted unchanged from the preview into the host-neutral core (v0.7.0 WP2 step 1); only the
+ * identity import moved to the core's byte-identical copy.
  *
  * `reduceRecords` is a pure function of the branch's records and the model's declared prompt-cache
  * lifetime: the same records always produce the same bytes, across requests, reopens and process

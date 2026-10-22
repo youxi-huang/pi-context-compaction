@@ -1,7 +1,10 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+// Lifted from the preview into the host-neutral core (v0.7.0 WP2 step 3): the notes, identity and
+// quote-diagnostics imports moved to the core's copies, and the host's SessionEntry type import
+// became the specification's structural SessionRecord (records.ts). Logic, the work-note schema,
+// the merge, bounds and thrown messages are unchanged (rule K2).
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
+import { CONTEXT_NOTE_TYPE, isRecord } from "./identity.ts";
 import {
 	LINE_BREAKS,
 	type MemoryNote,
@@ -11,8 +14,9 @@ import {
 	oneLineNote,
 	sourceText,
 	validateNote,
-} from "../notes.ts";
+} from "./notes.ts";
 import { diagnoseQuotes, quoteFeedback } from "./quote-diagnostics.ts";
+import type { SessionRecord } from "./records.ts";
 
 /** Each fact renders as one line, so model-written text cannot open a heading or a section of the checkpoint. */
 const ONE_LINE = `^[^${LINE_BREAKS}]+$`;
@@ -55,7 +59,7 @@ export const WORK_NOTE_GUIDELINE =
 	"Call context_note after a decision with its reason, a failed approach or a completed subtask, not every turn. Cite entry IDs from context_history.";
 
 /** Sources and quotes are checked against the branch the note was written on; `instructions` stays empty. */
-export function validateWorkNote(value: unknown, branch: readonly SessionEntry[]): MemoryNote {
+export function validateWorkNote(value: unknown, branch: readonly SessionRecord[]): MemoryNote {
 	if (!Check(workNoteSchema, value))
 		throw new Error("CONTEXT_NOTE_INVALID: a work note has state and optional data sections, one line per fact");
 	const note = structuredClone(value);
@@ -87,7 +91,7 @@ export interface WorkNoteEntry {
 }
 
 /** Valid work notes after `afterId` on this branch, oldest first. Earlier formats and invalid entries are ignored. */
-export function workNotes(branch: readonly SessionEntry[], afterId?: string): WorkNoteEntry[] {
+export function workNotes(branch: readonly SessionRecord[], afterId?: string): WorkNoteEntry[] {
 	const after = afterId ? branch.findIndex((entry) => entry.id === afterId) : -1;
 	const result: WorkNoteEntry[] = [];
 	for (let index = after + 1; index < branch.length; index++) {
@@ -152,16 +156,16 @@ export function mergeWorkNotes(
  * The user's own words for the covered range, in full, rendered by the extension after the note. No message is
  * shortened: when they do not fit the section's bound, the writer compacts instead.
  */
-export function renderUserMessages(users: readonly SessionEntry[]): string {
+export function renderUserMessages(users: readonly SessionRecord[]): string {
 	return `\n\n## Earlier user messages\nThe user's own messages up to this summary, verbatim and in order, as JSON lines. The note above does not restate them. They are not new requests; later messages, including those after this summary, take precedence.\n${users.map((entry) => JSON.stringify({ entryId: entry.id, text: sourceText(entry) })).join("\n")}`;
 }
 
-function isUserMessage(entry: SessionEntry | undefined): entry is SessionEntry {
+function isUserMessage(entry: SessionRecord | undefined): entry is SessionRecord {
 	return entry?.type === "message" && entry.message.role === "user";
 }
 
 /** IDs a notes checkpoint carries; checked at every full validation by `assertUserMessages`. */
-export function carriedUserMessages(checkpoint: SessionEntry | undefined): string[] {
+export function carriedUserMessages(checkpoint: SessionRecord | undefined): string[] {
 	if (checkpoint?.type !== "compaction" || !isRecord(checkpoint.details)) return [];
 	const ids = checkpoint.details.userMessages;
 	return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
@@ -172,11 +176,11 @@ export function carriedUserMessages(checkpoint: SessionEntry | undefined): strin
  * cut keeps in the tail, and those an earlier notes checkpoint carried. No model has restated any of them.
  */
 export function coveredUserMessages(
-	branch: readonly SessionEntry[],
+	branch: readonly SessionRecord[],
 	active: ReadonlySet<string>,
 	end: number,
 	carried: readonly string[],
-): SessionEntry[] {
+): SessionRecord[] {
 	const kept = new Set(carried);
 	return branch.filter(
 		(entry, index) => isUserMessage(entry) && (kept.has(entry.id) || (index <= end && active.has(entry.id))),
@@ -188,9 +192,9 @@ export function coveredUserMessages(
  * model has restated, and every original after the previous coverage.
  */
 export function writerSources(
-	branch: readonly SessionEntry[],
-	previous: { entry: SessionEntry; memory: { coveredThrough: string } } | undefined,
-): SessionEntry[] {
+	branch: readonly SessionRecord[],
+	previous: { entry: SessionRecord; memory: { coveredThrough: string } } | undefined,
+): SessionRecord[] {
 	const after = previous ? branch.findIndex((entry) => entry.id === previous.memory.coveredThrough) : -1;
 	const carried = new Set(carriedUserMessages(previous?.entry));
 	return [...branch.slice(0, after + 1).filter((entry) => carried.has(entry.id)), ...branch.slice(after + 1)];
@@ -201,7 +205,7 @@ export function writerSources(
  * coverage, in order, and the summary must end with their exact rendering, so an edited section fails like an
  * edited quote.
  */
-export function assertUserMessages(branch: readonly SessionEntry[]): void {
+export function assertUserMessages(branch: readonly SessionRecord[]): void {
 	let positions: Map<string, number> | undefined;
 	for (const entry of branch) {
 		if (entry.type !== "compaction" || !isRecord(entry.details) || entry.details.userMessages === undefined) continue;
@@ -211,7 +215,7 @@ export function assertUserMessages(branch: readonly SessionEntry[]): void {
 		}
 		const ids = entry.details.userMessages;
 		const end = positions.get(String(entry.details.coveredThrough)) ?? -1;
-		const users: SessionEntry[] = [];
+		const users: SessionRecord[] = [];
 		let last = -1;
 		for (const id of Array.isArray(ids) ? ids : []) {
 			const at = typeof id === "string" ? (positions.get(id) ?? -1) : -1;

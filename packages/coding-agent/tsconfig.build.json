@@ -16,5 +16,12 @@
 		"rootDir": "./src"
 	},
 	"include": ["src/**/*.ts", "src/**/*.d.ts"],
-	"exclude": ["node_modules", "dist", "src/client", "src/experimental", "src/cli/experimental"]
+	"exclude": [
+		"node_modules",
+		"dist",
+		"src/client",
+		"src/experimental",
+		"src/cli/experimental",
+		"src/extensions/context-memory/preview"
+	]
 }

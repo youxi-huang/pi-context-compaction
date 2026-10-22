@@ -19,6 +19,14 @@ import {
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	applyReduction,
+	DEFAULT_CACHE_LIFETIME_MS,
+	declaredCacheLifetimeMs,
+	type ReductionView,
+	reduceRecords,
+	reductionLine,
+} from "../../compaction-core/src/reduction.ts";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
 import { freezeHistory, queryHistory } from "../src/extensions/context-memory/history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_NOTE_TYPE } from "../src/extensions/context-memory/identity.ts";
@@ -27,14 +35,6 @@ import type { PreviewCompaction, PreviewSession } from "../src/extensions/contex
 import { assertPreviewSession, PreviewMemoryController } from "../src/extensions/context-memory/preview/controller.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
 import { readPreparationSettings } from "../src/extensions/context-memory/preview/preparation.ts";
-import {
-	applyReduction,
-	DEFAULT_CACHE_LIFETIME_MS,
-	declaredCacheLifetimeMs,
-	type ReductionView,
-	reduceRecords,
-	reductionLine,
-} from "../src/extensions/context-memory/preview/reduction.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 const RESULT_MARKER = "first log line: port 4317 healthy";

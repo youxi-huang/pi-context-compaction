@@ -1,60 +1,41 @@
+// Split for the host-neutral core (v0.7.0 WP2 step 4): the call-accounting contracts — `CallUsage`,
+// `CallSummary`, the unknown-never-free rule (`summarizeCalls`), `CallPurpose` and
+// `PREPARATION_CALLS_PER_ATTEMPT` — moved to the core's call-journal.ts, re-exported here; the
+// journal's file IO stays with this adapter.
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, fstatSync, fsyncSync, lstatSync, openSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import type { Usage } from "@earendil-works/pi-ai";
+import {
+	type CallJournalGap,
+	type CallPurpose,
+	type CallRecord,
+	type CallSummary,
+	type CallUsage,
+	PREPARATION_CALLS_PER_ATTEMPT,
+	summarizeCalls,
+	ZERO_USAGE,
+} from "../../../../../compaction-core/src/call-journal.ts";
 import { isRecord } from "../identity.ts";
 import { missing, previewDirectory, readBoundedFile, syncDirectory } from "./failure-io.ts";
 import type { WriterCallHooks } from "./writer.ts";
 
+export {
+	type CallPurpose,
+	type CallSummary,
+	type CallUsage,
+	PREPARATION_CALLS_PER_ATTEMPT,
+} from "../../../../../compaction-core/src/call-journal.ts";
+
 /** A per-session bound on synchronous reads; far above any realistic number of writer calls. */
 const MAX_JOURNAL_BYTES = 4 * 1024 * 1024;
-/** Optional preparation never sends more provider requests than this in one attempt. */
-export const PREPARATION_CALLS_PER_ATTEMPT = 8;
-
-export type CallPurpose = "preparation" | "compaction";
-
-export interface CallUsage {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
-	totalTokens: number;
-	/** As reported or estimated by Pi's model catalog, in USD. */
-	cost: number;
-}
-
-interface CallRecord {
-	purpose: CallPurpose;
-	interval: string;
-	settled: boolean;
-	dispatched?: boolean;
-	usage?: CallUsage;
-	complete?: boolean;
-}
 
 interface SessionJournal {
 	name: string;
 	file: string;
 	calls: Map<string, CallRecord>;
-	gap?: "unreadable" | "unwritable";
+	gap?: CallJournalGap;
 }
-
-/** What `/compaction-status` reports. A call without reported usage is unknown, never free. */
-export interface CallSummary {
-	calls: number;
-	preparationCalls: number;
-	compactionCalls: number;
-	/** Recorded before dispatch but never settled: interrupted, still in flight, or settled after a write failure. */
-	unsettled: number;
-	/** Settled without any reported usage. */
-	unknownUsage: number;
-	/** Usage reported only up to an interruption. */
-	partialUsage: number;
-	usage: CallUsage;
-	gap?: SessionJournal["gap"];
-}
-
-const ZERO: CallUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: 0 };
 
 function count(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value) && value >= 0;
@@ -62,8 +43,8 @@ function count(value: unknown): value is number {
 
 function callUsage(value: unknown): CallUsage | undefined {
 	if (!isRecord(value)) return undefined;
-	const usage = { ...ZERO };
-	for (const key of Object.keys(ZERO) as (keyof CallUsage)[]) {
+	const usage = { ...ZERO_USAGE };
+	for (const key of Object.keys(ZERO_USAGE) as (keyof CallUsage)[]) {
 		if (!count(value[key])) return undefined;
 		usage[key] = value[key];
 	}
@@ -242,28 +223,6 @@ export class CallJournal {
 
 	summary(sessionId: string): CallSummary {
 		const journal = this.session(sessionId);
-		const summary: CallSummary = {
-			calls: 0,
-			preparationCalls: 0,
-			compactionCalls: 0,
-			unsettled: 0,
-			unknownUsage: 0,
-			partialUsage: 0,
-			usage: { ...ZERO },
-			...(journal.gap ? { gap: journal.gap } : {}),
-		};
-		for (const record of journal.calls.values()) {
-			if (record.settled && record.dispatched === false) continue;
-			summary.calls++;
-			if (record.purpose === "preparation") summary.preparationCalls++;
-			else summary.compactionCalls++;
-			if (!record.settled) summary.unsettled++;
-			else if (!record.usage) summary.unknownUsage++;
-			else {
-				if (!record.complete) summary.partialUsage++;
-				for (const key of Object.keys(ZERO) as (keyof CallUsage)[]) summary.usage[key] += record.usage[key];
-			}
-		}
-		return summary;
+		return summarizeCalls(journal.calls.values(), journal.gap);
 	}
 }

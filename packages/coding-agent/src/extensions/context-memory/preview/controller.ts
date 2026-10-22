@@ -17,9 +17,17 @@ import {
 	type SessionProjection,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
-import { PROJECT_CODES } from "../events.ts";
-import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
+import {
+	checkpointInterval as coreCheckpointInterval,
+	chooseCut as coreChooseCut,
+	prefixCut as corePrefixCut,
+} from "../../../../../compaction-core/src/cuts.ts";
+import {
+	assertToolPairs,
+	assertRecoveryEdits as coreAssertRecoveryEdits,
+	requestLimit as coreRequestLimit,
+} from "../../../../../compaction-core/src/guards.ts";
+import { type InContext, inContextEntries } from "../../../../../compaction-core/src/history-view.ts";
 import {
 	checkpointLineage,
 	compactedSourceTokens,
@@ -31,7 +39,31 @@ import {
 	shrinkLineage,
 	validateMemoryCheckpoints,
 	validateNote,
-} from "../notes.ts";
+} from "../../../../../compaction-core/src/notes.ts";
+import {
+	freezePreparationInput,
+	type PreparationSubmission,
+	reusablePrefix,
+} from "../../../../../compaction-core/src/preparation-candidate.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
+import {
+	applyReduction,
+	declaredCacheLifetimeMs,
+	type ReductionView,
+	reduceRecords,
+} from "../../../../../compaction-core/src/reduction.ts";
+import {
+	assertUserMessages,
+	carriedUserMessages,
+	coveredUserMessages,
+	mergeWorkNotes,
+	renderUserMessages,
+	workNotes,
+	writerSources,
+} from "../../../../../compaction-core/src/work-notes.ts";
+import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
+import { PROJECT_CODES } from "../events.ts";
+import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
 import type { CallJournal } from "./call-journal.ts";
 import { PRIMARY_PI_VERSION, SUPPORTED_PI_LABEL, SUPPORTED_PI_VERSIONS, supportsPi } from "./compatibility.ts";
@@ -45,22 +77,10 @@ import type {
 	PreviewSession,
 } from "./contracts.ts";
 import { type AppendedExcerpt, selectExcerpts, unusedExcerpts } from "./excerpts.ts";
-import { type InContext, inContextEntries } from "./history-view.ts";
 import { blockedNotice, inactiveNotice, NoticeGate, notify, readyNotice } from "./notices.ts";
 import type { PreviewPreparation, PreviewSwitch } from "./preparation.ts";
-import { freezePreparationInput, type PreparationSubmission, reusablePrefix } from "./preparation-candidate.ts";
-import { applyReduction, declaredCacheLifetimeMs, type ReductionView, reduceRecords } from "./reduction.ts";
 import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
-import {
-	assertUserMessages,
-	carriedUserMessages,
-	coveredUserMessages,
-	mergeWorkNotes,
-	renderUserMessages,
-	workNotes,
-	writerSources,
-} from "./work-notes.ts";
 import {
 	modelName,
 	resolveWriterModel,
@@ -71,6 +91,13 @@ import {
 	writerContractHashes,
 	writerReasoning,
 } from "./writer.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecords = (branch: readonly SessionEntry[]): readonly SessionRecord[] =>
+	branch as unknown as readonly SessionRecord[];
+/** The host's own entries back from a core pass-through that returns a subset of what it was given (records.ts). */
+const asEntries = (records: readonly SessionRecord[]): readonly SessionEntry[] =>
+	records as unknown as readonly SessionEntry[];
 
 const PREVIEW_CODES = new Set([
 	"CONTEXT_PREVIEW_UNSUPPORTED",
@@ -104,74 +131,34 @@ export function reportPreviewError(
 	notify(ctx, blockedNotice(code, durable, reason, version, repeated), repeated ? "warning" : "error");
 }
 
-export function assertToolPairs(messages: readonly AgentMessage[]): void {
-	const pending = new Set<string>();
-	for (const message of messages) {
-		if (message.role === "assistant") {
-			if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: missing tool results before an assistant turn");
-			for (const part of message.content) if (part.type === "toolCall") pending.add(part.id);
-		} else if (message.role === "toolResult") {
-			if (!pending.delete(message.toolCallId)) throw new Error("CONTEXT_TOOL_BOUNDARY: an unmatched tool result");
-		} else if (message.role === "user" && pending.size) {
-			throw new Error("CONTEXT_TOOL_BOUNDARY: user input interrupts an unfinished tool batch");
-		}
-	}
-	if (pending.size) throw new Error("CONTEXT_TOOL_BOUNDARY: wait for the tool batch to finish");
-}
+/** The core's tool-pairing guard, re-exported: Pi's `AgentMessage` satisfies its projected-message shape. */
+export { assertToolPairs };
 
 /**
- * Keep complete recent turns; a zero budget uses stock Pi's no-matching-kept-entry convention. The cut
- * follows the previous checkpoint: stock Pi keeps every entry from the cut onwards, so an earlier
- * checkpoint inside that range would reappear as a second summary.
+ * The core's cut selection at the Pi boundary: the branch is widened, never converted (records.ts),
+ * and Pi's own projection builder and token estimator are bound here.
  */
 export function chooseCut(
 	branch: readonly SessionEntry[],
 	keepRecentTokens: number,
 	projection: SessionProjection = buildSessionProjection([...branch]),
 ): number {
-	if (keepRecentTokens <= 0) return branch.length;
-	const projected = new Map(projection.entries.map((entry) => [entry.sourceEntry.id, entry.messages]));
-	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
-	const starts = branch.flatMap((entry, index) =>
-		index > previous && entry.type === "message" && entry.message.role === "user" && projected.get(entry.id)?.length
-			? [index]
-			: [],
-	);
-	if (!starts.length) throw new Error("CONTEXT_NO_CUT: no source turn is available");
-	let accumulated = 0;
-	for (let index = branch.length - 1; index >= 0; index--) {
-		if (branch[index].type === "compaction") continue;
-		accumulated += (projected.get(branch[index].id) ?? []).reduce((sum, message) => sum + estimateTokens(message), 0);
-		if (accumulated >= keepRecentTokens) return starts.find((start) => start >= index) ?? starts[starts.length - 1];
-	}
-	return starts[starts.length - 1];
+	return coreChooseCut(asRecords(branch), keepRecentTokens, projection, estimateTokens);
 }
 
-/**
- * The latest turn start at or before `coveredIndex + 1` and `cut`, so that only covered entries leave
- * context. It must follow the previous checkpoint: stock Pi keeps every entry from the cut onwards,
- * so an earlier checkpoint inside that range would reappear as a second summary.
- */
+/** The core's prefix cut at the Pi boundary; the branch is widened, never converted (records.ts). */
 export function prefixCut(
 	branch: readonly SessionEntry[],
 	projection: SessionProjection,
 	coveredIndex: number,
 	cut: number,
 ): number | undefined {
-	const previous = branch.findLastIndex((entry) => entry.type === "compaction");
-	const projected = new Set(
-		projection.entries.filter((entry) => entry.messages.length).map((entry) => entry.sourceEntry.id),
-	);
-	for (let index = Math.min(cut, coveredIndex + 1); index > previous; index--) {
-		const entry = branch[index];
-		if (entry?.type === "message" && entry.message.role === "user" && projected.has(entry.id)) return index;
-	}
-	return undefined;
+	return corePrefixCut(asRecords(branch), projection, coveredIndex, cut);
 }
 
 /** The interval a preparation belongs to: the latest checkpoint on the branch, or none yet. */
 export function checkpointInterval(branch: readonly SessionEntry[]): string {
-	return branch.findLast((entry) => entry.type === "compaction")?.id ?? "none";
+	return coreCheckpointInterval(asRecords(branch));
 }
 
 /**
@@ -193,10 +180,7 @@ function piTokens(text: string): number {
  * turn or before a prompt, so a request below it is never stopped. The model's output maximum does not lower it.
  */
 export function requestLimit(model: { contextWindow: number }): number {
-	const limit = model.contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
-	if (!Number.isFinite(limit) || limit < 2048)
-		throw new Error("CONTEXT_CAPACITY: model window is too small or unknown");
-	return limit;
+	return coreRequestLimit(model, DEFAULT_COMPACTION_SETTINGS.reserveTokens);
 }
 
 /** The checkpoint text, shortening lineage until it fits `limit` beside the retained context. */
@@ -207,7 +191,7 @@ function fittedSummary(
 	limit: number,
 	userMessages = "",
 ): string | undefined {
-	let lineage = checkpointLineage(branch);
+	let lineage = checkpointLineage(asRecords(branch));
 	let summary = renderNote(note, lineage) + userMessages;
 	while (lineage.length && textTokens(summary) + retainedTokens > limit) {
 		lineage = shrinkLineage(lineage);
@@ -218,27 +202,7 @@ function fittedSummary(
 
 /** Pi retries omit the latest failed response without changing raw evidence or a prior checkpoint. */
 export function assertRecoveryEdits(branch: readonly SessionEntry[]): void {
-	let lastMessage: SessionEntry | undefined;
-	for (const entry of branch) {
-		if (entry.type === "context_edit") {
-			if (
-				entry.replacement !== null ||
-				!lastMessage ||
-				lastMessage?.id !== entry.targetId ||
-				lastMessage.type !== "message" ||
-				lastMessage.message.role !== "assistant" ||
-				lastMessage.message.stopReason !== "error" ||
-				lastMessage.message.content.some((part) => part.type === "toolCall")
-			) {
-				throw new Error("CONTEXT_PREVIEW_UNSUPPORTED: only failed-response recovery omissions are supported");
-			}
-		} else if (entry.type === "message") {
-			lastMessage = entry;
-		} else if (entry.type === "compaction") {
-			// Judge an edit against checkpoints preceding it, including after later compactions are appended.
-			lastMessage = undefined;
-		}
-	}
+	coreAssertRecoveryEdits(asRecords(branch));
 }
 
 /** Abort guards can leave new user input on disk; recovery must keep that whole unfinished turn. */
@@ -321,7 +285,7 @@ export function assertPreviewSession(
 ): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-	const sources = branch ?? session.getBranch();
+	const sources = asRecords(branch ?? session.getBranch());
 	const latest = validateMemoryCheckpoints(sources, onSerializedEntry);
 	assertUserMessages(sources);
 	return latest;
@@ -497,7 +461,7 @@ export class PreviewMemoryController {
 		if (!this.config || !ctx.model || !this.preparation) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 		const model = resolveWriterModel(this.config, ctx.modelRegistry, ctx.model);
 		const branch = ctx.sessionManager.getBranch();
-		const previous = latestMemory(branch);
+		const previous = latestMemory(asRecords(branch));
 		const projection = ctx.sessionManager.buildSessionProjection();
 		const budget = memoryBudget(ctx.model, this.config);
 		const cut = chooseCut(branch, budget.recentTokens, projection);
@@ -507,7 +471,7 @@ export class PreviewMemoryController {
 		return {
 			sessionId: ctx.sessionManager.getSessionId(),
 			epoch: this.preparation.currentEpoch,
-			branch,
+			branch: asRecords(branch),
 			writer: {
 				role: this.config.writerModel === SESSION_WRITER ? "session" : "fixed",
 				model: modelName(model),
@@ -524,7 +488,7 @@ export class PreviewMemoryController {
 			noteBudget: selectNoteBudget(
 				this.config,
 				budget.threshold,
-				compactedSourceTokens(branch.slice(0, cut).filter((entry) => active.has(entry.id))),
+				compactedSourceTokens(asRecords(branch.slice(0, cut).filter((entry) => active.has(entry.id)))),
 				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
 			),
 			customInstructions,
@@ -555,11 +519,11 @@ export class PreviewMemoryController {
 			const branch = structuredClone(ctx.sessionManager.getBranch());
 			const leafId = ctx.sessionManager.getLeafId();
 			if (!leafId) return;
-			const previous = latestMemory(branch);
-			const uncovered = writerSources(branch, previous);
+			const previous = latestMemory(asRecords(branch));
+			const uncovered = asEntries(writerSources(asRecords(branch), previous));
 			const input = freezePreparationInput({
 				...submission,
-				branch,
+				branch: asRecords(branch),
 				coveredThrough: leafId,
 				processedUserEntryIds: branch
 					.filter((entry) => entry.type === "message" && entry.message.role === "user")
@@ -574,7 +538,7 @@ export class PreviewMemoryController {
 				hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
 				streamSimple: registry.streamSimple.bind(registry),
 			};
-			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
+			const increments = workNotes(asRecords(branch), previous?.memory.coveredThrough).map((item) => item.note);
 			// The prepared writer call reads the same reduced prefix the session's own requests carry (G4).
 			const reductionView = this.reducedView(branch, ctx.model);
 			const messages = structuredClone(
@@ -669,7 +633,7 @@ export class PreviewMemoryController {
 			compactCannotClear = this.configError !== undefined || !this.config;
 			try {
 				assertPreviewSession(session, this.hostVersion);
-				const latest = latestMemory(session.getBranch());
+				const latest = latestMemory(asRecords(session.getBranch()));
 				checkpointId = latest?.entry.id;
 				// The conditions recover() checks before its readback: a staged checkpoint at the leaf and a record.
 				const leaf = session.getLeafEntry();
@@ -1215,7 +1179,7 @@ export class PreviewMemoryController {
 			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
 			let coveredIndex = branch.length - 1;
 			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
-			const notes = workNotes(branch, previous?.memory.coveredThrough);
+			const notes = workNotes(asRecords(branch), previous?.memory.coveredThrough);
 			const increments = notes.map((item) => item.note);
 			const activeIds = new Set(
 				projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id),
@@ -1224,7 +1188,7 @@ export class PreviewMemoryController {
 			const policy = selectNoteBudget(
 				this.config,
 				budget.threshold,
-				compactedSourceTokens(released),
+				compactedSourceTokens(asRecords(released)),
 				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
 			);
 			const projectedMessages = [...projection.messages];
@@ -1261,7 +1225,7 @@ export class PreviewMemoryController {
 			const systemTokens = textTokens(ctx.getSystemPrompt());
 			const beforeTokens =
 				systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-			let userMessages: SessionEntry[] = [];
+			let userMessages: readonly SessionRecord[] = [];
 			/**
 			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
 			 * releases nothing uncovered, the context shrinks and the result fits within `share` of the threshold.
@@ -1271,7 +1235,7 @@ export class PreviewMemoryController {
 				note: MemoryNote,
 				end: number,
 				share: number,
-				users: SessionEntry[] = [],
+				users: readonly SessionRecord[] = [],
 			): NotesFallback | undefined => {
 				const start = prefixCut(branch, projection, end, cut);
 				if (start === undefined) return "cut";
@@ -1290,7 +1254,7 @@ export class PreviewMemoryController {
 				return undefined;
 			};
 			if (path === "sync" && available && interrupted === undefined) {
-				const end = reusablePrefix(available.candidate, available.classification, branch);
+				const end = reusablePrefix(available.candidate, available.classification, asRecords(branch));
 				if (end !== undefined && !commitPrefix(available.written.note, end, 0.8)) path = "prefix";
 			}
 			// D18: merge the session model's work notes without a writer call; the user's own messages follow verbatim.
@@ -1305,11 +1269,16 @@ export class PreviewMemoryController {
 					const end = notes[notes.length - 1].index;
 					const merged = mergeWorkNotes(previous?.memory.note, notes);
 					try {
-						notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+						notesNote = merged && validateNote(merged, asRecords(branch.slice(0, end + 1)), policy.hardTokens);
 					} catch {
 						notesNote = undefined;
 					}
-					const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+					const users = coveredUserMessages(
+						asRecords(branch),
+						activeIds,
+						end,
+						carriedUserMessages(previous?.entry),
+					);
 					// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
 					// worth more than a commit that barely compacts.
 					notesFallback = notesNote ? commitPrefix(notesNote, end, 0.5, users) : "merge";
@@ -1323,7 +1292,7 @@ export class PreviewMemoryController {
 						...reused.written,
 						note: validateNote(
 							structuredClone(reused.written.note),
-							branch.slice(0, coveredIndex + 1),
+							asRecords(branch.slice(0, coveredIndex + 1)),
 							policy.hardTokens,
 						),
 					}
@@ -1350,7 +1319,7 @@ export class PreviewMemoryController {
 					sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
 					previous: previous?.memory.note,
 					increments,
-					uncovered: writerSources(branch, previous),
+					uncovered: asEntries(writerSources(asRecords(branch), previous)),
 					branch,
 					noteTokens: policy.hardTokens,
 					baseNoteTokens: policy.baseTokens,

@@ -15,6 +15,8 @@ import {
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// The in-context marks now live in the core copy (v0.7.0 WP2 step 4).
+import { inContextEntries } from "../../compaction-core/src/history-view.ts";
 import { DEFAULT_MEMORY_CONFIG, textTokens } from "../src/extensions/context-memory/config.ts";
 import {
 	CONTEXT_KEEP_NONE,
@@ -44,7 +46,6 @@ import {
 } from "../src/extensions/context-memory/preview/excerpts.ts";
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
-import { inContextEntries } from "../src/extensions/context-memory/preview/history-view.ts";
 import type { PreviewSwitch } from "../src/extensions/context-memory/preview/preparation.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";

@@ -1,8 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
-import { selectNoteBudget } from "../src/extensions/context-memory/config.ts";
-import { hashEntries } from "../src/extensions/context-memory/identity.ts";
-import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
 import {
 	classifyPreparation,
 	finalizePreparation,
@@ -10,7 +7,11 @@ import {
 	type PreparationInput,
 	type PreparationSubmission,
 	type PreparationWriterIdentity,
-} from "../src/extensions/context-memory/preview/preparation-candidate.ts";
+} from "../../compaction-core/src/preparation-candidate.ts";
+import type { SessionRecord } from "../../compaction-core/src/records.ts";
+import { selectNoteBudget } from "../src/extensions/context-memory/config.ts";
+import { hashEntries } from "../src/extensions/context-memory/identity.ts";
+import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 const sourceText = "Synthetic service uses port 4317.";
@@ -62,11 +63,19 @@ function writer(overrides: Partial<PreparationWriterIdentity> = {}): Preparation
 	};
 }
 
-function input(overrides: Partial<PreparationInput> = {}): PreparationInput {
+/**
+ * The candidate lifecycle now lives in the core (v0.7.0 WP2 step 4): the Pi entries built here are widened to its
+ * structural record shapes at the call, never converted (records.ts).
+ */
+type PiOverrides<T> = Omit<Partial<T>, "branch"> & { branch?: readonly SessionEntry[] };
+const asRecords = (entries: readonly SessionEntry[]): readonly SessionRecord[] =>
+	entries as unknown as readonly SessionRecord[];
+
+function input({ branch: entries = branch(), ...overrides }: PiOverrides<PreparationInput> = {}): PreparationInput {
 	return {
 		sessionId: "synthetic-session",
 		epoch: 3,
-		branch: branch(),
+		branch: asRecords(entries),
 		coveredThrough: "reply-1",
 		processedUserEntryIds: ["user-1"],
 		writer: writer(),
@@ -75,11 +84,14 @@ function input(overrides: Partial<PreparationInput> = {}): PreparationInput {
 	};
 }
 
-function submission(overrides: Partial<PreparationSubmission> = {}): PreparationSubmission {
+function submission({
+	branch: entries = branch(),
+	...overrides
+}: PiOverrides<PreparationSubmission> = {}): PreparationSubmission {
 	return {
 		sessionId: "synthetic-session",
 		epoch: 3,
-		branch: branch(),
+		branch: asRecords(entries),
 		writer: writer(),
 		noteBudget: selectNoteBudget({}, 64_000, 100),
 		...overrides,
@@ -107,7 +119,7 @@ function provenance(identity = writer()) {
 	};
 }
 
-function candidate(options: Partial<PreparationInput> = {}, resultNote = note()) {
+function candidate(options: PiOverrides<PreparationInput> = {}, resultNote = note()) {
 	const frozen = freezePreparationInput(input(options));
 	return finalizePreparation(frozen, { note: resultNote, provenance: provenance(options.writer) });
 }

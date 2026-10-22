@@ -11,6 +11,8 @@ const name = "pi-context-compaction-preview";
 const version = "0.6.0";
 const extensionRoot = "packages/coding-agent/src/extensions/context-memory/";
 const previewRoot = `${extensionRoot}preview/`;
+// The host-neutral core (v0.7.0 WP2): lifted modules may be bundled alongside preview files.
+const coreRoot = "packages/compaction-core/src/";
 const shared = new Set(["config.ts", "events.ts", "history.ts", "identity.ts", "notes.ts"]);
 const peers = ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent", "typebox"];
 let output = resolve(root, ".artifacts/context-memory-preview-package");
@@ -46,7 +48,11 @@ const options = {
 const scanned = await build(options);
 const inputs = Object.keys(scanned.metafile.inputs).sort();
 for (const input of inputs) {
-	if (!input.startsWith(previewRoot) && !(input.startsWith(extensionRoot) && shared.has(input.slice(extensionRoot.length)))) {
+	if (
+		!input.startsWith(previewRoot) &&
+		!input.startsWith(coreRoot) &&
+		!(input.startsWith(extensionRoot) && shared.has(input.slice(extensionRoot.length)))
+	) {
 		throw new Error(`Preview must not bundle host or resident lifecycle code: ${input}`);
 	}
 }

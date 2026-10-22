@@ -1,38 +1,17 @@
 import type { CompactionEntry, CompactionResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { MemoryCheckpoint } from "../notes.ts";
+import type { PreviewAttempt, PreviewCheckpoint, PreviewStatus } from "../../../../../compaction-core/src/contracts.ts";
+
+// The checkpoint and preparation metadata shapes with the attempt and failure-state shapes live in
+// the host-neutral core (v0.7.0 WP2 step 3); the Pi-typed contracts below stay with this adapter.
+export type {
+	NotesFallback,
+	PreviewAttempt,
+	PreviewCheckpoint,
+	PreviewStatus,
+} from "../../../../../compaction-core/src/contracts.ts";
 
 export type PreviewSession = ExtensionContext["sessionManager"];
-export interface PreviewCheckpoint extends MemoryCheckpoint {
-	/** Preview-only observational metadata; no extension of checkpoint source scope. */
-	preparation?: {
-		version: 1;
-		path: "complete" | "prefix" | "notes" | "sync";
-		candidateId?: string;
-		callIds?: string[];
-		/** Work notes merged by the notes path. */
-		noteIds?: string[];
-		/** Why arm B left this compaction to the writer. */
-		notesFallback?: NotesFallback;
-	};
-	/** User messages rendered verbatim after the note by the notes path; re-rendered at every full validation. */
-	userMessages?: string[];
-}
 export type PreviewCompaction = CompactionResult<PreviewCheckpoint>;
-
-/**
- * Why arm B did not commit: no work notes since the previous checkpoint, an unfinished turn, custom focus, a merge
- * the note schema or budget rejects, no cut that releases only covered entries, user messages that do not fit in
- * full, or a result that would not compact enough.
- */
-export type NotesFallback = "no-notes" | "unfinished-turn" | "custom-focus" | "merge" | "cut" | "user-messages" | "fit";
-
-export interface PreviewAttempt {
-	attemptId: string;
-	sessionId: string;
-	leafId: string;
-	lastCheckpointId: string | null;
-	sourceHash: string;
-}
 
 /** Why the preview stands aside in a session it never enrolled. Controlled values only. */
 export type InactiveReason = "host" | "in-memory" | "foreign-checkpoint" | "image" | "non-text" | "context-edit";
@@ -70,11 +49,6 @@ export interface PreviewDiagnosis {
 	writerError?: string;
 	checkpointId?: string;
 	manualCompaction: ManualCompaction;
-}
-
-export interface PreviewStatus {
-	state: "ready" | "pending" | "blocked";
-	code?: string;
 }
 
 /** Readback evidence shared only within one synchronous call, before any write or Pi append. */

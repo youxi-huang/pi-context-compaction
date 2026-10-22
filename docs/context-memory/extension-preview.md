@@ -16,6 +16,12 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 [release scope](v0.4.0-release.md), the [changelog](../../CHANGELOG.md) and the
 [validation record](validation.md).
 
+Since 0.7.0 this extension is the first adapter of the host-neutral core
+package (`packages/compaction-core`), with identical behavior, install lines
+and supported hosts, and the resident runtime is frozen as of 2026-10-22: no
+further ports or features, maintenance only, retirement by 0.10.0 (see
+[the delta's freeze note](upstream-delta.md#the-resident-freeze)).
+
 ## Install, update and remove
 
 Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:

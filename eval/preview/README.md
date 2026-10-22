@@ -8,10 +8,27 @@ work packages W0 and W3. P4 and the token-overhead report belong to the
 
 ## Fixtures
 
-`generate.ts` writes four invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
-and fails on any byte difference. Each fixtures version has its own manifest, which pins its files by SHA-256:
-`fixtures/manifest.json` pins P1 to P3 under `0.5-preview-fixtures.1`, and `fixtures/manifest-0.6.json` pins P4
-under `0.6-preview-fixtures.1`, so P1 to P3 keep their bytes and their pins.
+`generate.ts` writes four invented fixtures. Each is first a branch of host-neutral records,
+`fixtures/<ID>/records.jsonl` in the format `0.7-host-neutral-records.1` that `records.ts` defines: a header with the
+session's ID, start time and working directory, then one record per line in the specification's record model, with
+the field names of `packages/compaction-core/src/records.ts`. The Pi converter, `pi-session.ts`, renders from those
+bytes the Pi version-3 session `fixtures/<ID>/session.jsonl`; beside it the generator writes the gold file. Pi's
+message timestamp and the assistant's provider envelope are not record fields, so the converter derives them: the
+timestamp from the record's, the envelope as the fixtures' synthetic provenance. P1 to P3 stamp every Pi message with
+a fixed timestamp of 1 instead, which no record field gives, so their records carry it as Pi's native payload,
+`"native":{"pi":{"message":{"timestamp":1}}}`. The 0.7.0 conformance vectors use the same record model.
+
+`--check` regenerates every file in memory and fails on any byte difference. Each fixtures version has its own
+manifest, which pins its sessions and gold files by SHA-256: `fixtures/manifest.json` pins P1 to P3 under
+`0.5-preview-fixtures.1`, and `fixtures/manifest-0.6.json` pins P4 under `0.6-preview-fixtures.1`; the records
+format did not move a pinned byte (decision H6 of the [0.7.0 plan](../../docs/context-memory/v0.7.0-plan.md)). The
+converter byte-identity check converts the committed records files and compares each result with its manifest's
+pin; `eval/check.mjs` runs it beside `--check`, and `records.test.ts` covers it:
+
+```sh
+node --experimental-strip-types eval/preview/generate.ts --check
+node --experimental-strip-types eval/preview/pi-session.ts --check
+```
 
 | Fixture | Source tokens | Checkpoints | What it stresses |
 | --- | ---: | ---: | --- |

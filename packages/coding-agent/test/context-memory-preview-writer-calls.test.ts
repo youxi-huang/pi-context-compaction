@@ -7,9 +7,9 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { NOTE_SECTIONS, removeNoteEnvelope } from "../../compaction-core/src/note-envelope.ts";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
 import type { MemoryNote } from "../src/extensions/context-memory/notes.ts";
-import { NOTE_SECTIONS, removeNoteEnvelope } from "../src/extensions/context-memory/preview/note-envelope.ts";
 import {
 	type PreviewWriterRegistry,
 	TOOL_CALL_DECLINED,

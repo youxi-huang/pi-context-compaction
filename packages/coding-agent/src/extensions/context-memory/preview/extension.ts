@@ -1,16 +1,30 @@
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { HistorySnapshot as CoreHistorySnapshot } from "../../../../../compaction-core/src/history.ts";
+import {
+	listHistory,
+	previewHistorySchema,
+	priceSearch,
+	readLowDetail,
+} from "../../../../../compaction-core/src/history-view.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
+import {
+	validateWorkNote,
+	WORK_NOTE_GUIDELINE,
+	workNoteSchema,
+} from "../../../../../compaction-core/src/work-notes.ts";
 import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
-import { freezeHistory, queryHistory } from "../history.ts";
+import { freezeHistory, type HistorySnapshot, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
 import { readExcerptSettings } from "./excerpts.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
-import { listHistory, previewHistorySchema, priceSearch, readLowDetail } from "./history-view.ts";
 import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
-import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the snapshot is widened here, never converted (records.ts). */
+const asSnapshot = (snapshot: HistorySnapshot): CoreHistorySnapshot => snapshot as unknown as CoreHistorySnapshot;
 
 /** Output of a command the user asked for: the UI, or stdout without one. */
 function show(ctx: ExtensionContext, text: string, kind: "info" | "warning" = "info"): void {
@@ -190,7 +204,8 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		async execute(_id, value, signal, _update, ctx) {
 			signal?.throwIfAborted();
 			controller.assertReady(ctx);
-			validateWorkNote(value, ctx.sessionManager.getBranch());
+			// Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts).
+			validateWorkNote(value, ctx.sessionManager.getBranch() as unknown as readonly SessionRecord[]);
 			pi.appendEntry(CONTEXT_NOTE_TYPE, structuredClone(value));
 			return {
 				content: [{ type: "text", text: "Work note saved; original messages remain authoritative." }],
@@ -219,19 +234,19 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			const snapshot = freezeHistory(ctx.sessionManager);
 			const inContext = controller.inContext(ctx);
 			if (request.operation === "list") {
-				const view = listHistory(snapshot, request, undefined, inContext);
+				const view = listHistory(asSnapshot(snapshot), request, undefined, inContext);
 				return { content: [{ type: "text", text: JSON.stringify(view) }], details: view };
 			}
 			if (kind !== undefined) throw new Error("HISTORY_QUERY_INVALID: kind applies to list only");
 			if (detail === "low") {
-				const low = readLowDetail(snapshot, query, inContext);
+				const low = readLowDetail(asSnapshot(snapshot), query, inContext);
 				return { content: [{ type: "text", text: JSON.stringify(low) }], details: low };
 			}
 			// A full read is returned exactly as before; search hits gain their price and mark.
 			const page = queryHistory(snapshot, query);
 			// A full read of an entry the reduced view replaces is a counted page-back; counts only.
 			if (query.operation === "read" && query.entryId) controller.recordHistoryRead(ctx, query.entryId);
-			const result = query.operation === "search" ? priceSearch(page, snapshot, inContext) : page;
+			const result = query.operation === "search" ? priceSearch(page, asSnapshot(snapshot), inContext) : page;
 			return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
 		},
 	});

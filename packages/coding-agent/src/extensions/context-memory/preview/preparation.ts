@@ -1,7 +1,4 @@
 import { join } from "node:path";
-import { isRecord } from "../identity.ts";
-import type { CallJournal } from "./call-journal.ts";
-import { missing, readBoundedFile } from "./failure-io.ts";
 import {
 	type CandidateClassification,
 	classifyPreparation,
@@ -9,7 +6,10 @@ import {
 	type PreparationSnapshot,
 	type PreparationSubmission,
 	type PreparedCandidate,
-} from "./preparation-candidate.ts";
+} from "../../../../../compaction-core/src/preparation-candidate.ts";
+import { isRecord } from "../identity.ts";
+import type { CallJournal } from "./call-journal.ts";
+import { missing, readBoundedFile } from "./failure-io.ts";
 import { RENDERING_OFF, type RenderingSwitch, renderingSwitch } from "./render-projection.ts";
 import type { WriteMemoryResult, WriterCallHooks } from "./writer.ts";
 

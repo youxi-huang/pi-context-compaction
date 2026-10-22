@@ -3,8 +3,9 @@ import { once } from "node:events";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { checkpointRecords, equivalenceLine, errorClasses } from "./context-memory-equivalence-compare.mjs";
 
 // The 0.5.0 writer bench and recovery probes for the independent preview on official Pi.
 //
@@ -54,6 +55,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // candidate compares with, are recorded in summary.json, beside the settings the units received.
 // The loopback reports usage proportional to each request, ceil(bytes / 3), and in the history condition reads the
 // probe's first gold evidence entry once before it answers, so every column has offline figures.
+// --equivalence-out <file>, with a local provider in writer, probes or repair mode, appends the v0.7.0 equivalence
+// records of scripts/context-memory-equivalence-compare.mjs when the run ends, sorted by case: one per writer or
+// repair attempt with every checkpoint in its session copy, one per probes cut with its chain's checkpoints, and one
+// per probe with its error classes. Without the flag no unit, row or file changes.
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(script, "../..");
@@ -63,7 +68,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--session-settings ${SESSION_SWITCHES.join("|")}=on|off,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--session-settings ${SESSION_SWITCHES.join("|")}=on|off,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N] [--equivalence-out <file>]`,
 	);
 }
 
@@ -606,6 +611,10 @@ async function worker() {
 			// requests: page-back, as retrieval is.
 			excerpts: after.excerpts ?? null,
 			excerptTokens: after.excerpts?.tokens ?? 0,
+			// --equivalence-out only: the error classes of failed tool results, in order; never their text.
+			...(action.equivalence
+				? { historyCodes: added.filter((entry) => entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError).flatMap((entry) => errorClasses(...(entry.message.content ?? []).filter((part) => part.type === "text").map((part) => part.text))) }
+				: {}),
 		};
 	}
 	session.dispose();
@@ -655,6 +664,11 @@ async function parent() {
 	if (relay) relay.id = argument("--relay-id", relay.model.id);
 	if (relay && (relaySeparator <= 0 || !RELAY_KEYS[relay.model.provider] || !relay.id)) throw new Error(`--relay-model takes provider/id for a provider among ${Object.keys(RELAY_KEYS).join(", ")}`);
 	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
+	const equivalenceOut = argument("--equivalence-out", "") ? resolve(argument("--equivalence-out")) : null;
+	if (args.includes("--equivalence-out") && !equivalenceOut) throw new Error("--equivalence-out needs a file");
+	// Equivalence compares scripted inputs across builds: a model's answers are not scripted, and smoke compacts nothing.
+	if (equivalenceOut && !["loopback", "deepseek-local"].includes(provider)) throw new Error("--equivalence-out needs --provider loopback or deepseek-local");
+	if (equivalenceOut && mode === "smoke") throw new Error("--equivalence-out records compactions; --mode smoke runs none");
 	const remote = provider === "deepseek" || provider === "codex" || provider === "relay";
 	const limits = !remote
 		? { requests: Number.POSITIVE_INFINITY, minutes: Number.POSITIVE_INFINITY, costUsd: Number.POSITIVE_INFINITY }
@@ -706,7 +720,7 @@ async function parent() {
 		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
 		if (codexAccount) writeCodexPlaceholder(agentDir, codexAccount);
 		writeUnitSettings(agentDir, unitSettings);
-		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl, relay } : {}) })).toString("base64url");
+		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl, relay } : {}), ...(equivalenceOut ? { equivalence: true } : {}) })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
 		let stderr = "";
@@ -747,6 +761,20 @@ async function parent() {
 		if (!measured) return;
 		used.requests += result.forwarded ?? result.writerCalls ?? result.rounds ?? 0;
 		used.costUsd += result.usage?.cost?.total ?? result.usage?.cost ?? 0;
+	}
+
+	/**
+	 * --equivalence-out: one content-free record per unit or cut, kept until the run ends and then written sorted by
+	 * case, so concurrency cannot reorder the file. `file` is the session the unit left, read for its checkpoints;
+	 * the fixture's own entry IDs stay raw.
+	 */
+	const equivalence = [];
+	const unitClasses = (result) => errorClasses(result.error, ...(result.historyCodes ?? []), ...(result.diagnostics ?? []), result.code);
+	const unitOutcome = (result) => (result.crashed ? "crashed" : result.ok ? "committed" : "refused");
+	function equivalent(id, fixture, file, classes, extra) {
+		if (!equivalenceOut) return;
+		const checkpoints = file ? checkpointRecords(readLines(file), new Set(fixture.entries.map((entry) => entry.id))) : [];
+		equivalence.push({ id, line: equivalenceLine({ runner: "bench", id, host: hostVersion, checkpoints, classes, extra, build: build.buildId ?? build.build ?? null }) });
 	}
 
 	/** Warm-up rows; the overhead report reads only the preparation calls their journals may hold. */
@@ -900,6 +928,7 @@ async function parent() {
 						delete row.diagnostics;
 						rows.push(row);
 						record("writer.jsonl", row);
+						equivalent(`bench/writer/${id}/cut${k + 1}/attempt${attempt + 1}`, fixture, file, unitClasses(result), { outcome: unitOutcome(result) });
 					},
 				);
 			}
@@ -988,6 +1017,7 @@ async function parent() {
 					const row = { case: repairCase.id, template: repairCase.template, fixture: id, cut: k + 1, attempt: attempt + 1, ok: result.ok ?? false, code: result.code ?? null, crashed: result.crashed ?? false, writerCalls: result.writerCalls ?? 0, repairKind: result.repairKind ?? null, quotations: result.quotations ?? null, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair ?? null, calls: result.calls ?? [], repairSettings: result.repairSettings ?? [], forwarded: result.forwarded ?? 0, pauseMs: result.pauseMs ?? null, usage: result.usage ?? null, score: { pass: score.pass, silentLoss: score.silentLoss, promoted: score.promoted, keptUnsupported: score.keptUnsupported, facts: score.facts } };
 					rows.push(row);
 					record("repairs.jsonl", row);
+					equivalent(`bench/repair/${repairCase.id}/attempt${attempt + 1}`, fixture, file, unitClasses(result), { outcome: unitOutcome(result) });
 				};
 				if (!primed && units.length) {
 					primed = true;
@@ -1058,6 +1088,7 @@ async function parent() {
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});
+				equivalent(`bench/probes/${id}/cut${k + 1}/compact`, fixture, file, results.flatMap(unitClasses), { outcome: unitOutcome(results.at(-1)), attempts: results.length });
 				if (!results.at(-1).ok) {
 					// A blocked checkpoint blocks its probes and every later one in this chain; they are scored as blocked.
 					broken = true;
@@ -1086,6 +1117,7 @@ async function parent() {
 					probeRows.push(row);
 					record("probes.jsonl", row);
 					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null, errorMessage: result.errorMessage ?? null });
+					equivalent(`bench/probes/${id}/cut${k + 1}/${probe.id}/${condition}`, fixture, null, unitClasses(result), { outcome: result.crashed ? "crashed" : score.outcome });
 				});
 				if (k + 1 < fixture.gold.checkpoints.length) lines = [...lines, ...segment(fixture, k, lines.at(-1).id)];
 			}
@@ -1103,6 +1135,11 @@ async function parent() {
 		report.overhead = overheadReport({ attempts: compactions, probes: probeRows, warmups });
 	}
 
+	if (equivalenceOut) {
+		mkdirSync(dirname(equivalenceOut), { recursive: true });
+		const ordered = equivalence.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+		appendFileSync(equivalenceOut, ordered.map((item) => item.line).join(""));
+	}
 	report.used = { ...used, costUsd: Number(used.costUsd.toFixed(4)), warmupCostUsd: Number(used.warmupCostUsd.toFixed(4)), minutes: Number(((Date.now() - started) / 60_000).toFixed(1)) };
 	writeFileSync(join(runDir, "summary.json"), `${JSON.stringify(report, null, 2)}\n`);
 	if (!args.includes("--keep-sessions")) rmSync(join(runDir, "copies"), { recursive: true, force: true });

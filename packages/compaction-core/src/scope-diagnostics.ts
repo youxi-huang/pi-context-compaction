@@ -1,5 +1,8 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { type MemoryNote, noteSections, sourceRole, sourceText } from "../notes.ts";
+// Lifted from the preview into the host-neutral core (v0.7.0 WP2 step 2): the notes import moved
+// to the core's copy, and the host's SessionEntry type import became the specification's
+// structural SessionRecord (records.ts). Logic, bounds and thrown messages are unchanged (rule K2).
+import { type MemoryNote, noteSections, sourceRole, sourceText } from "./notes.ts";
+import type { SessionRecord } from "./records.ts";
 
 /** Why a refused candidate cites outside its evidence: counts and entry kinds, never the IDs. */
 export interface ScopeCounts {
@@ -18,7 +21,7 @@ export interface ScopeCounts {
  * invented ID and a real entry with nothing to read call for different fixes. Later duplicates win, as in
  * `validateNoteContent`.
  */
-export function diagnoseScope(note: MemoryNote, branch: readonly SessionEntry[]): ScopeCounts {
+export function diagnoseScope(note: MemoryNote, branch: readonly SessionRecord[]): ScopeCounts {
 	const byId = new Map(branch.map((entry) => [entry.id, entry]));
 	const missing = new Set<string>();
 	const unreadable = new Set<string>();

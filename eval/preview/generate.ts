@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type {
+	MessageRecord,
+	RecordContentBlock,
+	RecordMessage,
+} from "../../packages/compaction-core/src/records.ts";
+import { toPiSession } from "./pi-session.ts";
+import { type NativePayloads, parseRecords, RECORDS_FORMAT, type RecordsFile, serializeRecords } from "./records.ts";
 import {
 	assertPreviewFixture,
 	type Expected,
@@ -13,29 +20,19 @@ import {
 } from "./schema.ts";
 
 /**
- * Deterministic generator for the preview evaluation set. Every record is invented. The sessions are complete Pi
- * version-3 JSONL files; the runner truncates a copy at each checkpoint, so no model drives the task and only
- * writer calls and probe answers reach a provider. `--check` regenerates in memory and compares every byte.
+ * Deterministic generator for the preview evaluation set. Every record is invented. Each fixture is first a branch of
+ * host-neutral records (`records.ts`, written as `<ID>/records.jsonl`); the Pi converter (`pi-session.ts`) renders
+ * from those bytes the complete Pi version-3 session `<ID>/session.jsonl`, which the runner truncates at each
+ * checkpoint, so no model drives the task and only writer calls and probe answers reach a provider. The manifests pin
+ * the sessions and gold files; `--check` regenerates every file in memory and compares every byte, and
+ * `pi-session.ts --check` converts the committed records and compares the result with the manifests' pins.
  */
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const time = "2026-01-01T00:00:00.000Z";
-const zeroUsage = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
-	totalTokens: 0,
-	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
 
-interface Entry {
-	type: "message";
-	id: string;
-	parentId: string | null;
-	timestamp: string;
-	message: Record<string, unknown>;
-}
+/** A record of this generator: always a message; `native` only on the clockless sessions P1 to P3. */
+type Entry = MessageRecord & { native?: NativePayloads };
 
 interface Call {
 	name: string;
@@ -43,12 +40,12 @@ interface Call {
 }
 
 /** Readable text of an entry, as the preview measures it: text blocks and tool calls as JSON. */
-function readable(message: Record<string, unknown>): string {
+function readable(message: RecordMessage): string {
 	const content = message.content;
 	if (typeof content === "string") return content;
 	if (!Array.isArray(content)) return "";
 	return content
-		.map((block: Record<string, unknown>) =>
+		.map((block) =>
 			block.type === "text"
 				? String(block.text)
 				: block.type === "toolCall"
@@ -85,33 +82,46 @@ class Session {
 		this.clock += ms;
 	}
 
-	private add(message: Record<string, unknown>): string {
+	/**
+	 * With a clock, Pi's message timestamp is the record's own time, which the converter derives. Without one, every
+	 * Pi message carries the fixed timestamp 1, which no record field derives: it travels as Pi's native payload.
+	 */
+	private add(message: RecordMessage): string {
 		const id = `${this.prefix}-${String(this.entries.length + 1).padStart(5, "0")}`;
-		let timestamp = time;
-		if (this.clock !== undefined) {
+		const parentId = this.entries.at(-1)?.id ?? null;
+		if (this.clock === undefined) {
+			const native = { pi: { message: { timestamp: 1 } } };
+			this.entries.push({ type: "message", id, parentId, timestamp: time, message, native });
+		} else {
 			this.clock += RECORD_STEP_MS;
-			timestamp = new Date(this.clock).toISOString();
-			message.timestamp = this.clock;
+			this.entries.push({ type: "message", id, parentId, timestamp: new Date(this.clock).toISOString(), message });
 		}
-		this.entries.push({ type: "message", id, parentId: this.entries.at(-1)?.id ?? null, timestamp, message });
 		return id;
 	}
 
-	user(text: string): string {
-		return this.add({ role: "user", content: text, timestamp: 1 });
+	/** The fixture as a host-neutral records file. */
+	records(): RecordsFile {
+		const number = { p1: "51", p2: "52", p3: "53", p4: "54" }[this.prefix];
+		if (number === undefined) throw new Error(`EVAL_PREVIEW_PREFIX:${this.prefix}`);
+		return {
+			header: {
+				format: RECORDS_FORMAT,
+				session: {
+					id: `00000000-0000-4000-8000-0000000000${number}`,
+					timestamp: this.started,
+					cwd: `/synthetic/${this.prefix}`,
+				},
+			},
+			records: this.entries,
+		};
 	}
 
-	private assistantMessage(content: unknown[], stopReason: string) {
-		return {
-			role: "assistant",
-			content,
-			api: "openai-completions",
-			provider: "synthetic",
-			model: "fixture",
-			stopReason,
-			timestamp: 1,
-			usage: zeroUsage,
-		};
+	user(text: string): string {
+		return this.add({ role: "user", content: text });
+	}
+
+	private assistantMessage(content: RecordContentBlock[], stopReason: string): RecordMessage {
+		return { role: "assistant", content, stopReason };
 	}
 
 	assistant(text: string): string {
@@ -137,7 +147,6 @@ class Session {
 				toolName: item.name,
 				content: [{ type: "text", text: item.result }],
 				isError: item.error === true,
-				timestamp: 1,
 			}),
 		);
 		return { call, results };
@@ -1168,20 +1177,11 @@ function billingRetries() {
 	);
 }
 
-function serialize(session: Session): string {
-	const header = {
-		type: "session",
-		version: 3,
-		id: `00000000-0000-4000-8000-0000000000${{ p1: "51", p2: "52", p3: "53", p4: "54" }[session.prefix]}`,
-		timestamp: session.started,
-		cwd: `/synthetic/${session.prefix}`,
-	};
-	return `${[header, ...session.entries].map((line) => JSON.stringify(line)).join("\n")}\n`;
-}
-
 /**
- * Every generated file by path relative to `fixtures/`, plus one manifest per fixtures version pinning its files by
- * SHA-256: `manifest.json` for P1 to P3, `manifest-0.6.json` for P4.
+ * Every generated file by path relative to `fixtures/`: per fixture its host-neutral `records.jsonl`, the Pi session
+ * converted from exactly those bytes, and its gold file, plus one manifest per fixtures version pinning the session
+ * and gold files by SHA-256: `manifest.json` for P1 to P3, `manifest-0.6.json` for P4. The records files are pinned by
+ * `--check`'s byte comparison and, through the sessions converted from them, by the manifests.
  */
 export function generate(): Map<string, string> {
 	const files = new Map<string, string>();
@@ -1194,7 +1194,9 @@ export function generate(): Map<string, string> {
 		for (const { fixture: value, session } of set.fixtures) {
 			if (value.version !== set.version) throw new Error(`EVAL_PREVIEW_VERSION:${value.id}`);
 			validate(value, session);
-			pinned.set(`${value.id}/session.jsonl`, serialize(session));
+			const records = serializeRecords(session.records());
+			files.set(`${value.id}/records.jsonl`, records);
+			pinned.set(`${value.id}/session.jsonl`, toPiSession(parseRecords(records)));
 			pinned.set(`${value.id}/gold.json`, `${JSON.stringify(value, null, "\t")}\n`);
 		}
 		const manifest = {

@@ -10,7 +10,8 @@ import {
 	diagnoseQuotes,
 	normalizeQuote,
 	type QuoteFailureKind,
-} from "../../packages/coding-agent/src/extensions/context-memory/preview/quote-diagnostics.ts";
+} from "../../packages/compaction-core/src/quote-diagnostics.ts";
+import type { SessionRecord } from "../../packages/compaction-core/src/records.ts";
 
 // Quotation-repair cases for the preview's one repair, planted in the P fixtures (0.5.1).
 //
@@ -231,7 +232,8 @@ export function repairCases(input: {
 			quote: item.quote,
 			...(item.ruling ? { ruling: item.ruling } : {}),
 		}));
-		const diagnosis = diagnoseQuotes(candidate, branch);
+		// Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts).
+		const diagnosis = diagnoseQuotes(candidate, branch as unknown as readonly SessionRecord[]);
 		const classes = diagnosis.failures.map((failure) => `${failure.section}:${failure.index}:${failure.kind}`);
 		const wanted = planted.map((item) => `instructions:${item.index}:${EXPECTED_CLASS[item.fault]}`);
 		if (diagnosis.unreadable || JSON.stringify(classes) !== JSON.stringify(wanted)) {

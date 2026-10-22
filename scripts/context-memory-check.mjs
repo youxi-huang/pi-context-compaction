@@ -11,13 +11,14 @@ const checks = [
 	["scripts/check-entry-graphs.mjs", []],
 	["scripts/generate-coding-agent-install-lock.mjs", ["--check"]],
 	["node_modules/typescript/bin/tsc", ["--noEmit"]],
+	["scripts/context-memory-core-check.mjs", []],
 ];
 for (const [file, args] of checks) {
 	const result = spawnSync(process.execPath, [resolve(root, file), ...args], { cwd: root, stdio: "inherit" });
 	if (result.error) throw result.error;
 	if (result.status !== 0) process.exit(result.status ?? 1);
 }
-const prefixResult = spawnSync(process.execPath, ["--test", resolve(root, "scripts/context-memory-prefix-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-stock-install.test.mjs"), resolve(root, "scripts/context-memory-preview-acceptance-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-release-checks.test.mjs"), resolve(root, "scripts/context-memory-preview-bench.test.mjs")], {
+const prefixResult = spawnSync(process.execPath, ["--test", resolve(root, "scripts/context-memory-prefix-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-stock-install.test.mjs"), resolve(root, "scripts/context-memory-preview-acceptance-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-release-checks.test.mjs"), resolve(root, "scripts/context-memory-preview-bench.test.mjs"), resolve(root, "scripts/context-memory-equivalence-compare.test.mjs"), resolve(root, "scripts/context-memory-core-check.test.mjs")], {
 	cwd: root, stdio: "inherit", env: { ...process.env, PI_OFFLINE: "1" },
 });
 if (prefixResult.error) throw prefixResult.error;

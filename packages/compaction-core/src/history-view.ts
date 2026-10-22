@@ -1,10 +1,15 @@
+// Lifted whole from the preview into the host-neutral core (v0.7.0 WP2 step 4): the typed list,
+// `readTokens`, low detail, `inContext` marks and pricing, computed from the frozen snapshot. The
+// host's `SessionEntry`/`SessionProjection` type imports became the structural record and
+// projection shapes in records.ts, and the shared config/history/identity imports moved to the
+// core's copies. Logic, bounds and thrown messages are unchanged (rule K2).
 import { createHash } from "node:crypto";
-import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { textTokens } from "../config.ts";
-import { type HistoryExcerpt, type HistoryPage, type HistorySnapshot, queryHistory } from "../history.ts";
-import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
-import { hashEntries, noteSections, sourceRole, sourceText } from "../notes.ts";
+import { textTokens } from "./config.ts";
+import { type HistoryExcerpt, type HistoryPage, type HistorySnapshot, queryHistory } from "./history.ts";
+import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "./identity.ts";
+import { hashEntries, noteSections, sourceRole, sourceText } from "./notes.ts";
+import type { RecordProjection, SessionRecord } from "./records.ts";
 
 /** Note sections as recorded by committed checkpoints, plus edits and errors read from tool records. */
 export const HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"] as const;
@@ -29,7 +34,7 @@ const NONE_IN_CONTEXT: InContext = () => false;
  * one line in context, so it is not marked. Reductions are the caller's to supply; until they exist, none is.
  */
 export function inContextEntries(
-	projection: Pick<SessionProjection, "entries">,
+	projection: RecordProjection,
 	isReduced: (entryId: string) => boolean = () => false,
 ): InContext {
 	const active = new Set(
@@ -44,7 +49,7 @@ export function inContextEntries(
  * branch, and the branch position is put back, so each page has the bytes the real read returns. An entry `read`
  * refuses, one without text or with an ID the query schema rejects, costs nothing to read.
  */
-export function readTokens(snapshot: HistorySnapshot, entry: SessionEntry, position: number): number {
+export function readTokens(snapshot: HistorySnapshot, entry: SessionRecord, position: number): number {
 	if (!sourceText(entry) || entry.id.length > 64) return 0;
 	const single: HistorySnapshot = { ...snapshot, entries: [entry] };
 	let tokens = 0;
@@ -222,7 +227,7 @@ export function viewTerms(query: string): string[] {
 	].slice(0, 64);
 }
 
-function excerpt(entry: SessionEntry, terms: readonly string[]): Excerpt {
+function excerpt(entry: SessionRecord, terms: readonly string[]): Excerpt {
 	const text = sourceText(entry);
 	const lower = text.toLocaleLowerCase();
 	const hits = terms.map((term) => lower.indexOf(term)).filter((hit) => hit >= 0);
@@ -244,7 +249,7 @@ const matches = (text: string, terms: readonly string[]) => {
  * revisions marked from every section's `supersedes`. Checkpoints were validated when the session became ready;
  * malformed values are skipped rather than trusted, and only sources on this branch are listed.
  */
-function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: readonly string[]): NoteDraft[] {
+function noteItems(entries: readonly SessionRecord[], kind: NoteKind, terms: readonly string[]): NoteDraft[] {
 	const position = new Map(entries.map((entry, index) => [entry.id, index]));
 	// Every section's distinct facts, in their latest restatement, so a revision can be matched to the facts it
 	// may replace.
@@ -331,18 +336,23 @@ function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: read
 	});
 }
 
-function editItems(entries: readonly SessionEntry[]): Omit<EditViewItem, keyof Priced>[] {
-	const results = new Map<string, boolean>();
+function editItems(entries: readonly SessionRecord[]): Omit<EditViewItem, keyof Priced>[] {
+	const results = new Map<string, boolean | undefined>();
 	for (const entry of entries)
-		if (entry.type === "message" && entry.message.role === "toolResult")
+		if (
+			entry.type === "message" &&
+			entry.message.role === "toolResult" &&
+			typeof entry.message.toolCallId === "string"
+		)
 			results.set(entry.message.toolCallId, entry.message.isError);
 	return entries.flatMap((entry, position) => {
-		if (entry.type !== "message" || entry.message.role !== "assistant") return [];
+		if (entry.type !== "message" || entry.message.role !== "assistant" || !Array.isArray(entry.message.content))
+			return [];
 		return entry.message.content.flatMap((block) => {
-			if (block.type !== "toolCall" || !EDIT_TOOLS.has(block.name)) return [];
-			const path = block.arguments.path;
+			if (block.type !== "toolCall" || typeof block.name !== "string" || !EDIT_TOOLS.has(block.name)) return [];
+			const path = isRecord(block.arguments) ? block.arguments.path : undefined;
 			if (typeof path !== "string") return [];
-			const error = results.get(block.id);
+			const error = typeof block.id === "string" ? results.get(block.id) : undefined;
 			return [
 				{
 					kind: "edits" as const,
@@ -357,7 +367,7 @@ function editItems(entries: readonly SessionEntry[]): Omit<EditViewItem, keyof P
 	});
 }
 
-function errorItems(entries: readonly SessionEntry[], terms: readonly string[]): Omit<ErrorViewItem, keyof Priced>[] {
+function errorItems(entries: readonly SessionRecord[], terms: readonly string[]): Omit<ErrorViewItem, keyof Priced>[] {
 	return entries.flatMap((entry, position): Omit<ErrorViewItem, keyof Priced>[] => {
 		if (entry.type !== "message") return [];
 		const message = entry.message;
@@ -394,7 +404,7 @@ function newest(item: ViewDraft): number {
 		: Math.max(...item.sources.map((source) => source.position));
 }
 
-function searchable(item: ViewDraft, entries: readonly SessionEntry[]): string {
+function searchable(item: ViewDraft, entries: readonly SessionRecord[]): string {
 	if (item.kind === "edits") return `${item.tool} ${item.path}`;
 	if (item.kind === "errors") return `${item.tool ?? ""} ${sourceText(entries[item.position])}`;
 	return [item.summary, item.quote ?? "", ...item.sources.map((source) => sourceText(entries[source.position]))].join(

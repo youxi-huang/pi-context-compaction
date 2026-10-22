@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -47,8 +47,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // Writer and probes runs end with the token-overhead report of eval/preview/overhead.ts under `overhead`: writer
 // tokens against the records each note replaces, by cut and by v0.2.3 source-size tier; retrieval usage apart;
 // known usage of discarded work, read from the rows and each unit's call journal; calls without usage; cache
-// writes; and one net column. --session-settings name=value,... and --control <label> are recorded as given, so
-// that a candidate run and the control run it names compare on equal terms; the bench does not apply them.
+// writes; and one net column. --session-settings name=on|off,... sets the preview's own switches, previewReduction,
+// previewExcerpts, previewPreparation and previewWorkNotes, writing `{ "enabled": true }` or `{ "enabled": false }`
+// under each name into every unit's pi-context-memory.json; any other name or value stops the run before its first
+// unit, and without the flag no unit gets that file. The flag as given and --control <label>, the control run a
+// candidate compares with, are recorded in summary.json, beside the settings the units received.
 // The loopback reports usage proportional to each request, ceil(bytes / 3), and in the history condition reads the
 // probe's first gold evidence entry once before it answers, so every column has offline figures.
 
@@ -60,8 +63,51 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--session-settings name=value,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|codex|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--thinking high] [--concurrency 1] [--label name] [--session-settings ${SESSION_SWITCHES.join("|")}=on|off,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N]`,
 	);
+}
+
+/**
+ * The preview's switches in pi-context-memory.json, each read as `{ "enabled": boolean }`, in the order a unit's file
+ * lists them. --session-settings sets nothing else, so a run cannot be labelled with a setting its units ignore.
+ */
+const SESSION_SWITCHES = ["previewReduction", "previewExcerpts", "previewPreparation", "previewWorkNotes"];
+const SWITCH_STATES = new Map([
+	["on", true],
+	["off", false],
+]);
+
+/**
+ * --session-settings as given (`label`, recorded in summary.json) and as each unit's pi-context-memory.json receives
+ * it (`settings`, empty without the flag). Throws a usage error on a malformed pair, an unknown name or value, or a
+ * name given twice, before any unit starts.
+ */
+export function parseSessionSettings(text) {
+	const label = {};
+	for (const item of text.split(",").filter(Boolean)) {
+		const match = item.match(/^([A-Za-z][\w.-]*)=([^=]+)$/);
+		if (!match) throw new Error("--session-settings takes name=on|off pairs separated by commas, such as previewReduction=on");
+		const [, name, value] = match;
+		if (!SESSION_SWITCHES.includes(name))
+			throw new Error(`--session-settings: unknown setting ${JSON.stringify(name)}; the bench sets only ${SESSION_SWITCHES.join(", ")}`);
+		if (!SWITCH_STATES.has(value)) throw new Error(`--session-settings: ${name} takes on or off, not ${JSON.stringify(value)}`);
+		if (Object.hasOwn(label, name)) throw new Error(`--session-settings: ${name} is given twice`);
+		label[name] = value;
+	}
+	const settings = Object.fromEntries(SESSION_SWITCHES.filter((name) => Object.hasOwn(label, name)).map((name) => [name, { enabled: SWITCH_STATES.get(label[name]) }]));
+	return { label, settings };
+}
+
+/**
+ * A unit's pi-context-memory.json: the run's session settings over whatever the file already holds. With no session
+ * settings the unit gets no file, so it runs on the package's defaults, as before the flag was wired.
+ */
+export function writeUnitSettings(agentDir, settings) {
+	if (!Object.keys(settings).length) return;
+	const file = join(agentDir, "pi-context-memory.json");
+	const current = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+	mkdirSync(agentDir, { recursive: true });
+	writeFileSync(file, `${JSON.stringify({ ...current, ...settings })}\n`);
 }
 
 /** The note request of 0.5.3 and later, then that of v0.5.2 and earlier, which the quotation repair still carries. */
@@ -481,6 +527,8 @@ async function worker() {
 			toolCallDeclined: writer.toolCallDeclined ?? false,
 			usage: writer.usage ?? null,
 			pauseMs: after.lastCompaction?.pauseMs ?? null,
+			// /compaction-status's content-free reduction counts over the branch, null while previewReduction is off.
+			reduction: after.reduction ?? null,
 			...(action.provider === "codex" ? { codexResponses: responseItems } : {}),
 			...(action.provider === "relay" ? { relayResponses: responseItems } : {}),
 		};
@@ -553,6 +601,9 @@ async function worker() {
 			usage,
 			roundUsage,
 			retrieval,
+			reduction: after.reduction ?? null,
+			// Estimated tokens of the excerpts the preview appended to this probe's requests: page-back, as retrieval is.
+			excerptTokens: after.excerpts?.tokens ?? 0,
 		};
 	}
 	session.dispose();
@@ -584,14 +635,9 @@ async function parent() {
 	const label = argument("--label", "run");
 	const unitMinutes = Number(argument("--unit-minutes", "10"));
 	if (!(unitMinutes > 0)) throw new Error("--unit-minutes must be positive");
-	// The session settings a run is labelled with, such as previewReduction=off for a control, and the label of the
-	// control run a candidate compares with. Recorded as given; the units run with the package's own settings.
-	const sessionSettings = {};
-	for (const item of argument("--session-settings", "").split(",").filter(Boolean)) {
-		const match = item.match(/^([A-Za-z][\w.-]*)=([^=]+)$/);
-		if (!match) throw new Error("--session-settings takes name=value pairs separated by commas");
-		sessionSettings[match[1]] = match[2];
-	}
+	// The preview switches a run sets, such as previewReduction=on for a candidate, written into every unit's
+	// pi-context-memory.json, and the label of the control run a candidate compares with.
+	const { label: sessionSettings, settings: unitSettings } = parseSessionSettings(argument("--session-settings", ""));
 	const control = argument("--control", "") || null;
 	if (!["writer", "probes", "smoke", "repair"].includes(mode)) throw new Error("--mode must be writer, probes, smoke or repair");
 	if (!["loopback", "deepseek", "deepseek-local", "codex", "relay"].includes(provider)) throw new Error("--provider must be loopback, deepseek, deepseek-local, codex or relay");
@@ -657,6 +703,7 @@ async function parent() {
 		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
 		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
 		if (codexAccount) writeCodexPlaceholder(agentDir, codexAccount);
+		writeUnitSettings(agentDir, unitSettings);
 		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl, relay } : {}) })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 		let stdout = "";
@@ -815,7 +862,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "writer" || mode === "repair" ? { attempts } : {}), ...(mode === "probes" ? { chainAttempts } : {}), concurrency, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, sessionSettings, control, limits: shown };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : {}), thinking, cache, ...(mode === "writer" || mode === "repair" ? { attempts } : {}), ...(mode === "probes" ? { chainAttempts } : {}), concurrency, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, sessionSettings, unitSettings: Object.keys(unitSettings).length ? unitSettings : null, control, limits: shown };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.
@@ -1005,7 +1052,7 @@ async function parent() {
 				await warm(fixture, k, file);
 				const results = await compactAt(fixture, k, provider, file);
 				results.forEach((result, attempt) => {
-					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...measure, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], path: result.path ?? null, pauseMs: result.pauseMs, usage: result.usage, crashed: result.crashed ?? false, journal: result.journal ?? [], note: noteRow(fixture, k, result.note) };
+					const row = { fixture: id, cut: k + 1, attempt: attempt + 1, ...measure, ok: result.ok, code: result.code, writerCalls: result.writerCalls, repairKind: result.repairKind, quotations: result.quotations, scope: result.scope ?? null, schema: result.schema ?? null, quotationRepair: result.quotationRepair, toolCalls: result.toolCalls ?? 0, toolCallDeclined: result.toolCallDeclined ?? false, calls: result.calls ?? [], path: result.path ?? null, pauseMs: result.pauseMs, usage: result.usage, reduction: result.reduction ?? null, crashed: result.crashed ?? false, journal: result.journal ?? [], note: noteRow(fixture, k, result.note) };
 					compactions.push(row);
 					record("compactions.jsonl", row);
 				});
@@ -1033,7 +1080,7 @@ async function parent() {
 					calls[condition].questions++;
 					for (const op of ["search", "read", "list", "other"]) calls[condition][op] += result.history?.[op] ?? 0;
 					(probe.evidence.some((entry) => cited.has(entry)) || probe.expected.type === "unknown" ? missed[condition].cited : missed[condition].uncited).push(score);
-					const row = { probe: probe.id, kind: probe.kind, fixture: id, cut: k + 1, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage, roundUsage: result.roundUsage ?? [], retrieval: result.retrieval ?? [], journal: result.journal ?? [] };
+					const row = { probe: probe.id, kind: probe.kind, fixture: id, cut: k + 1, condition, activeTools: result.activeTools, outcome: score.outcome, supported: score.supported, rounds: result.rounds, roundLimit: result.roundLimit, history: result.history, code: result.code, crashed: result.crashed ?? false, usage: result.usage, roundUsage: result.roundUsage ?? [], retrieval: result.retrieval ?? [], reduction: result.reduction ?? null, excerptTokens: result.excerptTokens ?? 0, journal: result.journal ?? [] };
 					probeRows.push(row);
 					record("probes.jsonl", row);
 					record("answers.jsonl", { probe: probe.id, condition, reply: result.reply ?? null, error: result.error ?? null, errorMessage: result.errorMessage ?? null });
@@ -1062,5 +1109,16 @@ async function parent() {
 	if (!existsSync(join(runDir, "summary.json"))) process.exit(1);
 }
 
-if (args.includes("--worker")) await worker();
-else await parent();
+/** A run starts only when this file is the script node was given; a test imports the helpers above without one. */
+function invoked() {
+	try {
+		return realpathSync(process.argv[1]) === realpathSync(script);
+	} catch {
+		return false;
+	}
+}
+
+if (invoked()) {
+	if (args.includes("--worker")) await worker();
+	else await parent();
+}

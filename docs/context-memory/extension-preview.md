@@ -443,6 +443,52 @@ prefix and notes checkpoints cover what their candidate or notes saw.
 Synthetic execution establishes lifecycle behavior; natural hit rates, provider
 quality and cache economics still require evidence.
 
+## Optional reduction and excerpt experiments
+
+The unreleased 0.6.0 work adds two further opt-in switches beside
+`previewPreparation`, each off by default and disabled by any invalid value
+without affecting requests or the compaction failure contract:
+
+```json
+{
+  "previewReduction": { "enabled": true },
+  "previewExcerpts": { "enabled": true }
+}
+```
+
+With `previewReduction` on, the request's projection replaces two kinds of
+tool results with one line each — an earlier read of a file that was read
+again later, and a consumed result after which a later turn completed — naming
+the tool, its target, the first line of its result and the record ID, which
+`context_history` reads back in full. The reduction is recomputed from the
+records on every request and never stored: the session file is untouched, the
+same records always produce the same bytes, appending turns never un-reduces
+an entry, and an entry is first reduced only when little follows it on the
+branch or after a long recorded idle gap, so the provider's cached prefix
+stays stable. User messages, assistant text, checkpoint summaries, error
+results and the sole evidence of a committed fact are never reduced, tool
+calls stay paired with their results, and a failed compaction blocks exactly
+as before. `/compaction-status` reports content-free counts under
+`reduction`.
+
+With `previewExcerpts` on, when the user's prompt names an identifier-shaped
+term that only compacted or reduced entries hold, the request ending with
+that prompt gains one short original excerpt at its end, labelled as
+historical evidence with its record ID and role, never as an instruction. At
+most two excerpts of at most 200 estimated tokens each are appended, a
+deterministic secret filter withholds a matching record entirely and names
+only its ID, nothing is written to the session, and every earlier message is
+unchanged, so the cached prefix is untouched. `/compaction-status` reports
+counts under `excerpts`.
+
+`context_history` results now state `readTokens`, the estimated cost of a
+full read, and mark hits whose entries are already in context; `read`
+accepts `detail: "low"` for a bounded opening with the full cost stated, and
+`full` remains the default. Synthetic regressions and scenarios establish
+these mechanics; token savings and recovery on a real provider are
+unmeasured, and both switches stay off until that measurement supports a
+default.
+
 ### Work notes (arm B)
 
 Arm B has its own switch, also off by default:

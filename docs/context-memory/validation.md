@@ -1,5 +1,40 @@
 # Validation record
 
+## 0.6.0 wave 2: rendered-note candidates, bench candidate wiring and the first reduction comparison, 2026-10-22 UTC
+
+WP3 lands behind `previewRendering`, off by default: the model-facing summary
+is derived from the stored note and lineage by a pure function, the stored
+rendering stays byte for byte, and both recovery guards accept and require
+that same derivation, refusing a tampered or stored-only rendering while a
+candidate is active. The bench's `--session-settings` now writes the named
+switches into each unit's `pi-context-memory.json` (fail-closed on unknown
+names), which produced the first candidate-versus-control comparison. All
+evidence is synthetic under `PI_OFFLINE=1` with a zero model budget.
+
+| Command | Result and exit code |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs ci`, commit 3b89f30 | Exit 0, all 20 steps: fingerprint unchanged, acceptance 1.3.0/1.2.0/1.1.0, strict scenarios, release prepare, full offline evaluation. An earlier run on the pre-fix merge failed in `context-memory-check`: WP3's `rendering` field in the settings reader's return broke the bench settings test's deep-equal expectations — both sides green alone in their worktrees, caught only by the integrated run and fixed by extending the expected shape |
+| Rendering measurement (committed in `context-memory-preview-render.test.ts`) | Z1-shaped synthetic summaries at 1/10/40 checkpoints, bytes: current 728/1,860/2,443; `folded-failed-paths` ±0/−7.1%/−5.4%; `lineage-once` ±0/−27.5%/−36.7%; `cited-roles` +63 bytes constant (about 7 bytes per source tag), the M7 cost. At one checkpoint the reducing candidates change nothing, as there is no previous checkpoint or lineage |
+| Reduction comparison, loopback, P1 to P4, equal-length labels (run by the implementing agent; four runs, exit 0 each) | Writer `totalInput` fell 46.8% with `previewReduction=on` (640,138 to 340,330; per cut −10% to −78%, with P1 cut 3 and P3 cut 3 unchanged because their reducible entries precede the previous checkpoint); warm-up requests −56.2%. Probes: 11 of 11 committed in both runs, request input identical, 0 of 216 outcomes changed; 17 of 97 reads named a reduced entry |
+
+Findings recorded for follow-up:
+
+- The report's net column measures checkpoint saving minus page-back and
+  cannot see a reduction's saving, which shows only as lower writer and
+  warm-up input; judging WP2 under G9 needs a reduction-saving column
+  (input against the control) minus the page-back of reads naming reduced
+  entries, whose counts exist but whose tokens are not yet split out.
+- Excerpts never fire on the loopback: the gold writer copies each probe's
+  prompt into the note, so every identifier a probe names is already in
+  context; measuring excerpts needs a writer that does not echo the prompts.
+- Loopback token counts shift a few tokens with the output path's length,
+  which enters Pi's system prompt; compared runs use equal-length labels,
+  now stated in the bench README.
+- WP3's projection covers the model-facing request; the writer's session
+  prefix keeps the stored rendering, so the two prefixes' caches diverge
+  while a rendering candidate is on. Extending the projection to the writer
+  prefix is a small change to take together with the candidate decision.
+
 ## 0.6.0 offline implementation: overhead report, deterministic reductions, retrieval candidates, 2026-10-22 UTC
 
 The [v0.6.0 plan](v0.6.0-plan.md)'s WP1, WP2 and WP4 are implemented in the

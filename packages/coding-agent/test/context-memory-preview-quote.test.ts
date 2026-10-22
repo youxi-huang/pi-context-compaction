@@ -19,9 +19,9 @@ import type { SessionRecord } from "../../compaction-core/src/records.ts";
 import { diagnoseSchema, schemaCounts, schemaFailureMessage } from "../../compaction-core/src/schema-diagnostics.ts";
 import { diagnoseScope } from "../../compaction-core/src/scope-diagnostics.ts";
 import { applySourcesRepair, SOURCES_REPAIR_RULES } from "../../compaction-core/src/sources-repair.ts";
+import { validateWorkNote } from "../../compaction-core/src/work-notes.ts";
 import { DEFAULT_MEMORY_CONFIG, SESSION_WRITER, textTokens } from "../src/extensions/context-memory/config.ts";
 import { type MemoryNote, type NoteFact, noteSchema, validateNote } from "../src/extensions/context-memory/notes.ts";
-import { validateWorkNote } from "../src/extensions/context-memory/preview/work-notes.ts";
 import {
 	type PreviewWriterRegistry,
 	quotableOriginals,
@@ -698,7 +698,7 @@ describe("work-note quotation feedback", () => {
 		expect(() =>
 			validateWorkNote(
 				{ state: [{ text: "Port rule.", sources: ["u3"], quote: "Keep the service on port 4317." }] },
-				branch,
+				asRecords(branch),
 			),
 		).toThrow(
 			"CONTEXT_NOTE_QUOTE: a quoted source does not match the original text\nstate[0].quote is not in u3; the exact text is in u1 (user).",

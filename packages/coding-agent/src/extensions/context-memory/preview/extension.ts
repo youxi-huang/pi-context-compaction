@@ -1,4 +1,10 @@
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
+import {
+	validateWorkNote,
+	WORK_NOTE_GUIDELINE,
+	workNoteSchema,
+} from "../../../../../compaction-core/src/work-notes.ts";
 import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
 import { freezeHistory, queryHistory } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
@@ -9,7 +15,6 @@ import { PreviewFailureStore } from "./failure-store.ts";
 import { listHistory, previewHistorySchema, priceSearch, readLowDetail } from "./history-view.ts";
 import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
-import { validateWorkNote, WORK_NOTE_GUIDELINE, workNoteSchema } from "./work-notes.ts";
 import { resolveWriterModel } from "./writer.ts";
 
 /** Output of a command the user asked for: the UI, or stdout without one. */
@@ -190,7 +195,8 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 		async execute(_id, value, signal, _update, ctx) {
 			signal?.throwIfAborted();
 			controller.assertReady(ctx);
-			validateWorkNote(value, ctx.sessionManager.getBranch());
+			// Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts).
+			validateWorkNote(value, ctx.sessionManager.getBranch() as unknown as readonly SessionRecord[]);
 			pi.appendEntry(CONTEXT_NOTE_TYPE, structuredClone(value));
 			return {
 				content: [{ type: "text", text: "Work note saved; original messages remain authoritative." }],

@@ -21,8 +21,9 @@ import {
 	type SessionHeader,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// The preview's validation walk now lives in the core copy (v0.7.0 WP2 step 3); the spies must target it.
+import * as notes from "../../compaction-core/src/notes.ts";
 import { DEFAULT_MEMORY_CONFIG } from "../src/extensions/context-memory/config.ts";
-import * as notes from "../src/extensions/context-memory/notes.ts";
 import type { PreviewSession } from "../src/extensions/context-memory/preview/contracts.ts";
 import { PreviewMemoryController } from "../src/extensions/context-memory/preview/controller.ts";
 import * as failureIo from "../src/extensions/context-memory/preview/failure-io.ts";

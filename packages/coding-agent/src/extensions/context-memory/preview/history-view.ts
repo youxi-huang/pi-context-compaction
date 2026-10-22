@@ -1,10 +1,14 @@
 import { createHash } from "node:crypto";
 import type { SessionEntry, SessionProjection } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { hashEntries, noteSections, sourceRole, sourceText } from "../../../../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import { textTokens } from "../config.ts";
 import { type HistoryExcerpt, type HistoryPage, type HistorySnapshot, queryHistory } from "../history.ts";
 import { CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
-import { hashEntries, noteSections, sourceRole, sourceText } from "../notes.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecord = (entry: SessionEntry): SessionRecord => entry as unknown as SessionRecord;
 
 /** Note sections as recorded by committed checkpoints, plus edits and errors read from tool records. */
 export const HISTORY_VIEW_KINDS = [...noteSections, "edits", "errors"] as const;
@@ -45,7 +49,7 @@ export function inContextEntries(
  * refuses, one without text or with an ID the query schema rejects, costs nothing to read.
  */
 export function readTokens(snapshot: HistorySnapshot, entry: SessionEntry, position: number): number {
-	if (!sourceText(entry) || entry.id.length > 64) return 0;
+	if (!sourceText(asRecord(entry)) || entry.id.length > 64) return 0;
 	const single: HistorySnapshot = { ...snapshot, entries: [entry] };
 	let tokens = 0;
 	let cursor: string | undefined;
@@ -223,7 +227,7 @@ export function viewTerms(query: string): string[] {
 }
 
 function excerpt(entry: SessionEntry, terms: readonly string[]): Excerpt {
-	const text = sourceText(entry);
+	const text = sourceText(asRecord(entry));
 	const lower = text.toLocaleLowerCase();
 	const hits = terms.map((term) => lower.indexOf(term)).filter((hit) => hit >= 0);
 	const offset = Math.max(0, (hits.length ? Math.min(...hits) : 0) - 80);
@@ -282,7 +286,7 @@ function noteItems(entries: readonly SessionEntry[], kind: NoteKind, terms: read
 						...(quote ? { quote } : {}),
 						sources: sources.map((id) => ({
 							entryId: id,
-							role: sourceRole(entries[position.get(id)!]),
+							role: sourceRole(asRecord(entries[position.get(id)!])),
 							position: position.get(id)!,
 						})),
 						...(supersedes.length ? { supersedes } : {}),
@@ -396,10 +400,12 @@ function newest(item: ViewDraft): number {
 
 function searchable(item: ViewDraft, entries: readonly SessionEntry[]): string {
 	if (item.kind === "edits") return `${item.tool} ${item.path}`;
-	if (item.kind === "errors") return `${item.tool ?? ""} ${sourceText(entries[item.position])}`;
-	return [item.summary, item.quote ?? "", ...item.sources.map((source) => sourceText(entries[source.position]))].join(
-		"\n",
-	);
+	if (item.kind === "errors") return `${item.tool ?? ""} ${sourceText(asRecord(entries[item.position]))}`;
+	return [
+		item.summary,
+		item.quote ?? "",
+		...item.sources.map((source) => sourceText(asRecord(entries[source.position]))),
+	].join("\n");
 }
 
 /** Prices drafts against one snapshot, reading each entry's cost once. */
@@ -546,7 +552,7 @@ export function readLowDetail(
 	if (!request.entryId) throw new Error("HISTORY_ENTRY_REQUIRED");
 	const position = snapshot.entries.findLastIndex((entry) => entry.id === request.entryId);
 	const entry = snapshot.entries[position];
-	const text = entry ? sourceText(entry) : "";
+	const text = entry ? sourceText(asRecord(entry)) : "";
 	if (!entry || !text) throw new Error("HISTORY_SCOPE_DENIED: entry is not in this readable scope");
 	const head = longestFitting(
 		text,
@@ -565,7 +571,7 @@ export function readLowDetail(
 			{
 				entryId: entry.id,
 				parentId: entry.parentId,
-				role: sourceRole(entry),
+				role: sourceRole(asRecord(entry)),
 				position,
 				offset: 0,
 				text: head,

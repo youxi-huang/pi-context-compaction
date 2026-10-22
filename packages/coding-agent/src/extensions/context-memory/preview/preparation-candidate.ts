@@ -1,8 +1,12 @@
 import type { ThinkingLevel } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { type MemoryNote, noteBytes, sourceText, validateNote } from "../../../../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import { type NoteBudget, storedNoteLimit } from "../config.ts";
 import { hashEntries } from "../identity.ts";
-import { type MemoryNote, noteBytes, sourceText, validateNote } from "../notes.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecord = (entry: SessionEntry): SessionRecord => entry as unknown as SessionRecord;
 
 type Frozen<T> = T extends object ? { readonly [Key in keyof T]: Frozen<T[Key]> } : T;
 
@@ -215,7 +219,7 @@ export function freezePreparationInput(input: PreparationInput): PreparationSnap
 			coveredThrough: input.coveredThrough,
 			sourceHash: hashEntries(sources),
 			entryIds: sources.map((entry) => entry.id),
-			originalIds: sources.filter((entry) => sourceText(entry)).map((entry) => entry.id),
+			originalIds: sources.filter((entry) => sourceText(asRecord(entry))).map((entry) => entry.id),
 		},
 		userHorizon: { entryIds: horizon, hash: hashEntries(horizon) },
 		writer: writerIdentity(input.writer),
@@ -243,7 +247,7 @@ export function finalizePreparation(input: PreparationSnapshot, result: Preparat
 		throw new Error("CONTEXT_PREPARATION_PROVENANCE: missing or ambiguous call accounting links");
 	const note = validateNote(
 		structuredClone(result.note),
-		structuredClone(input.sources) as SessionEntry[],
+		structuredClone(input.sources) as unknown as SessionRecord[],
 		storedNoteLimit(input.noteBudget),
 	);
 	const noteHash = hashEntries([note]);

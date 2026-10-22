@@ -1,6 +1,14 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import {
+	LINE_BREAKS,
+	type MemoryNote,
+	type NoteFact,
+	noteSections,
+	renderNote,
+	sourceRole,
+} from "../../../../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import { isRecord } from "../identity.ts";
-import { LINE_BREAKS, type MemoryNote, type NoteFact, noteSections, renderNote, sourceRole } from "../notes.ts";
 
 /**
  * Rendered-note candidates (v0.6.0 WP3).
@@ -90,7 +98,8 @@ const LINEAGE_SENTENCE_BOUNDARY = /(?<=[.!?。！？…]) /u;
 /** The role tag of one cited record, computed from the records; never taken from the note. */
 export function citedRole(entry: SessionEntry | undefined): string {
 	if (!entry) return "unknown";
-	const role = sourceRole(entry);
+	// Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts).
+	const role = sourceRole(entry as unknown as SessionRecord);
 	if (role === "user") return "user";
 	if (role === "assistant") return "assistant";
 	if (role === "toolResult" || role === "bashExecution") return "tool";

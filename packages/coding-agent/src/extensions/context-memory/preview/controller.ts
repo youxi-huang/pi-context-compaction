@@ -18,15 +18,6 @@ import {
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
 import {
-	applyReduction,
-	declaredCacheLifetimeMs,
-	type ReductionView,
-	reduceRecords,
-} from "../../../../../compaction-core/src/reduction.ts";
-import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
-import { PROJECT_CODES } from "../events.ts";
-import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
-import {
 	checkpointLineage,
 	compactedSourceTokens,
 	hashEntries,
@@ -37,7 +28,26 @@ import {
 	shrinkLineage,
 	validateMemoryCheckpoints,
 	validateNote,
-} from "../notes.ts";
+} from "../../../../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
+import {
+	applyReduction,
+	declaredCacheLifetimeMs,
+	type ReductionView,
+	reduceRecords,
+} from "../../../../../compaction-core/src/reduction.ts";
+import {
+	assertUserMessages,
+	carriedUserMessages,
+	coveredUserMessages,
+	mergeWorkNotes,
+	renderUserMessages,
+	workNotes,
+	writerSources,
+} from "../../../../../compaction-core/src/work-notes.ts";
+import { type MemoryConfig, memoryBudget, SESSION_WRITER, selectNoteBudget, textTokens } from "../config.ts";
+import { PROJECT_CODES } from "../events.ts";
+import { CONTEXT_KEEP_NONE, CONTEXT_MEMORY_KIND, CONTEXT_MEMORY_VERSION, isRecord } from "../identity.ts";
 import { PREVIEW_BUILD_ID } from "./build.ts";
 import type { CallJournal } from "./call-journal.ts";
 import { PRIMARY_PI_VERSION, SUPPORTED_PI_LABEL, SUPPORTED_PI_VERSIONS, supportsPi } from "./compatibility.ts";
@@ -58,15 +68,6 @@ import { freezePreparationInput, type PreparationSubmission, reusablePrefix } fr
 import { projectSummary, RENDERING_OFF, type RenderingSwitch } from "./render-projection.ts";
 import { setStatusLine } from "./status-line.ts";
 import {
-	assertUserMessages,
-	carriedUserMessages,
-	coveredUserMessages,
-	mergeWorkNotes,
-	renderUserMessages,
-	workNotes,
-	writerSources,
-} from "./work-notes.ts";
-import {
 	modelName,
 	resolveWriterModel,
 	sumMemoryUsage,
@@ -76,6 +77,13 @@ import {
 	writerContractHashes,
 	writerReasoning,
 } from "./writer.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecords = (branch: readonly SessionEntry[]): readonly SessionRecord[] =>
+	branch as unknown as readonly SessionRecord[];
+/** The host's own entries back from a core pass-through that returns a subset of what it was given (records.ts). */
+const asEntries = (records: readonly SessionRecord[]): readonly SessionEntry[] =>
+	records as unknown as readonly SessionEntry[];
 
 const PREVIEW_CODES = new Set([
 	"CONTEXT_PREVIEW_UNSUPPORTED",
@@ -212,7 +220,7 @@ function fittedSummary(
 	limit: number,
 	userMessages = "",
 ): string | undefined {
-	let lineage = checkpointLineage(branch);
+	let lineage = checkpointLineage(asRecords(branch));
 	let summary = renderNote(note, lineage) + userMessages;
 	while (lineage.length && textTokens(summary) + retainedTokens > limit) {
 		lineage = shrinkLineage(lineage);
@@ -326,7 +334,7 @@ export function assertPreviewSession(
 ): ReturnType<typeof latestMemory> {
 	const reason = unsupportedReason(session, version);
 	if (reason) throw new Error(UNSUPPORTED_ERRORS[reason]);
-	const sources = branch ?? session.getBranch();
+	const sources = asRecords(branch ?? session.getBranch());
 	const latest = validateMemoryCheckpoints(sources, onSerializedEntry);
 	assertUserMessages(sources);
 	return latest;
@@ -502,7 +510,7 @@ export class PreviewMemoryController {
 		if (!this.config || !ctx.model || !this.preparation) throw new Error("CONTEXT_NO_MODEL_OR_SOURCE");
 		const model = resolveWriterModel(this.config, ctx.modelRegistry, ctx.model);
 		const branch = ctx.sessionManager.getBranch();
-		const previous = latestMemory(branch);
+		const previous = latestMemory(asRecords(branch));
 		const projection = ctx.sessionManager.buildSessionProjection();
 		const budget = memoryBudget(ctx.model, this.config);
 		const cut = chooseCut(branch, budget.recentTokens, projection);
@@ -529,7 +537,7 @@ export class PreviewMemoryController {
 			noteBudget: selectNoteBudget(
 				this.config,
 				budget.threshold,
-				compactedSourceTokens(branch.slice(0, cut).filter((entry) => active.has(entry.id))),
+				compactedSourceTokens(asRecords(branch.slice(0, cut).filter((entry) => active.has(entry.id)))),
 				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
 			),
 			customInstructions,
@@ -560,8 +568,8 @@ export class PreviewMemoryController {
 			const branch = structuredClone(ctx.sessionManager.getBranch());
 			const leafId = ctx.sessionManager.getLeafId();
 			if (!leafId) return;
-			const previous = latestMemory(branch);
-			const uncovered = writerSources(branch, previous);
+			const previous = latestMemory(asRecords(branch));
+			const uncovered = asEntries(writerSources(asRecords(branch), previous));
 			const input = freezePreparationInput({
 				...submission,
 				branch,
@@ -579,7 +587,7 @@ export class PreviewMemoryController {
 				hasConfiguredAuth: registry.hasConfiguredAuth.bind(registry),
 				streamSimple: registry.streamSimple.bind(registry),
 			};
-			const increments = workNotes(branch, previous?.memory.coveredThrough).map((item) => item.note);
+			const increments = workNotes(asRecords(branch), previous?.memory.coveredThrough).map((item) => item.note);
 			// The prepared writer call reads the same reduced prefix the session's own requests carry (G4).
 			const reductionView = this.reducedView(branch, ctx.model);
 			const messages = structuredClone(
@@ -674,7 +682,7 @@ export class PreviewMemoryController {
 			compactCannotClear = this.configError !== undefined || !this.config;
 			try {
 				assertPreviewSession(session, this.hostVersion);
-				const latest = latestMemory(session.getBranch());
+				const latest = latestMemory(asRecords(session.getBranch()));
 				checkpointId = latest?.entry.id;
 				// The conditions recover() checks before its readback: a staged checkpoint at the leaf and a record.
 				const leaf = session.getLeafEntry();
@@ -1220,7 +1228,7 @@ export class PreviewMemoryController {
 			let firstKeptEntryId = cut < branch.length ? branch[cut].id : CONTEXT_KEEP_NONE;
 			let coveredIndex = branch.length - 1;
 			// Notes kept after an earlier prefix checkpoint are still candidates for the next one.
-			const notes = workNotes(branch, previous?.memory.coveredThrough);
+			const notes = workNotes(asRecords(branch), previous?.memory.coveredThrough);
 			const increments = notes.map((item) => item.note);
 			const activeIds = new Set(
 				projection.entries.filter((entry) => entry.messages.length > 0).map((entry) => entry.sourceEntry.id),
@@ -1229,7 +1237,7 @@ export class PreviewMemoryController {
 			const policy = selectNoteBudget(
 				this.config,
 				budget.threshold,
-				compactedSourceTokens(released),
+				compactedSourceTokens(asRecords(released)),
 				previous ? Math.ceil(noteBytes(previous.memory.note) / 3) : 0,
 			);
 			const projectedMessages = [...projection.messages];
@@ -1266,7 +1274,7 @@ export class PreviewMemoryController {
 			const systemTokens = textTokens(ctx.getSystemPrompt());
 			const beforeTokens =
 				systemTokens + projection.messages.reduce((sum, message) => sum + estimateTokens(message), 0);
-			let userMessages: SessionEntry[] = [];
+			let userMessages: readonly SessionRecord[] = [];
 			/**
 			 * D16: commit `note` for the prefix through `end` and keep every later original verbatim. Only when the cut
 			 * releases nothing uncovered, the context shrinks and the result fits within `share` of the threshold.
@@ -1276,7 +1284,7 @@ export class PreviewMemoryController {
 				note: MemoryNote,
 				end: number,
 				share: number,
-				users: SessionEntry[] = [],
+				users: readonly SessionRecord[] = [],
 			): NotesFallback | undefined => {
 				const start = prefixCut(branch, projection, end, cut);
 				if (start === undefined) return "cut";
@@ -1310,11 +1318,16 @@ export class PreviewMemoryController {
 					const end = notes[notes.length - 1].index;
 					const merged = mergeWorkNotes(previous?.memory.note, notes);
 					try {
-						notesNote = merged && validateNote(merged, branch.slice(0, end + 1), policy.hardTokens);
+						notesNote = merged && validateNote(merged, asRecords(branch.slice(0, end + 1)), policy.hardTokens);
 					} catch {
 						notesNote = undefined;
 					}
-					const users = coveredUserMessages(branch, activeIds, end, carriedUserMessages(previous?.entry));
+					const users = coveredUserMessages(
+						asRecords(branch),
+						activeIds,
+						end,
+						carriedUserMessages(previous?.entry),
+					);
 					// The turn of the last note stays verbatim; if that leaves half the threshold or more, a writer call is
 					// worth more than a commit that barely compacts.
 					notesFallback = notesNote ? commitPrefix(notesNote, end, 0.5, users) : "merge";
@@ -1328,7 +1341,7 @@ export class PreviewMemoryController {
 						...reused.written,
 						note: validateNote(
 							structuredClone(reused.written.note),
-							branch.slice(0, coveredIndex + 1),
+							asRecords(branch.slice(0, coveredIndex + 1)),
 							policy.hardTokens,
 						),
 					}
@@ -1355,7 +1368,7 @@ export class PreviewMemoryController {
 					sessionThinkingLevel: sessionWriter ? ctx.thinkingLevel : undefined,
 					previous: previous?.memory.note,
 					increments,
-					uncovered: writerSources(branch, previous),
+					uncovered: asEntries(writerSources(asRecords(branch), previous)),
 					branch,
 					noteTokens: policy.hardTokens,
 					baseNoteTokens: policy.baseTokens,

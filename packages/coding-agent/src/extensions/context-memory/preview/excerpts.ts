@@ -1,9 +1,10 @@
 import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { sourceRole, sourceText } from "../../../../../compaction-core/src/notes.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import { textTokens } from "../config.ts";
 import { isRecord } from "../identity.ts";
-import { sourceRole, sourceText } from "../notes.ts";
 import { missing, readBoundedFile } from "./failure-io.ts";
 import { type InContext, longestFitting } from "./history-view.ts";
 import { type PreviewSwitch, previewSwitch } from "./preparation.ts";
@@ -15,6 +16,9 @@ import { type PreviewSwitch, previewSwitch } from "./preparation.ts";
  * model call, no clock, nothing stored. The bounds below are the plan's proposal, to be confirmed by the
  * unneeded-excerpt column.
  */
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecord = (entry: SessionEntry): SessionRecord => entry as unknown as SessionRecord;
 
 /** At most this many records, withheld ones included, are named after one prompt. */
 export const EXCERPT_MAX_COUNT = 2;
@@ -202,7 +206,7 @@ function fitted(entry: SessionEntry, text: string, term: string, at: number): Ex
 	let start = Math.max(0, at - EXCERPT_LEAD_CHARS);
 	const code = text.charCodeAt(start);
 	if (code >= 0xdc00 && code <= 0xdfff) start++;
-	const base = { entryId: entry.id, role: sourceRole(entry), term, offset: start };
+	const base = { entryId: entry.id, role: sourceRole(asRecord(entry)), term, offset: start };
 	if (textTokens(excerptLine({ ...base, text: "" })) > EXCERPT_MAX_TOKENS) return undefined;
 	const window = longestFitting(
 		text,
@@ -232,7 +236,7 @@ export function selectExcerpts(request: ExcerptRequest): ExcerptAppend | undefin
 	const textAt = (index: number) => {
 		let text = texts.get(index);
 		if (text === undefined) {
-			text = sourceText(branch[index]);
+			text = sourceText(asRecord(branch[index]));
 			texts.set(index, text);
 		}
 		return text;
@@ -295,7 +299,8 @@ export function unusedExcerpts(appended: readonly AppendedExcerpt[], branch: rea
 			const entry = branch[position];
 			if (entry.type !== "message") continue;
 			if (entry.message.role === "user") break;
-			if (entry.message.role === "assistant" && exactOccurrence(sourceText(entry), entryId) >= 0) return false;
+			if (entry.message.role === "assistant" && exactOccurrence(sourceText(asRecord(entry)), entryId) >= 0)
+				return false;
 		}
 		return true;
 	}).length;

@@ -17,6 +17,18 @@ import {
 	removeNoteEnvelope,
 } from "../../../../../compaction-core/src/note-envelope.ts";
 import {
+	type MemoryNote,
+	NoteBudgetError,
+	noteBytes,
+	noteSchema,
+	noteSections,
+	oneLineNote,
+	sourceRole,
+	sourceText,
+	validateNote,
+	validateNoteContent,
+} from "../../../../../compaction-core/src/notes.ts";
+import {
 	diagnoseQuotes,
 	type QuoteCounts,
 	type QuoteDiagnosis,
@@ -49,22 +61,11 @@ import {
 import { MAX_NOTE_TOKENS, type MemoryConfig, SESSION_WRITER, textTokens } from "../config.ts";
 import { summarizeUsage, type WriterCallRecord } from "../events.ts";
 import { hashEntries, isRecord } from "../identity.ts";
-import {
-	type MemoryNote,
-	NoteBudgetError,
-	noteBytes,
-	noteSchema,
-	noteSections,
-	oneLineNote,
-	sourceRole,
-	sourceText,
-	validateNote,
-	validateNoteContent,
-} from "../notes.ts";
 
 /** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
 const asRecords = (branch: readonly SessionEntry[]): readonly SessionRecord[] =>
 	branch as unknown as readonly SessionRecord[];
+const asRecord = (entry: SessionEntry): SessionRecord => entry as unknown as SessionRecord;
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -170,7 +171,7 @@ function* sourceChunks(entries: readonly SessionEntry[], tokenBudget: number): G
 	let chunk: SourcePart[] = [];
 	let used = 0;
 	for (const entry of entries) {
-		const text = sourceText(entry);
+		const text = sourceText(asRecord(entry));
 		for (let offset = 0; offset < text.length; ) {
 			let part = text.slice(offset, offset + Math.max(512, (tokenBudget - used - 200) * 2));
 			while (textTokens(part) + 100 > tokenBudget && part.length > 1)
@@ -182,7 +183,7 @@ function* sourceChunks(entries: readonly SessionEntry[], tokenBudget: number): G
 				used = 0;
 				continue;
 			}
-			chunk.push({ entryId: entry.id, role: sourceRole(entry), offset, text: part });
+			chunk.push({ entryId: entry.id, role: sourceRole(asRecord(entry)), offset, text: part });
 			used += tokens;
 			offset += part.length;
 			if (used > tokenBudget * 0.85) {
@@ -388,7 +389,11 @@ function referencedEvidence(note: MemoryNote | undefined, branch: readonly Sessi
 	let used = 0;
 	return branch
 		.filter((entry) => referenced.has(entry.id))
-		.map((entry) => ({ entryId: entry.id, role: sourceRole(entry), text: sourceText(entry).slice(0, 1400) }))
+		.map((entry) => ({
+			entryId: entry.id,
+			role: sourceRole(asRecord(entry)),
+			text: sourceText(asRecord(entry)).slice(0, 1400),
+		}))
 		.filter((entry) => {
 			used += textTokens(JSON.stringify(entry));
 			return used <= budget;
@@ -397,8 +402,8 @@ function referencedEvidence(note: MemoryNote | undefined, branch: readonly Sessi
 
 /** An entry as the citation manifest lists it: ID, role and, with `head`, its opening words, whitespace collapsed. */
 function entryOpening(entry: SessionEntry, head: number): string {
-	if (head <= 0) return `${entry.id} ${sourceRole(entry)}`;
-	return `${entry.id} ${sourceRole(entry)}: ${sourceText(entry).replace(/\s+/g, " ").slice(0, head)}`;
+	if (head <= 0) return `${entry.id} ${sourceRole(asRecord(entry))}`;
+	return `${entry.id} ${sourceRole(asRecord(entry))}: ${sourceText(asRecord(entry)).replace(/\s+/g, " ").slice(0, head)}`;
 }
 
 /**
@@ -407,7 +412,7 @@ function entryOpening(entry: SessionEntry, head: number): string {
  */
 function citableEvidence(note: MemoryNote, options: WriteMemoryOptions): CitableEvidence {
 	const budget = options.noteTokens;
-	const sources = options.uncovered.filter((entry) => sourceText(entry).length > 0);
+	const sources = options.uncovered.filter((entry) => sourceText(asRecord(entry)).length > 0);
 	const active = options.activeRequests ?? [];
 	const entries: string[] = [];
 	let used = 0;
@@ -419,7 +424,7 @@ function citableEvidence(note: MemoryNote, options: WriteMemoryOptions): Citable
 	}
 	return {
 		requests: [
-			...active.map((entry) => ({ entryId: entry.id, text: sourceText(entry) })),
+			...active.map((entry) => ({ entryId: entry.id, text: sourceText(asRecord(entry)) })),
 			...quotableOriginals(sources, active, budget),
 		],
 		cited: referencedEvidence(note, options.branch, budget),
@@ -654,7 +659,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	 */
 	const validateCandidate = (value: unknown, repaired: boolean): MemoryNote => {
 		try {
-			return validateNoteContent(value, options.branch);
+			return validateNoteContent(value, asRecords(options.branch));
 		} catch (error) {
 			if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_INVALID")) {
 				const diagnosis = diagnoseSchema(value);
@@ -817,7 +822,9 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 						? [
 								{
 									sources: item.sources.filter((id) =>
-										sourceText(options.branch.find((entry) => entry.id === id)!).includes(item.quote!),
+										sourceText(asRecord(options.branch.find((entry) => entry.id === id)!)).includes(
+											item.quote!,
+										),
 									),
 									quote: item.quote,
 								},
@@ -856,7 +863,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 					},
 				),
 			);
-			validateNote(repaired, options.branch, options.noteTokens);
+			validateNote(repaired, asRecords(options.branch), options.noteTokens);
 			assertRepairPreserved(candidate, repaired);
 			return repaired;
 		} finally {
@@ -876,7 +883,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 
 function continuationInstruction(options: WriteMemoryOptions): string {
 	if (!options.activeRequests?.length) return "";
-	return `This is an in-task handover after a completed tool batch, not task completion. Preserve progress against the active requests below. nextSteps must include at least one concrete remaining action, including reporting the result if tool work is already complete, and cite the active request it continues. Do not ask the user to restate an available request. These host-selected originals are also valid citation sources:\n${JSON.stringify(options.activeRequests.map((entry) => ({ entryId: entry.id, text: sourceText(entry) })))}`;
+	return `This is an in-task handover after a completed tool batch, not task completion. Preserve progress against the active requests below. nextSteps must include at least one concrete remaining action, including reporting the result if tool work is already complete, and cite the active request it continues. Do not ask the user to restate an available request. These host-selected originals are also valid citation sources:\n${JSON.stringify(options.activeRequests.map((entry) => ({ entryId: entry.id, text: sourceText(asRecord(entry)) })))}`;
 }
 
 async function writeWithFixedWriter(
@@ -947,7 +954,7 @@ async function writeWithSession(
 	const { noteTokens, signal, prefix } = options;
 	const maxTokens = outputBudget(model, noteTokens);
 	if (!prefix) throw new Error("CONTEXT_WRITER_UNAVAILABLE: the session writer needs the current provider context");
-	const sources = options.uncovered.filter((entry) => sourceText(entry).length > 0);
+	const sources = options.uncovered.filter((entry) => sourceText(asRecord(entry)).length > 0);
 	if (sources.length === 0)
 		throw new Error("CONTEXT_NO_NEW_SOURCE: no original evidence available for this checkpoint");
 	// Same estimator Pi uses for context accounting, so images count at their flat estimate, not as base64 text.
@@ -1019,8 +1026,8 @@ export function quotableOriginals(
 	let used = 0;
 	for (let index = sources.length - 1; index >= 0; index--) {
 		const entry = sources[index];
-		if (sourceRole(entry) !== "user" || activeIds.has(entry.id)) continue;
-		const item = { entryId: entry.id, text: sourceText(entry) };
+		if (sourceRole(asRecord(entry)) !== "user" || activeIds.has(entry.id)) continue;
+		const item = { entryId: entry.id, text: sourceText(asRecord(entry)) };
 		const tokens = textTokens(JSON.stringify(item));
 		if (!item.text || used + tokens > budgetTokens) continue;
 		kept.push(item);

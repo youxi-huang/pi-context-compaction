@@ -1,6 +1,8 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
+import { diagnoseQuotes, quoteFeedback } from "../../../../../compaction-core/src/quote-diagnostics.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
 import { CONTEXT_NOTE_TYPE, isRecord } from "../identity.ts";
 import {
 	LINE_BREAKS,
@@ -12,7 +14,6 @@ import {
 	sourceText,
 	validateNote,
 } from "../notes.ts";
-import { diagnoseQuotes, quoteFeedback } from "./quote-diagnostics.ts";
 
 /** Each fact renders as one line, so model-written text cannot open a heading or a section of the checkpoint. */
 const ONE_LINE = `^[^${LINE_BREAKS}]+$`;
@@ -73,7 +74,8 @@ export function validateWorkNote(value: unknown, branch: readonly SessionEntry[]
 	} catch (error) {
 		// The model retries a refused note on its own; tell it where the quoted text actually is.
 		if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
-		const feedback = quoteFeedback(diagnoseQuotes(memory, branch).failures);
+		// Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts).
+		const feedback = quoteFeedback(diagnoseQuotes(memory, branch as unknown as readonly SessionRecord[]).failures);
 		throw new Error(feedback ? `${error.message}\n${feedback}` : error.message);
 	}
 }

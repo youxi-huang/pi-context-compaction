@@ -1,5 +1,8 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
-import { type MemoryNote, noteSections, sourceRole, sourceText } from "../notes.ts";
+// Lifted from the preview into the host-neutral core (v0.7.0 WP2 step 2): the notes import moved
+// to the core's copy, and the host's SessionEntry type import became the specification's
+// structural SessionRecord (records.ts). Logic, bounds and thrown messages are unchanged (rule K2).
+import { type MemoryNote, noteSections, sourceRole, sourceText } from "./notes.ts";
+import type { SessionRecord } from "./records.ts";
 
 /**
  * Why a quotation failed: its exact text sits in another entry; it matches only after spacing and punctuation are
@@ -53,7 +56,7 @@ export function normalizeQuote(text: string): string {
  * Every failing quotation of a schema-valid note, where the validator stops at the first. It decides eligibility
  * for a quotation repair and builds its request and messages; acceptance stays with `validateNote`.
  */
-export function diagnoseQuotes(note: MemoryNote, branch: readonly SessionEntry[]): QuoteDiagnosis {
+export function diagnoseQuotes(note: MemoryNote, branch: readonly SessionRecord[]): QuoteDiagnosis {
 	// Later duplicates win, as in `validateNoteContent`.
 	const byId = new Map(branch.map((entry) => [entry.id, entry]));
 	const text = (id: string): string | undefined => {
@@ -64,7 +67,7 @@ export function diagnoseQuotes(note: MemoryNote, branch: readonly SessionEntry[]
 		const value = sourceText(entry);
 		return value ? [{ entry, text: value }] : [];
 	});
-	let normalized: { entry: SessionEntry; text: string }[] | undefined;
+	let normalized: { entry: SessionRecord; text: string }[] | undefined;
 	const failures: QuoteFailure[] = [];
 	let unreadable = false;
 	for (const section of noteSections) {

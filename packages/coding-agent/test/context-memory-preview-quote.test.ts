@@ -7,23 +7,20 @@ import {
 } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_MEMORY_CONFIG, SESSION_WRITER, textTokens } from "../src/extensions/context-memory/config.ts";
-import { type MemoryNote, type NoteFact, noteSchema, validateNote } from "../src/extensions/context-memory/notes.ts";
 import {
 	diagnoseQuotes,
 	normalizeQuote,
 	quoteCounts,
 	quoteFailureMessage,
 	quoteFeedback,
-} from "../src/extensions/context-memory/preview/quote-diagnostics.ts";
-import { applyQuoteRepair } from "../src/extensions/context-memory/preview/quote-repair.ts";
-import {
-	diagnoseSchema,
-	schemaCounts,
-	schemaFailureMessage,
-} from "../src/extensions/context-memory/preview/schema-diagnostics.ts";
-import { diagnoseScope } from "../src/extensions/context-memory/preview/scope-diagnostics.ts";
-import { applySourcesRepair, SOURCES_REPAIR_RULES } from "../src/extensions/context-memory/preview/sources-repair.ts";
+} from "../../compaction-core/src/quote-diagnostics.ts";
+import { applyQuoteRepair } from "../../compaction-core/src/quote-repair.ts";
+import type { SessionRecord } from "../../compaction-core/src/records.ts";
+import { diagnoseSchema, schemaCounts, schemaFailureMessage } from "../../compaction-core/src/schema-diagnostics.ts";
+import { diagnoseScope } from "../../compaction-core/src/scope-diagnostics.ts";
+import { applySourcesRepair, SOURCES_REPAIR_RULES } from "../../compaction-core/src/sources-repair.ts";
+import { DEFAULT_MEMORY_CONFIG, SESSION_WRITER, textTokens } from "../src/extensions/context-memory/config.ts";
+import { type MemoryNote, type NoteFact, noteSchema, validateNote } from "../src/extensions/context-memory/notes.ts";
 import { validateWorkNote } from "../src/extensions/context-memory/preview/work-notes.ts";
 import {
 	type PreviewWriterRegistry,
@@ -91,6 +88,10 @@ const branch: SessionEntry[] = [
 	user("u3", "The threshold is 15.", "u2"),
 ];
 
+/** Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts). */
+const asRecords = (entries: readonly SessionEntry[]): readonly SessionRecord[] =>
+	entries as unknown as readonly SessionRecord[];
+
 function note(items: Partial<Record<"state" | "reasons" | "instructions", NoteFact[]>>): MemoryNote {
 	return {
 		instructions: items.instructions ?? [],
@@ -107,7 +108,7 @@ describe("quotation diagnostics", () => {
 	it("classifies text cited to the wrong entry, and lists where it is with roles", () => {
 		const diagnosis = diagnoseQuotes(
 			note({ instructions: [{ text: "Port rule.", sources: ["u3"], quote: "Keep the service on port 4317." }] }),
-			branch,
+			asRecords(branch),
 		);
 		expect(diagnosis.unreadable).toBe(false);
 		expect(diagnosis.failures).toEqual([
@@ -125,7 +126,7 @@ describe("quotation diagnostics", () => {
 	it("lists every entry with the exact text, assistant echoes included", () => {
 		const diagnosis = diagnoseQuotes(
 			note({ reasons: [{ text: "Thursday rule.", sources: ["u3"], quote: "\u201Cdeploy only on Thursday\u201D" }] }),
-			branch,
+			asRecords(branch),
 		);
 		expect(diagnosis.failures[0].foundIn).toEqual([
 			{ entryId: "a1", role: "assistant" },
@@ -141,7 +142,7 @@ describe("quotation diagnostics", () => {
 					{ text: "Thursday.", sources: ["u2"], quote: 'Use "deploy only on Thursday" as the ruling.' },
 				],
 			}),
-			branch,
+			asRecords(branch),
 		);
 		expect(diagnosis.failures.map((failure) => [failure.kind, failure.foundIn])).toEqual([
 			["format", [{ entryId: "u1", role: "user" }]],
@@ -158,7 +159,7 @@ describe("quotation diagnostics", () => {
 				],
 				reasons: [{ text: "Port.", sources: ["u2"], quote: "Keep the service on port 4317." }],
 			}),
-			branch,
+			asRecords(branch),
 		);
 		expect(diagnosis.failures.map((failure) => `${failure.section}[${failure.index}]:${failure.kind}`)).toEqual([
 			"reasons[0]:elsewhere",
@@ -168,18 +169,21 @@ describe("quotation diagnostics", () => {
 	});
 
 	it("reports unreadable sources or supersedes, which rule out a quotation repair", () => {
-		expect(diagnoseQuotes(note({ state: [{ text: "x", sources: ["missing"] }] }), branch).unreadable).toBe(true);
+		expect(diagnoseQuotes(note({ state: [{ text: "x", sources: ["missing"] }] }), asRecords(branch)).unreadable).toBe(
+			true,
+		);
 		expect(
-			diagnoseQuotes(note({ state: [{ text: "x", sources: ["u3"], supersedes: ["missing"] }] }), branch).unreadable,
+			diagnoseQuotes(note({ state: [{ text: "x", sources: ["u3"], supersedes: ["missing"] }] }), asRecords(branch))
+				.unreadable,
 		).toBe(true);
-		expect(diagnoseQuotes(note({}), branch)).toEqual({ failures: [], unreadable: false });
+		expect(diagnoseQuotes(note({}), asRecords(branch))).toEqual({ failures: [], unreadable: false });
 	});
 
 	it("caps the listed locations at five", () => {
 		const many = Array.from({ length: 8 }, (_, index) => user(`m${index}`, "Repeated ruling text."));
 		const diagnosis = diagnoseQuotes(
 			note({ state: [{ text: "Repeated.", sources: ["u3"], quote: "Repeated ruling text." }] }),
-			[...branch, ...many],
+			asRecords([...branch, ...many]),
 		);
 		expect(diagnosis.failures[0].foundIn.map((location) => location.entryId)).toEqual(["m0", "m1", "m2", "m3", "m4"]);
 	});
@@ -195,7 +199,7 @@ describe("quotation diagnostics", () => {
 				reasons: [{ text: "Thursday.", sources: ["u3"], quote: "\u201Cdeploy only on Thursday\u201D" }],
 				state: [{ text: "Threshold.", sources: ["u3"], quote: "secret paraphrase" }],
 			}),
-			branch,
+			asRecords(branch),
 		).failures;
 		const message = quoteFailureMessage(quoteCounts(failures));
 		expect(message).toBe(
@@ -419,7 +423,9 @@ describe("preview writer quotation repair", () => {
 			],
 			reasons: [{ text: "Threshold raised.", sources: ["u3"], quote: "The threshold was raised to 15." }],
 		});
-		expect(diagnoseQuotes(proposal, branch).failures.map((failure) => [failure.kind, failure.foundIn])).toEqual([
+		expect(
+			diagnoseQuotes(proposal, asRecords(branch)).failures.map((failure) => [failure.kind, failure.foundIn]),
+		).toEqual([
 			["elsewhere", [{ entryId: "a1", role: "assistant" }]],
 			["absent", []],
 		]);
@@ -521,7 +527,7 @@ describe("preview writer quotation repair", () => {
 	});
 
 	it("requires one answer for each failing fact and nothing else", () => {
-		const failures = diagnoseQuotes(misattributed(), branch).failures;
+		const failures = diagnoseQuotes(misattributed(), asRecords(branch)).failures;
 		const fact = { text: "Port rule.", sources: ["u1"], quote: "Keep the service on port 4317." };
 		expect(() => applyQuoteRepair(misattributed(), failures, { repairs: [] })).toThrow("CONTEXT_NOTE_INVALID");
 		expect(() => applyQuoteRepair(misattributed(), failures, repairOf(fact, "state", 0))).toThrow(
@@ -715,13 +721,13 @@ describe("preview writer scope diagnostics", () => {
 	});
 
 	it("counts invented IDs and unreadable entries by kind, never the IDs", () => {
-		expect(diagnoseScope(outOfScope, scoped)).toEqual({
+		expect(diagnoseScope(outOfScope, asRecords(scoped))).toEqual({
 			missing: 2,
 			unreadable: 1,
 			inSupersedes: 2,
 			unreadableKinds: { thinking_level_change: 1 },
 		});
-		expect(diagnoseScope(note({}), scoped)).toEqual({
+		expect(diagnoseScope(note({}), asRecords(scoped))).toEqual({
 			missing: 0,
 			unreadable: 0,
 			inSupersedes: 0,

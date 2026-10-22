@@ -7,8 +7,9 @@ import {
 	type MemoryNote,
 	validateNoteContent,
 } from "../../packages/coding-agent/src/extensions/context-memory/notes.ts";
-import { diagnoseQuotes } from "../../packages/coding-agent/src/extensions/context-memory/preview/quote-diagnostics.ts";
-import { applyQuoteRepair } from "../../packages/coding-agent/src/extensions/context-memory/preview/quote-repair.ts";
+import { diagnoseQuotes } from "../../packages/compaction-core/src/quote-diagnostics.ts";
+import { applyQuoteRepair } from "../../packages/compaction-core/src/quote-repair.ts";
+import type { SessionRecord } from "../../packages/compaction-core/src/records.ts";
 import { type RepairCase, repairCases, scoreRepair, summarizeRepairs } from "./repair.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
@@ -40,8 +41,12 @@ function cuts() {
 	});
 }
 
+/** Pi's entries satisfy the core's structural record shapes; the union is widened, never converted (records.ts). */
+const asRecords = (entries: readonly SessionEntry[]): readonly SessionRecord[] =>
+	entries as unknown as readonly SessionRecord[];
+
 function commit(repairCase: RepairCase, branch: readonly SessionEntry[], response: unknown) {
-	const failures = diagnoseQuotes(repairCase.candidate, branch).failures;
+	const failures = diagnoseQuotes(repairCase.candidate, asRecords(branch)).failures;
 	const { note } = applyQuoteRepair(repairCase.candidate, failures, response);
 	return validateNoteContent(note, branch);
 }
@@ -73,7 +78,7 @@ describe("quotation-repair cases", () => {
 
 	it("fail only on their planted quotations, each of the intended class", () => {
 		for (const { repairCase, branch } of cases) {
-			const diagnosis = diagnoseQuotes(repairCase.candidate, branch);
+			const diagnosis = diagnoseQuotes(repairCase.candidate, asRecords(branch));
 			expect(diagnosis.unreadable, repairCase.id).toBe(false);
 			expect(
 				diagnosis.failures.map((failure) => failure.index),

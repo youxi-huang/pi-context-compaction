@@ -11,6 +11,41 @@ import type {
 } from "@earendil-works/pi-ai";
 import { estimateTokens, type ModelRegistry, type SessionEntry } from "@earendil-works/pi-coding-agent";
 
+import {
+	NOTE_SECTIONS,
+	type NoteEnvelope,
+	removeNoteEnvelope,
+} from "../../../../../compaction-core/src/note-envelope.ts";
+import {
+	diagnoseQuotes,
+	type QuoteCounts,
+	type QuoteDiagnosis,
+	quoteCounts,
+	quoteFailureMessage,
+} from "../../../../../compaction-core/src/quote-diagnostics.ts";
+import {
+	applyQuoteRepair,
+	QUOTE_REPAIR_RULES,
+	type QuoteRepairOutcome,
+	quoteRepairEligible,
+	quoteRepairPrompt,
+} from "../../../../../compaction-core/src/quote-repair.ts";
+import type { SessionRecord } from "../../../../../compaction-core/src/records.ts";
+import {
+	diagnoseSchema,
+	type SchemaCounts,
+	type SchemaDiagnosis,
+	schemaCounts,
+	schemaFailureMessage,
+} from "../../../../../compaction-core/src/schema-diagnostics.ts";
+import { diagnoseScope, type ScopeCounts } from "../../../../../compaction-core/src/scope-diagnostics.ts";
+import {
+	applySourcesRepair,
+	type CitableEvidence,
+	SOURCES_REPAIR_RULES,
+	sourcesRepairEligible,
+	sourcesRepairPrompt,
+} from "../../../../../compaction-core/src/sources-repair.ts";
 import { MAX_NOTE_TOKENS, type MemoryConfig, SESSION_WRITER, textTokens } from "../config.ts";
 import { summarizeUsage, type WriterCallRecord } from "../events.ts";
 import { hashEntries, isRecord } from "../identity.ts";
@@ -26,36 +61,10 @@ import {
 	validateNote,
 	validateNoteContent,
 } from "../notes.ts";
-import { NOTE_SECTIONS, type NoteEnvelope, removeNoteEnvelope } from "./note-envelope.ts";
-import {
-	diagnoseQuotes,
-	type QuoteCounts,
-	type QuoteDiagnosis,
-	quoteCounts,
-	quoteFailureMessage,
-} from "./quote-diagnostics.ts";
-import {
-	applyQuoteRepair,
-	QUOTE_REPAIR_RULES,
-	type QuoteRepairOutcome,
-	quoteRepairEligible,
-	quoteRepairPrompt,
-} from "./quote-repair.ts";
-import {
-	diagnoseSchema,
-	type SchemaCounts,
-	type SchemaDiagnosis,
-	schemaCounts,
-	schemaFailureMessage,
-} from "./schema-diagnostics.ts";
-import { diagnoseScope, type ScopeCounts } from "./scope-diagnostics.ts";
-import {
-	applySourcesRepair,
-	type CitableEvidence,
-	SOURCES_REPAIR_RULES,
-	sourcesRepairEligible,
-	sourcesRepairPrompt,
-} from "./sources-repair.ts";
+
+/** Pi's entries satisfy the core's structural record shapes; the union is widened here, never converted (records.ts). */
+const asRecords = (branch: readonly SessionEntry[]): readonly SessionRecord[] =>
+	branch as unknown as readonly SessionRecord[];
 
 /** Public registry surface used by the portable writer; authentication remains owned by Pi. */
 export type PreviewWriterRegistry = Pick<ModelRegistry, "find" | "hasConfiguredAuth" | "streamSimple">;
@@ -656,13 +665,13 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 			}
 			// The schema check precedes the scope and quotation checks, so the value is a complete note in both.
 			if (error instanceof Error && error.message.startsWith("CONTEXT_NOTE_SCOPE")) {
-				scope ??= diagnoseScope(value as MemoryNote, options.branch);
+				scope ??= diagnoseScope(value as MemoryNote, asRecords(options.branch));
 				report();
 				throw error;
 			}
 			if (!(error instanceof Error) || !error.message.startsWith("CONTEXT_NOTE_QUOTE")) throw error;
 			const note = value as MemoryNote;
-			const diagnosis = diagnoseQuotes(note, options.branch);
+			const diagnosis = diagnoseQuotes(note, asRecords(options.branch));
 			const counts = quoteCounts(diagnosis.failures);
 			quotations ??= counts;
 			report();
@@ -740,7 +749,7 @@ export async function writeMemory(options: WriteMemoryOptions): Promise<WriteMem
 	const repairQuotations = async (failure: QuotationRefusal): Promise<MemoryNote> => {
 		const { diagnosis } = failure;
 		if (!options.config.noteRepair || repairUsed || !quoteRepairEligible(diagnosis)) throw failure;
-		const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, options.branch);
+		const prompt = quoteRepairPrompt(failure.note, diagnosis.failures, asRecords(options.branch));
 		const value = await requestRepair("quotation", QUOTE_REPAIR_RULES, prompt, failure);
 		const repaired = applyQuoteRepair(failure.note, diagnosis.failures, value);
 		quotationRepair = repaired.outcome;

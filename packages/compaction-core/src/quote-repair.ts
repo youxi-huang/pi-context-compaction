@@ -1,8 +1,11 @@
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+// Lifted from the preview into the host-neutral core (v0.7.0 WP2 step 2): the notes import moved
+// to the core's copy, and the host's SessionEntry type import became the specification's
+// structural SessionRecord (records.ts). Logic, bounds and thrown messages are unchanged (rule K2).
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { type MemoryNote, type NoteFact, noteSchema, type noteSections, sourceRole, sourceText } from "../notes.ts";
+import { type MemoryNote, type NoteFact, noteSchema, type noteSections, sourceRole, sourceText } from "./notes.ts";
 import type { QuoteDiagnosis, QuoteFailure } from "./quote-diagnostics.ts";
+import type { SessionRecord } from "./records.ts";
 
 /** More failing quotations than this point at the whole note, not at a few bindings; the note blocks instead. */
 export const QUOTE_REPAIR_MAX_FACTS = 5;
@@ -76,7 +79,7 @@ function anchor(text: string, quote: string): number {
 	return 0;
 }
 
-function excerpt(entry: SessionEntry, quote: string): Excerpt {
+function excerpt(entry: SessionRecord, quote: string): Excerpt {
 	const text = sourceText(entry);
 	if (text.length <= EXCERPT_CHARS)
 		return { entryId: entry.id, role: sourceRole(entry), offset: 0, complete: true, text };
@@ -96,7 +99,7 @@ export const QUOTE_REPAIR_RULES = `Correct the quotations of a memory candidate;
 export function quoteRepairPrompt(
 	value: MemoryNote,
 	failures: readonly QuoteFailure[],
-	branch: readonly SessionEntry[],
+	branch: readonly SessionRecord[],
 ): string {
 	const byId = new Map(branch.map((entry) => [entry.id, entry]));
 	const shown = (ids: readonly string[], quote: string) =>

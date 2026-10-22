@@ -1,5 +1,7 @@
-import { isRecord } from "../identity.ts";
-import { noteSchema } from "../notes.ts";
+// Lifted unchanged from the preview into the host-neutral core (v0.7.0 WP2 step 2); only the
+// identity and notes imports moved to the core's copies.
+import { isRecord } from "./identity.ts";
+import { noteSchema } from "./notes.ts";
 
 /** The seven note sections, in schema order. */
 export const NOTE_SECTIONS: readonly string[] = Object.freeze(Object.keys(noteSchema.properties));

@@ -1,6 +1,8 @@
+// Lifted unchanged from the preview into the host-neutral core (v0.7.0 WP2 step 2); only the
+// notes import moved to the core's copy.
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
-import { type MemoryNote, noteSchema } from "../notes.ts";
+import { type MemoryNote, noteSchema } from "./notes.ts";
 import { sectionSchema } from "./quote-repair.ts";
 import type { SchemaDiagnosis, UncitedFact } from "./schema-diagnostics.ts";
 

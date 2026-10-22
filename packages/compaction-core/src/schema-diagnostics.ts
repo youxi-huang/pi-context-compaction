@@ -1,6 +1,8 @@
+// Lifted unchanged from the preview into the host-neutral core (v0.7.0 WP2 step 2); only the
+// identity and notes imports moved to the core's copies.
 import { Check } from "typebox/value";
-import { isRecord } from "../identity.ts";
-import { type MemoryNote, noteSchema, noteSections } from "../notes.ts";
+import { isRecord } from "./identity.ts";
+import { type MemoryNote, noteSchema, noteSections } from "./notes.ts";
 
 export type NoteSection = (typeof noteSections)[number];
 

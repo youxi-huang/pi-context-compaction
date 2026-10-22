@@ -3,27 +3,37 @@
 This directory measures the independent preview, the package that runs on official Pi. It is separate from the
 frozen F1 to F3 fixtures in `eval/fixtures`, which evaluate the resident runtime pinned in `eval/runtime.ts`; nothing
 here changes those fixtures, their scorer or the pin. See the [0.5.0 plan](../../docs/context-memory/v0.5.0-plan.md),
-work packages W0 and W3.
+work packages W0 and W3. P4 belongs to the [0.6.0 plan](../../docs/context-memory/v0.6.0-plan.md), work package
+WP1.
 
 ## Fixtures
 
-`generate.ts` writes three invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
-and fails on any byte difference. `fixtures/manifest.json` pins every file by SHA-256.
+`generate.ts` writes four invented Pi version-3 sessions and their gold files; `--check` regenerates them in memory
+and fails on any byte difference. Each fixtures version has its own manifest, which pins its files by SHA-256:
+`fixtures/manifest.json` pins P1 to P3 under `0.5-preview-fixtures.1`, and `fixtures/manifest-0.6.json` pins P4
+under `0.6-preview-fixtures.1`, so P1 to P3 keep their bytes and their pins.
 
 | Fixture | Source tokens | Checkpoints | What it stresses |
 | --- | ---: | ---: | --- |
 | P1 | about 70,000 | 3 | A timeout revised three times and reverted; a withdrawn subtask; a failed approach the user forbids retrying; a user ruling echoed verbatim by the assistant and inside a tool output; a deploy instruction that only a log line gives |
 | P2 | about 51,000 | 2 | Decisions and errors among long tool outputs; a corrected threshold and due date; a file the user forbids creating |
 | P3 | about 44,000 | 3 | Answers a note cannot hold: exact values among 400 endpoint latencies, 200 audited packages and 900 log lines; twelve edit and write calls and four failed tool calls to count and tell apart; a timeout raised for every service and then restored for one |
+| P4 | about 70,000 | 3 | Answers in the entries a deterministic reduction would replace: a configuration, a source file and a runbook read again after they changed, and long test, log, search and load outputs that later turns consumed; user rulings and a failed command as controls; prompts naming request and merchant IDs that only tool outputs hold |
 
 P1 and P2 test what a note keeps; with no tools, the notes alone answered nearly all their probes in the first
 provider run. P3 tests retrieval: most of its answers are exact values or inventories that only `context_history`
-can recover, so the gap between the two probe conditions and the calls per question are its measures.
+can recover, so the gap between the two probe conditions and the calls per question are its measures. P4 tests
+reductions and excerpts: at least 17 of its answers live only in tool results that a later result of the same
+tool on the same target superseded, or after which two turns completed, and every other answer stays in view
+through a user ruling, assistant text, a failed command's output or a file's latest read; `preview.test.ts` checks
+both. Its records advance a clock, 15 seconds apart with one gap of 95 minutes before a user message, so an
+idle-gap rule can be measured; P1 to P3 carry one fixed time.
 
 Source tokens are `ceil(UTF-8 bytes / 3)` of the readable text, the preview's own size proxy. Each checkpoint
-follows a completed assistant turn. Every tool call has exactly one result.
+follows a completed assistant turn. Every tool call has exactly one result. Every cut of P1 to P4 releases fewer
+than 80,000 source tokens, so all of them fall in the first v0.2.3 note-budget tier.
 
-The 75 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
+The 108 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
 `{"status":"unknown"}`. Values are numbers, booleans, short text with listed accepted forms, or an option letter.
 Probe kinds (current and previous values, counts, constraints, forbidden retries, withdrawn work, attribution,
 authority, absent answers, continuation and facts) live only in the gold files. A test keeps them out of every
@@ -124,7 +134,7 @@ fixture cut, chosen deterministically from the cut's own entries:
 | `combined` | A misattribution, a spacing fault and a paraphrase in one note | Passes all three |
 
 A case is kept only when the preview's own diagnosis classifies each planted quotation as intended; templates a cut
-cannot carry are listed as skipped. The fixtures yield 38 cases. Scoring needs no judge: `silentLoss` counts
+cannot carry are listed as skipped. P1 to P3 yield 38 cases. Scoring needs no judge: `silentLoss` counts
 committed notes without a ruling a user gave, `promoted` counts instructions quoted only from assistant or tool text,
 and `keptUnsupported` counts an order no user gave kept without a quotation. A refused note passes nothing and loses
 nothing silently. Each case's scripted repair passes, which `repair.test.ts` checks against the preview's own repair

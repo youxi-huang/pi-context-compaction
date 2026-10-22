@@ -3,6 +3,12 @@ import { Check } from "typebox/value";
 
 /** The preview evaluation set; independent of the frozen F1 to F3 fixtures and their scorer. */
 export const PREVIEW_FIXTURE_VERSION = "0.5-preview-fixtures.1";
+/**
+ * P4, added for 0.6.0 under its own version and manifest, so P1 to P3 keep their bytes and their pins: sessions
+ * whose answers sit in repeated file reads and long consumed tool results, the entries a deterministic reduction
+ * would replace.
+ */
+export const P4_FIXTURE_VERSION = "0.6-preview-fixtures.1";
 export const PREVIEW_SCORER_VERSION = "0.5-preview-scorer.2";
 
 const id = Type.String({ minLength: 1 });
@@ -73,7 +79,7 @@ export const previewProbeSchema = Type.Object(
 
 export const previewFixtureSchema = Type.Object(
 	{
-		version: Type.Literal(PREVIEW_FIXTURE_VERSION),
+		version: Type.Union([Type.Literal(PREVIEW_FIXTURE_VERSION), Type.Literal(P4_FIXTURE_VERSION)]),
 		id,
 		description: id,
 		tokenMetric: Type.Literal("sum-ceil-utf8-source-bytes-div-3"),

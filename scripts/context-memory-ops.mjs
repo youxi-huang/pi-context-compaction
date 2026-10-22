@@ -17,6 +17,7 @@ import { constants, tmpdir, userInfo } from "node:os";
 import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
+import { CORE_PACKAGE, coreIdentitySynchronized, coreImportViolations } from "./context-memory-core-check.mjs";
 import { officialPiReady as officialPiCohortReady } from "./context-memory-preview-stock-install.mjs";
 import { assertProfileVersion, VERSION as FUNCTIONAL_PREVIEW_VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 import { releasePlan } from "./context-memory-preview-release-checks.mjs";
@@ -193,7 +194,7 @@ function officialPiReady(directory = stockRoot, version = PRIMARY_PI_VERSION) {
 }
 
 async function doctor() {
-	await step("doctor", (write) => {
+	await step("doctor", async (write) => {
 		write(`user: ${identity.username}; uid: ${uid}\nHOME: ${process.env.HOME ?? "unset"}\n`);
 		write(
 			`Node: ${process.version}; CI uses 22${process.versions.node.startsWith("22.") ? "" : " (different major)"}\n`,
@@ -223,6 +224,16 @@ async function doctor() {
 		write(
 			`pinned model-data archive: ${existsSync(join(root, ".artifacts/pi-1.1.0-source.tar.gz")) ? "cached" : "missing (build downloads the pinned archive and verifies SHA-256)"}\n`,
 		);
+		const corePresent = existsSync(join(root, CORE_PACKAGE, "package.json"));
+		write(`host-neutral core: ${corePresent ? `present (${CORE_PACKAGE})` : `missing (${CORE_PACKAGE})`}\n`);
+		if (corePresent) {
+			const { installed } = dependencyState(lockHash());
+			const violations = installed ? await coreImportViolations(join(root, CORE_PACKAGE)) : null;
+			write(
+				`core import gate: ${violations === null ? "not checkable before deps install" : violations.length ? `${violations.length} violation(s) (verify will fail)` : "clean (relative-in-package, node:*, typebox)"}\n`,
+			);
+			write(`core identity.ts: ${coreIdentitySynchronized(root) ? "byte-identical to the resident copy" : "DRIFTED from the resident copy (verify will fail)"}\n`);
+		}
 		const untracked = git(["ls-files", "--others", "-z", "--", extension])
 			.split("\0")
 			.filter((file) => file.endsWith(".ts"));

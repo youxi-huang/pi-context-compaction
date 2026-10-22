@@ -257,7 +257,7 @@ async function build() {
 		if (diff.status === 1) {
 			fingerprintChanged = true;
 			const warning =
-				"!!! FINGERPRINT GATE: A fingerprinted runtime or host file changed.\n!!! Obtain the maintainer's explicit approval in this task before committing a new build.ts fingerprint. Checks will continue; the final exit code will be 1. No commit or restore is performed.";
+				"!!! FINGERPRINT GATE: A fingerprinted runtime or host file changed.\n!!! Obtain the maintainer's explicit approval in this task before committing a new build.ts fingerprint. Checks will continue; the final exit code will be 3. No commit or restore is performed.";
 			write(`${warning}\n`);
 			if (!verbose) console.error(warning);
 		} else if (diff.status !== 0) {
@@ -370,7 +370,7 @@ try {
 		if (command === "preview" || command === "ci") await preview();
 		if (command === "eval" || command === "ci") await evaluate(command === "ci" || flags.has("--full"));
 	}
-	process.exitCode = fingerprintChanged ? 1 : 0;
+	process.exitCode = fingerprintChanged ? 3 : 0;
 } catch (error) {
 	if (error.message) console.error(error.message);
 	process.exitCode = error instanceof StepError ? error.code : 1;

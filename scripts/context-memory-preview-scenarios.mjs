@@ -1,13 +1,14 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectOfficialPi } from "./context-memory-preview-stock-install.mjs";
 import { assertProfileVersion, gradeScenarioAcceptance } from "./context-memory-preview-acceptance-profile.mjs";
+import { checkpointRecords, equivalenceLine, errorClasses, sessionLines } from "./context-memory-equivalence-compare.mjs";
 
 // Default-settings scenarios for the stock-Pi preview, each beside a control run without the extension.
 // Uses only an official npm Pi installation and a loopback mock provider. Never contacts a model service.
@@ -15,6 +16,11 @@ import { assertProfileVersion, gradeScenarioAcceptance } from "./context-memory-
 // Every check states the intended behavior. Checks listed in KNOWN_GAPS are not provided by the current
 // preview: they are reported and do not fail the run. A listed check that starts passing fails the run
 // until it is removed from KNOWN_GAPS, so a fix cannot land without becoming a required regression.
+//
+// --equivalence-out <file> appends one v0.7.0 equivalence record per case and variant, in case order: the hashes and
+// citations of every preview checkpoint left in the case's session files, and the error classes its notices, failed
+// prompts and compactions and failed tool results raised, in order. Pi's random entry IDs are replaced by their
+// positions; see scripts/context-memory-equivalence-compare.mjs. Without the flag nothing else is collected or written.
 const KNOWN_GAPS = new Set([]);
 
 const CASES = [
@@ -51,13 +57,16 @@ function argument(name, fallback) {
 	if (index >= 0) throw new Error(`Missing value for ${name}`);
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence> [--other-stock-root <another Pi version>] [--perf-checkpoints 20] [--only <case>] [--acceptance-profile <profile>]`,
+		`Missing ${name}. Usage: node ${script} --package-dir <candidate> --stock-root <official npm installation> --output-dir <evidence> [--other-stock-root <another Pi version>] [--perf-checkpoints 20] [--only <case>] [--acceptance-profile <profile>] [--equivalence-out <file>]`,
 	);
 }
 const packageDir = resolve(argument("--package-dir"));
 const stockRoot = resolve(argument("--stock-root"));
 const outputDir = resolve(argument("--output-dir"));
 const workerCase = argument("--worker", "");
+/** --equivalence-out in the parent; the worker gets --equivalence and collects its classes only then. */
+const equivalenceOut = argument("--equivalence-out", "") ? resolve(argument("--equivalence-out")) : null;
+const equivalenceClasses = args.includes("--equivalence") ? [] : undefined;
 
 function environment(agentDir) {
 	const value = {
@@ -98,8 +107,10 @@ async function worker() {
 		console[level] = (...parts) => {
 			const text = parts.map(String).join(" ");
 			if (commandOutput) commandOutput.push(text);
-			else if (text.includes("Source-linked compaction")) notices.push(text);
-			else original(...parts);
+			else if (text.includes("Source-linked compaction")) {
+				notices.push(text);
+				equivalenceClasses?.push(...errorClasses(text));
+			} else original(...parts);
 		};
 	}
 
@@ -309,11 +320,16 @@ async function worker() {
 	async function prompt(text, options) {
 		const before = requests.length;
 		const noticesBefore = notices.length;
+		const entriesBefore = equivalenceClasses && new Set(manager.getBranch().map((entry) => entry.id));
 		let error;
 		try {
 			await session.prompt(text, options);
 		} catch (cause) {
 			error = String(cause?.message ?? cause).slice(0, 200);
+		}
+		if (equivalenceClasses) {
+			const failed = manager.getBranch().filter((entry) => !entriesBefore.has(entry.id) && entry.type === "message" && entry.message.role === "toolResult" && entry.message.isError);
+			equivalenceClasses.push(...failed.flatMap((entry) => errorClasses(...(entry.message.content ?? []).filter((part) => part.type === "text").map((part) => part.text))), ...errorClasses(error));
 		}
 		const sent = requests.slice(before).map((request) => request.kind + (request.hasImage ? "+image" : ""));
 		return {
@@ -333,6 +349,7 @@ async function worker() {
 			const result = await session.compact();
 			return { ok: true, kind: result?.details?.kind ?? "native", sent: requests.slice(before).map((r) => r.kind), marker: marker(), notices: notices.slice(noticesBefore) };
 		} catch (cause) {
+			equivalenceClasses?.push(...errorClasses(String(cause?.message ?? cause).slice(0, 200)));
 			return { ok: false, error: String(cause?.message ?? cause).slice(0, 200), sent: requests.slice(before).map((r) => r.kind), marker: marker(), notices: notices.slice(noticesBefore) };
 		}
 	}
@@ -1035,6 +1052,12 @@ async function worker() {
 	}
 	const result = { case: workerCase, variant, pi: piVersion, providerRequests: requests.length, diagnostics, checks, observations };
 	writeFileSync(join(caseDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+	if (equivalenceClasses) {
+		// Session files in name order, which begins with their creation time; each file's checkpoints in file order.
+		const files = existsSync(sessionsDir) ? readdirSync(sessionsDir).filter((name) => name.endsWith(".jsonl")).sort() : [];
+		const checkpoints = files.flatMap((name, index) => checkpointRecords(sessionLines(readFileSync(join(sessionsDir, name), "utf8"))).map((item) => ({ session: index, ...item })));
+		writeFileSync(join(caseDir, "equivalence.json"), `${JSON.stringify({ checkpoints, classes: equivalenceClasses })}\n`);
+	}
 	process.exit(0);
 }
 
@@ -1060,7 +1083,7 @@ async function runWorker(name, variant, root, timeoutMs, candidate) {
 	rmSync(caseDir, { recursive: true, force: true });
 	mkdirSync(caseDir, { recursive: true });
 	const agentDir = join(caseDir, "agent");
-	const parameters = [script, "--package-dir", candidate, "--stock-root", root, "--output-dir", outputDir, "--worker", name, "--variant", variant, "--perf-checkpoints", argument("--perf-checkpoints", "20")];
+	const parameters = [script, "--package-dir", candidate, "--stock-root", root, "--output-dir", outputDir, "--worker", name, "--variant", variant, "--perf-checkpoints", argument("--perf-checkpoints", "20"), ...(equivalenceOut ? ["--equivalence"] : [])];
 	const child = spawn(process.execPath, parameters, { cwd: outputDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
 	let stderr = "";
 	child.stdout.on("data", () => {});
@@ -1074,6 +1097,14 @@ async function runWorker(name, variant, root, timeoutMs, candidate) {
 	const result = existsSync(resultPath)
 		? JSON.parse(readFileSync(resultPath, "utf8"))
 		: { case: name, variant, checks: [{ key: "harness", description: "The scenario ran to completion", passed: false, detail: `exit ${code}: ${stderr}` }], observations: [] };
+	if (equivalenceOut) {
+		// A worker that wrote no record is recorded as such, so the comparison still sees the case.
+		const recorded = join(caseDir, "equivalence.json");
+		const { checkpoints, classes } = existsSync(recorded) ? JSON.parse(readFileSync(recorded, "utf8")) : { checkpoints: [], classes: [] };
+		const build = JSON.parse(readFileSync(join(candidate, "preview-build.json"), "utf8")).build ?? null;
+		const extra = { recorded: existsSync(recorded) };
+		appendFileSync(equivalenceOut, equivalenceLine({ runner: "scenarios", id: `scenarios/${name}/${variant}`, host: result.pi ?? null, checkpoints, classes, extra, build }));
+	}
 	// Keep compact evidence only; synthetic sessions, settings and markers are removed.
 	for (const entry of readdirSync(caseDir)) if (entry !== "result.json") rmSync(join(caseDir, entry), { recursive: true, force: true });
 	return result;
@@ -1081,6 +1112,7 @@ async function runWorker(name, variant, root, timeoutMs, candidate) {
 
 async function parent() {
 	mkdirSync(outputDir, { recursive: true });
+	if (equivalenceOut) mkdirSync(dirname(equivalenceOut), { recursive: true });
 	const otherStockRoot = argument("--other-stock-root", "");
 	const only = argument("--only", "");
 	const profile = argument("--acceptance-profile", "strict");

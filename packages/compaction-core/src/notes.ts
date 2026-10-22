@@ -2,8 +2,10 @@
 // rendering, lineage — with the host's session-manager type imports replaced by the
 // specification's structural record types in records.ts. Logic, bounds, thrown messages and rendering
 // bytes are unchanged (rule K2); the resident copy keeps its bytes (rule K9).
+// WP3 adds opt-in JCS source hashing; existing callers keep the Pi serialization by default.
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
+import { hashCanonicalRecordPrefixes, hashCanonicalRecords, serializeCanonicalRecord } from "./canonical.ts";
 import { type NoteBudget, storedNoteLimit, textTokens } from "./config.ts";
 import {
 	CONTEXT_MEMORY_KIND,
@@ -231,14 +233,18 @@ function validateMemoryCheckpoint(
 }
 
 /** Latest-only compatibility: an invalid older checkpoint is not examined by this public function. */
-export function latestMemory(branch: readonly SessionRecord[]): ValidatedMemory | undefined {
+export function latestMemory(
+	branch: readonly SessionRecord[],
+	serialization: "pi" | "jcs" = "pi",
+): ValidatedMemory | undefined {
 	for (let index = branch.length - 1; index >= 0; index--) {
 		const entry = branch[index];
 		if (entry.type !== "compaction") continue;
 		let byId: Map<string, SessionRecord> | undefined;
 		return validateMemoryCheckpoint(entry, index, {
 			coverageIndex: (id) => branch.findIndex((source) => source.id === id),
-			prefixHash: (length) => hashEntries(branch.slice(0, length)),
+			prefixHash: (length) =>
+				(serialization === "jcs" ? hashCanonicalRecords : hashEntries)(branch.slice(0, length)),
 			sourceById: (id) => {
 				byId ??= new Map(branch.slice(0, index).map((source) => [source.id, source]));
 				const source = byId.get(id);
@@ -266,10 +272,12 @@ function upperBound(values: readonly number[], value: number): number {
 export function validateMemoryCheckpoints(
 	branch: readonly SessionRecord[],
 	onSerializedEntry?: (index: number, serialized: string) => void,
+	serialization: "pi" | "jcs" = "pi",
 ): ValidatedMemory | undefined {
 	if (!branch.some((entry) => entry.type === "compaction")) {
 		if (onSerializedEntry) {
-			for (const [index, entry] of branch.entries()) onSerializedEntry(index, JSON.stringify(entry));
+			for (const [index, entry] of branch.entries())
+				onSerializedEntry(index, serialization === "jcs" ? serializeCanonicalRecord(entry) : JSON.stringify(entry));
 		}
 		return undefined;
 	}
@@ -293,7 +301,11 @@ export function validateMemoryCheckpoints(
 	}
 	// The caller may consume these bytes only in this synchronous invocation, never as a request cache.
 	if (onSerializedEntry) prefixLengths.push(branch.length);
-	const prefixHashes = hashEntryPrefixes(branch, prefixLengths, onSerializedEntry);
+	const prefixHashes = (serialization === "jcs" ? hashCanonicalRecordPrefixes : hashEntryPrefixes)(
+		branch,
+		prefixLengths,
+		onSerializedEntry,
+	);
 	const byId = new Map<string, SessionRecord>();
 	const texts = new Map<SessionRecord, string>();
 	const text = (entry: SessionRecord): string => {

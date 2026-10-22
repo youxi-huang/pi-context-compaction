@@ -184,7 +184,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 
 	const temp = mkdtempSync(join(tmpdir(), "compaction-core-isolated-"));
 	try {
-		for (const entry of ["package.json", "tsconfig.json", "src", "test"]) {
+		for (const entry of ["package.json", "tsconfig.json", "src", "test", "conformance"]) {
 			cpSync(join(packageRoot, entry), join(temp, entry), { recursive: true });
 		}
 		for (const dependency of ["typebox", "@types/node"]) {

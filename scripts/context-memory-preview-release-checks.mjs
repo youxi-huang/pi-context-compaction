@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -93,11 +94,28 @@ export function releasePlan({ manifest, build }) {
 	return Object.freeze({ version, hosts: releasePiVersions(build), scenarioProfile: scenarioProfile(version), otherHost: OTHER_PI_VERSION });
 }
 
-/** The plan as GitHub step outputs: hosts primary first, the scenario profile or empty, and the other host. */
-export function releasePlanOutputs(packageDir) {
+/**
+ * Whether a source tag publishes the extension it builds. A source release, such as the core-only v0.7.0, still
+ * builds the last published extension version and publishes nothing; a tag beside an unpublished version stops.
+ */
+export function publishesPackage({ sourceTag, version, isPublished }) {
+	const reviewed = parseReviewedVersion(version);
+	if (selectReviewedSourceTag({ requestedTag: sourceTag }) === reviewed.tag) return true;
+	assert.equal(isPublished(reviewed.packageTag), true, `${sourceTag} builds unpublished extension ${version}; tag ${reviewed.tag} to publish it`);
+	return false;
+}
+
+/**
+ * The plan as GitHub step outputs: hosts primary first, the scenario profile or empty, and the other host.
+ * Given a source tag, also whether that tag publishes the package, and the package tag it would use.
+ */
+export function releasePlanOutputs(packageDir, { sourceTag, isPublished } = {}) {
 	const read = (file) => JSON.parse(readFileSync(join(packageDir, file), "utf8"));
 	const plan = releasePlan({ manifest: read("package.json"), build: read("preview-build.json") });
-	return `hosts=${plan.hosts.join(" ")}\nprofile=${plan.scenarioProfile ?? ""}\nother=${plan.otherHost}\n`;
+	const outputs = `hosts=${plan.hosts.join(" ")}\nprofile=${plan.scenarioProfile ?? ""}\nother=${plan.otherHost}\n`;
+	if (sourceTag === undefined) return outputs;
+	const publish = publishesPackage({ sourceTag, version: plan.version, isPublished });
+	return `${outputs}publish=${publish}\npackage_tag=${parseReviewedVersion(plan.version).packageTag}\n`;
 }
 
 /** "1.1.0", "1.2.0 and 1.1.0", "1.3.0, 1.2.0 and 1.1.0". */
@@ -217,9 +235,18 @@ export function assertReleaseNotes(notes, { repository, packageTag, branch, host
 	}
 }
 
+/** Whether origin holds a tag; `git ls-remote --exit-code` exits 2 when nothing matches. */
+function originHasTag(tag) {
+	const result = spawnSync("git", ["ls-remote", "--exit-code", "--tags", "origin", `refs/tags/${tag}`], { encoding: "utf8" });
+	if (result.error) throw result.error;
+	assert([0, 2].includes(result.status), `git ls-remote failed: ${result.stderr}`);
+	return result.status === 0;
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-	if (process.argv.length !== 4 || process.argv[2] !== "--plan") {
-		console.error("Usage: node scripts/context-memory-preview-release-checks.mjs --plan <package-dir>");
+	const [flag, packageDir, tagFlag, sourceTag, ...rest] = process.argv.slice(2);
+	if (flag !== "--plan" || !packageDir || rest.length > 0 || (tagFlag !== undefined && (tagFlag !== "--source-tag" || sourceTag === undefined))) {
+		console.error("Usage: node scripts/context-memory-preview-release-checks.mjs --plan <package-dir> [--source-tag <tag>]");
 		process.exitCode = 2;
-	} else process.stdout.write(releasePlanOutputs(resolve(process.argv[3])));
+	} else process.stdout.write(releasePlanOutputs(resolve(packageDir), tagFlag ? { sourceTag, isPublished: originHasTag } : {}));
 }

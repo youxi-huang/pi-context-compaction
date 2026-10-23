@@ -24,6 +24,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
+- The **Publish extension preview** workflow recognizes a source release. A `v*` tag whose version differs from the extension package it builds, while that package version is already published, now ends after the build with a notice and publishes nothing, instead of running stock-Pi acceptance and failing at the publish step as v0.7.0 did. A tag beside an unpublished package version still fails, before any official Pi is installed.
 - The offline evaluation's scripted writer no longer cites part of the run directory's random UUID as an entry ID. About one UUID in 900 holds a run such as `bff1-12345`, which the writer's prompt carries before every fixture ID; the note then cited `f1-12345` and `verify` failed with `CONTEXT_NOTE_SCOPE`. A regression covers the case.
 
 ## [v0.6.0] — 2026-10-22

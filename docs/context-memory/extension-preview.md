@@ -679,6 +679,14 @@ assets and tags are never overwritten. The resident runtime keeps release
 version v0.3.0; v0.4.1 changes its build fingerprint for the one-line note fold,
 with the frozen evaluator pinned to that source.
 
+A source tag whose version differs from the extension package it builds is a
+source release, as v0.7.0 was for the host-neutral core. When that package
+version is already published, the workflow ends after the build with a notice
+and publishes nothing; when it is not, the run fails before any official Pi is
+installed. An extension release therefore sets its new version in
+`scripts/context-memory-preview-build.mjs` before the tag is pushed: a
+forgotten bump is reported as a source release, not as a failure.
+
 If publication tooling needs a fix after a source tag was created, merge the
 fix through the normal PR checks. Retry **Publish extension preview** from that
 main commit using its `source_tag` workflow input, or push that commit to

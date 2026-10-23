@@ -4,10 +4,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseDocument } from "yaml";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertFinalMainWorkflows, assertReleaseNotes, compareReleaseVersions, crossVersionChecks, hostList, isStrictRelease, minimumAcceptanceChecks, parseReviewedVersion, releaseChanges, releaseNotes, releasePiVersions, releasePlan, scenarioProfile, selectReviewedSourceTag } from "./context-memory-preview-release-checks.mjs";
+import { assertFinalMainWorkflows, assertReleaseNotes, compareReleaseVersions, crossVersionChecks, hostList, isStrictRelease, minimumAcceptanceChecks, parseReviewedVersion, publishesPackage, releaseChanges, releaseNotes, releasePiVersions, releasePlan, scenarioProfile, selectReviewedSourceTag } from "./context-memory-preview-release-checks.mjs";
 import { PROFILE, VERSION } from "./context-memory-preview-acceptance-profile.mjs";
 import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts";
 
@@ -78,7 +78,16 @@ test("publication workflow preserves version-aware installation and historical s
 		if (accepted) assert.equal(result.stdout, selectReviewedSourceTag({ triggerRef: ref }));
 	}
 	const plan = steps.find((step) => step.id === "plan");
-	assert.match(plan.run, /context-preview-publisher\/scripts\/context-memory-preview-release-checks\.mjs" --plan \.artifacts\/context-memory-preview-package >> "\$GITHUB_OUTPUT"/);
+	assert.match(plan.run, /context-preview-publisher\/scripts\/context-memory-preview-release-checks\.mjs" --plan \.artifacts\/context-memory-preview-package --source-tag "\$PI_CONTEXT_SOURCE_TAG" >> "\$GITHUB_OUTPUT"/);
+	assert.equal(plan.env.PI_CONTEXT_SOURCE_TAG, "${{ steps.source.outputs.source_tag }}");
+	const sourceRelease = steps.find((step) => step.name === "Record a source release without publishing the extension");
+	assert.equal(sourceRelease.if, "steps.plan.outputs.publish == 'false'");
+	assert.match(sourceRelease.run, /::notice /);
+	assert.match(sourceRelease.run, /GITHUB_STEP_SUMMARY/);
+	// Only an explicit source-release decision skips; a missing output must still run every gate and the publisher.
+	for (const step of steps.slice(steps.indexOf(plan) + 1)) {
+		if (step !== sourceRelease) assert.equal(step.if, "steps.plan.outputs.publish != 'false'", step.name);
+	}
 	const install = steps.find((step) => step.name === "Install every official Pi host the candidate declares");
 	assert.match(install.run, /context-preview-publisher\/scripts\/context-memory-preview-stock-install\.mjs/);
 	assert.match(install.run, /for host in \$PLAN_HOSTS/);
@@ -117,6 +126,40 @@ test("the plan reads every declared host from the candidate and fails closed on 
 	assert.notEqual(spawnSync(process.execPath, [script, "--plan", directory], { encoding: "utf8" }).status, 0);
 	assert.equal(spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8" }).status, 2);
 	assert.throws(() => releasePlan({ manifest: { version: "0.4.3" }, build: { version: "0.4.2", supportedPi: "1.2.0" } }), /packaged version/);
+});
+
+test("a source tag publishes its own extension version and skips only one already published", (t) => {
+	const isPublished = (packageTag) => packageTag === "extension-v0.6.0";
+	assert.equal(publishesPackage({ sourceTag: "v0.6.0", version: "0.6.0", isPublished: () => assert.fail("a matching tag needs no lookup") }), true);
+	assert.equal(publishesPackage({ sourceTag: "v0.7.0", version: "0.6.0", isPublished }), false);
+	assert.throws(() => publishesPackage({ sourceTag: "v0.6.2", version: "0.6.1", isPublished }), /unpublished extension 0\.6\.1; tag v0\.6\.1/);
+	for (const sourceTag of [undefined, "", "0.7.0", "release/publish-v0.7.0", "v0.7.0-rc.1"]) {
+		assert.throws(() => publishesPackage({ sourceTag, version: "0.6.0", isPublished }), String(sourceTag));
+	}
+
+	const directory = mkdtempSync(join(tmpdir(), "pi-preview-scope-"));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	const git = (...args) => assert.equal(spawnSync("git", ["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", "-c", "user.name=test", "-c", "user.email=test@example.invalid", ...args], { cwd: directory, encoding: "utf8" }).status, 0, args.join(" "));
+	git("init", "--quiet");
+	git("commit", "--quiet", "--allow-empty", "-m", "seed");
+	git("tag", "extension-v0.6.0");
+	git("remote", "add", "origin", directory);
+	const packageDir = join(directory, "package");
+	mkdirSync(packageDir);
+	const plan = (version, ...args) => {
+		writeFileSync(join(packageDir, "package.json"), JSON.stringify({ version }));
+		writeFileSync(join(packageDir, "preview-build.json"), JSON.stringify({ version, supportedPi: PRIMARY_PI_VERSION, supportedPiVersions: SUPPORTED_PI_VERSIONS }));
+		return spawnSync(process.execPath, [fileURLToPath(new URL("./context-memory-preview-release-checks.mjs", import.meta.url)), "--plan", packageDir, ...args], { cwd: directory, encoding: "utf8" });
+	};
+	const base = plan("0.6.0");
+	assert.equal(base.status, 0, base.stderr);
+	assert.doesNotMatch(base.stdout, /publish=/);
+	assert.equal(plan("0.6.0", "--source-tag", "v0.7.0").stdout, `${base.stdout}publish=false\npackage_tag=extension-v0.6.0\n`);
+	assert.equal(plan("0.6.0", "--source-tag", "v0.6.0").stdout, `${base.stdout}publish=true\npackage_tag=extension-v0.6.0\n`);
+	const unpublished = plan("0.6.1", "--source-tag", "v0.7.0");
+	assert.notEqual(unpublished.status, 0);
+	assert.match(unpublished.stderr, /unpublished extension 0\.6\.1/);
+	for (const args of [["--source-tag"], ["--tag", "v0.7.0"], ["--source-tag", "v0.7.0", "extra"]]) assert.equal(plan("0.6.0", ...args).status, 2, args.join(" "));
 });
 
 test("historical tags keep their own host contract and the current source declares its full matrix", () => {

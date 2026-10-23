@@ -60,8 +60,21 @@ jobs:
       - run: node scripts/context-memory-preview-build.mjs
       - name: Plan publication from the candidate's own metadata
         id: plan
-        run: node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-release-checks.mjs" --plan .artifacts/context-memory-preview-package >> "$GITHUB_OUTPUT"
+        env:
+          PI_CONTEXT_SOURCE_TAG: ${{ steps.source.outputs.source_tag }}
+        run: node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-release-checks.mjs" --plan .artifacts/context-memory-preview-package --source-tag "$PI_CONTEXT_SOURCE_TAG" >> "$GITHUB_OUTPUT"
+      # Only an explicit source-release decision skips the remaining steps; a missing decision still runs every gate.
+      - name: Record a source release without publishing the extension
+        if: steps.plan.outputs.publish == 'false'
+        env:
+          PI_CONTEXT_SOURCE_TAG: ${{ steps.source.outputs.source_tag }}
+          PLAN_PACKAGE_TAG: ${{ steps.plan.outputs.package_tag }}
+        run: |
+          message="$PI_CONTEXT_SOURCE_TAG is a source release. The extension it builds was already published as $PLAN_PACKAGE_TAG, so nothing was published."
+          printf '::notice title=No extension publication::%s\n' "$message"
+          printf '%s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
       - name: Install every official Pi host the candidate declares
+        if: steps.plan.outputs.publish != 'false'
         env:
           PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
         run: |
@@ -69,6 +82,7 @@ jobs:
             node "$RUNNER_TEMP/context-preview-publisher/scripts/context-memory-preview-stock-install.mjs" --stock-root "$RUNNER_TEMP/context-preview-pi-$host" --version "$host"
           done
       - name: Verify the release package on stock Pi
+        if: steps.plan.outputs.publish != 'false'
         env:
           PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
         run: |
@@ -82,6 +96,7 @@ jobs:
             node scripts/context-memory-preview-acceptance.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-pi-$host" --output-dir ".artifacts/context-memory-preview-acceptance-$host"
           done
       - name: Verify final release scenarios
+        if: steps.plan.outputs.publish != 'false'
         env:
           PLAN_HOSTS: ${{ steps.plan.outputs.hosts }}
           PLAN_PROFILE: ${{ steps.plan.outputs.profile }}
@@ -94,6 +109,7 @@ jobs:
             node scripts/context-memory-preview-scenarios.mjs --package-dir .artifacts/context-memory-preview-package --stock-root "$RUNNER_TEMP/context-preview-pi-${hosts[0]}" --other-stock-root "$RUNNER_TEMP/context-preview-other" --output-dir .artifacts/context-memory-preview-scenarios --acceptance-profile "$PLAN_PROFILE"
           fi
       - name: Publish checked package and source archives
+        if: steps.plan.outputs.publish != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           PI_CONTEXT_RELEASE_ROOT: ${{ github.workspace }}

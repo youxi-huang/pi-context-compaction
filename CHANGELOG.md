@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Security
+
+- Remove the unused upstream sandbox example, whose `@anthropic-ai/sandbox-runtime` dependency held zod at 3.25.76, affected by GHSA-mrhx-c7xc-m3w5. No zod 3 release carries the fix, and even the latest sandbox runtime requires zod 3. With the example gone, every remaining dependent accepts zod 4, so the root lockfile moves zod to 4.6.7 and `npm audit` reports no advisories. zod was never in the coding-agent install lock or the independent extension, and no code in this repository imports it; it arrived through the example, as an optional peer of the provider SDKs and as a dependency of the upstream evaluation tools.
+
 ### Maintenance
 
 - CI runs its full pipeline on every push to main, including a merge that changes Markdown documents alone; only such a pull request still skips it. Publication accepts a tagged commit only after its `verify` check concluded `success`, and a skipped job concludes `skipped`, so a release tagged on a documentation-only merge would have failed at its last step, after the whole stock-Pi acceptance had run. A regression runs the workflow's scope step on a documentation-only commit for a pull request, a push and a manual run.

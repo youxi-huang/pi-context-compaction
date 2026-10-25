@@ -54,7 +54,7 @@ Both preview runners load a copy of the package from a temporary directory
 outside any Node project, so its Pi imports reach the official host under test
 rather than this repository's workspace build; do not bypass that check.
 Every official Pi version uses `context-memory-preview-stock-install.mjs`, which
-pins seven runtime components for 1.3.0 and 1.2.0 and eight for 1.1.0 and 1.0.4,
+pins seven runtime components for 1.4.0, 1.3.0 and 1.2.0 and eight for 1.1.0 and 1.0.4,
 including `chord`, and checks registry provenance and SDK startup with networking
 denied. The host list comes from the candidate's `preview-build.json`
 (`context-memory-preview-release-checks.mjs --plan`), the same source CI and

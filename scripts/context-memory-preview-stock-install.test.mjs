@@ -49,7 +49,7 @@ function changeLock(directory, operation) {
 
 test("CLI requires an isolated root and one reviewed exact version", () => {
 	assert.deepEqual(parseStockInstallArguments(["--version", "1.0.4", "--stock-root", "/tmp/stock", "--check"]), { check: true, version: "1.0.4", stockRoot: "/tmp/stock" });
-	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.4.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
+	for (const args of [[], ["--stock-root", "/tmp/stock"], ["--version", "1.5.0", "--stock-root", "/tmp/stock"], ["--version", "1.1.0", "--stock-root", "--check"], ["--version", "1.1.0", "--stock-root", "/tmp/stock", "--check", "--check"], ["--version", "1.1.0", "--version", "1.1.0", "--stock-root", "/tmp/stock"]]) {
 		assert.throws(() => parseStockInstallArguments(args));
 	}
 });
@@ -183,13 +183,14 @@ test("hosts after 1.1.0 omit chord, and a newer host that still needed it fails 
 	for (const version of OFFICIAL_PI_VERSIONS) {
 		assert.equal(officialPiCohort(version).includes("@earendil-works/chord"), CHORD_PI_VERSIONS.includes(version), version);
 	}
+	assert.deepEqual(officialPiCohort("1.4.0"), officialPiCohort("1.2.0"));
 	assert.deepEqual(officialPiCohort("1.3.0"), officialPiCohort("1.2.0"));
 	const directory = scratch(t);
-	fixture(directory, "1.3.0");
+	fixture(directory, "1.4.0");
 	const agent = join(directory, "node_modules/@earendil-works/pi-coding-agent/package.json");
 	const manifest = JSON.parse(readFileSync(agent, "utf8"));
-	writeJson(agent, { ...manifest, dependencies: { ...manifest.dependencies, "@earendil-works/chord": "1.3.0" } });
-	assert.throws(() => inspectOfficialPi(directory, "1.3.0"), /Unreviewed official runtime dependency: @earendil-works\/pi-coding-agent -> @earendil-works\/chord/);
+	writeJson(agent, { ...manifest, dependencies: { ...manifest.dependencies, "@earendil-works/chord": "1.4.0" } });
+	assert.throws(() => inspectOfficialPi(directory, "1.4.0"), /Unreviewed official runtime dependency: @earendil-works\/pi-coding-agent -> @earendil-works\/chord/);
 });
 
 test("actual startup networking and broken SDK exports are rejected without installation", (t) => {
@@ -216,7 +217,7 @@ test("an unrelated project is never used as an installation destination", (t) =>
 });
 
 test("invalid CLI versions fail before any npm call and help needs no installation", () => {
-	const invalid = spawnSync(process.execPath, [script, "--version", "1.4.0", "--stock-root", "/unused"], { encoding: "utf8" });
+	const invalid = spawnSync(process.execPath, [script, "--version", "1.5.0", "--stock-root", "/unused"], { encoding: "utf8" });
 	assert.equal(invalid.status, 2);
 	assert.match(invalid.stderr, /Unsupported official Pi version/);
 	const help = spawnSync(process.execPath, [script, "--help"], { encoding: "utf8" });

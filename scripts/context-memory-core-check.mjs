@@ -92,11 +92,14 @@ export async function coreImportViolations(packageRoot) {
 		for (const file of files) {
 			const sourceFile = program.getSourceFile(resolve(file));
 
+			function fail(node, message) {
+				const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+				failures.push(`${relative(packageRoot, file)}:${line + 1}:${character + 1}: ${message}`);
+			}
+
 			function checkSpecifier(node) {
 				const reason = rejection(node.text, file, packageRoot);
-				if (!reason) return;
-				const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-				failures.push(`${relative(packageRoot, file)}:${line + 1}:${character + 1}: ${node.text} (${reason})`);
+				if (reason) fail(node, `${node.text} (${reason})`);
 			}
 
 			function visit(node) {
@@ -104,12 +107,11 @@ export async function coreImportViolations(packageRoot) {
 					checkSpecifier(node.moduleSpecifier);
 				} else if (predicates.isExportDeclaration(node) && isStringLiteralLike(node.moduleSpecifier)) {
 					checkSpecifier(node.moduleSpecifier);
-				} else if (
-					predicates.isCallExpression(node) &&
-					node.expression.kind === SyntaxKind.ImportKeyword &&
-					isStringLiteralLike(node.arguments[0])
-				) {
-					checkSpecifier(node.arguments[0]);
+				} else if (predicates.isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
+					// A specifier that is not a literal cannot be checked statically, so it fails closed.
+					const specifier = node.arguments[0];
+					if (isStringLiteralLike(specifier)) checkSpecifier(specifier);
+					else fail(node, `${node.getText(sourceFile)} (dynamic import specifier is not a literal)`);
 				} else if (predicates.isImportTypeNode(node)) {
 					if (predicates.isLiteralTypeNode(node.argument) && isStringLiteralLike(node.argument.literal)) {
 						checkSpecifier(node.argument.literal);

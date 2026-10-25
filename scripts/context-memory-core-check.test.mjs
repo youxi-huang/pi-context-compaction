@@ -76,8 +76,40 @@ test("dynamic imports reject specifiers that cannot be checked statically", asyn
 		violations.map((violation) => violation.replace(/^src\/dynamic\.ts:(\d+):\d+: /, "line $1: ")),
 		[
 			"line 5: fs (not relative-in-package, node:*, or typebox)",
-			"line 6: import(hostName) (dynamic import specifier is not a literal)",
-			"line 7: import(`@earendil-works/${name}`) (dynamic import specifier is not a literal)",
+			"line 6: import(hostName) (module specifier is not a literal)",
+			"line 7: import(`@earendil-works/${name}`) (module specifier is not a literal)",
+		],
+	);
+});
+
+test("require, getBuiltinModule and node:module are checked like imports", async (t) => {
+	const directory = scratch(t);
+	writeFileSync(
+		join(directory, "src/loaders.ts"),
+		[
+			'import { createRequire } from "node:module";',
+			'const name = "node:module";',
+			"export const viaCreateRequire = createRequire;",
+			'export const viaDynamicImport = () => import("node:module");',
+			'export const viaBuiltin = () => process.getBuiltinModule("node:module");',
+			"export const viaBuiltinVariable = () => process.getBuiltinModule(name);",
+			"const { getBuiltinModule } = process;",
+			"export const viaDestructured = () => getBuiltinModule(name);",
+			'export const viaRequire = () => require("@earendil-works/pi-ai");',
+			'export const allowedBuiltin = () => process.getBuiltinModule("node:crypto");',
+			"",
+		].join("\n"),
+	);
+	const violations = await coreImportViolations(directory);
+	assert.deepEqual(
+		violations.map((violation) => violation.replace(/^src\/loaders\.ts:(\d+):\d+: /, "line $1: ")),
+		[
+			"line 1: node:module (loads modules by name where the gate cannot follow)",
+			"line 4: node:module (loads modules by name where the gate cannot follow)",
+			"line 5: node:module (loads modules by name where the gate cannot follow)",
+			"line 6: process.getBuiltinModule(name) (module specifier is not a literal)",
+			"line 8: getBuiltinModule(name) (module specifier is not a literal)",
+			"line 9: @earendil-works/pi-ai (host package import)",
 		],
 	);
 });

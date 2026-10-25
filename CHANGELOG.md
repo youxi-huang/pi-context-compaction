@@ -21,6 +21,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 ### Fixed
 
 - The core's import gate checked a dynamic import only when its specifier was a literal, so `import(name)` or an interpolated template passed unchecked. Such a specifier now fails the gate with its location and expression. A regression covers both forms beside the literal ones that stay allowed.
+- The core's import gate never saw a module loaded by name through `node:module`'s `createRequire`, through `process.getBuiltinModule`, which needs no import at all, or through a bare `require`. `node:module` now fails the gate, and `require(x)` and `process.getBuiltinModule(x)` are checked like `import(x)`, so a specifier that is not a literal fails closed. Nothing in the core used any of these routes. A regression plants each form beside a builtin that stays allowed.
 
 ### Security
 

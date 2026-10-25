@@ -16,7 +16,7 @@ v0.7.1 is the first extension built on the v0.7.0 host-neutral core, and the fir
 
 ### Changed
 
-- The project is now called SLICE, Source-Linked Indexed Compaction of Everything, in the documentation, the release notes and the package description, and the README is rewritten for first-time readers. The repository, the install source, the package name `pi-context-compaction-preview`, the `/compaction-*` commands, the `pi-context-memory.json` configuration file and stored checkpoint identifiers keep their names, so existing installations and sessions need no change.
+- The project is now called SLICE, Source-Linked Indexed Compaction of Everything, in the documentation, the release notes and the package description, and the README is rewritten for first-time readers. Its commit diagram is redrawn for the extension's checks and disk readback, and the opening illustration no longer says that checkpoints are written only on a manual `/compact`. The repository, the install source, the package name `pi-context-compaction-preview`, the `/compaction-*` commands, the `pi-context-memory.json` configuration file and stored checkpoint identifiers keep their names, so existing installations and sessions need no change.
 
 ### Fixed
 

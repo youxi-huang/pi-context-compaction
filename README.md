@@ -67,9 +67,14 @@ A source-linked handover can point the agent back to the original failure, the a
 
 **Write a handover.** At a compaction point, the model produces a structured note about the task, the decisions made and the work still open. Each fact carries references to the session entries that support it.
 
-**Check before committing.** The extension checks the note's structure, verifies that cited entries belong to the current branch and that quoted text occurs in its cited source, then confirms the checkpoint in Pi's session file. It does not quietly replace a failed note with an unchecked summary.
+**Check before committing.** The extension checks the note's structure, verifies that cited entries belong to the current branch, that quoted text occurs in its cited source and that the sources have not changed, then reads the saved checkpoint back from Pi's session file. It does not quietly replace a failed note with an unchecked summary.
 
 **Return to the record.** The agent can use `context_history` to find an earlier decision, read an original message or check how a constraint changed. The session's JSONL remains the underlying history, rather than a separate reconstructed memory.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/context-memory/assets/commit-gate-dark.png">
+  <img src="docs/context-memory/assets/commit-gate.png" alt="A draft handover note passes four checks: a valid note, sources on the current branch, exact quotations and unchanged sources. Pi saves the checkpoint and it is read back from disk before it counts as committed. Any failure leaves it uncommitted and requests paused until /compact commits a new checkpoint or /compaction-recover confirms one Pi already saved.">
+</picture>
 
 These are checks of **source and record consistency**. They cannot show that a note contains every important fact or that a model will interpret retrieved evidence correctly. SLICE keeps the route back to the original; it does not remove the need for judgment.
 

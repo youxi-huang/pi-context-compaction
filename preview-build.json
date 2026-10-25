@@ -1,15 +1,16 @@
 {
-  "build": "stock-preview+src.64965b134b6fdc64",
-  "version": "0.6.0",
-  "sourceCommit": "86dbbdcdc8eb49acd0f20d52e1cb49291bcdef18",
-  "supportedPi": "1.3.0",
+  "build": "stock-preview+src.1a4f2d4911b1a0a3",
+  "version": "0.7.1",
+  "sourceCommit": "4d97d35dd8c164999103662c664f987370fe5e47",
+  "supportedPi": "1.4.0",
   "supportedPiVersions": [
+    "1.4.0",
     "1.3.0",
     "1.2.0",
     "1.1.0"
   ],
   "checkpointSchema": 1,
-  "sourceHash": "64965b134b6fdc641d6460b8f8db18088c4c8344346f799949a58eb35eb72744",
+  "sourceHash": "1a4f2d4911b1a0a3c3cd6c135b2f33a1ceb3cf7256ab6edddfdb7b336a4d242a",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -37,23 +38,23 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/call-journal.ts",
-      "sha256": "490a5562a7baaf80f2a541a51b0fb5e5dc72c2c9af653e3579cd6887fd059781"
+      "sha256": "75f1ee19d1ea3e0745f99f63c238b4a8a5e00d43ae826c4c323d947489ca7be9"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts",
-      "sha256": "28a1dccfa217e6f4a2b807a710a32e4eee0c980a6ec4babbb9742eaf0982c2d5"
+      "sha256": "74520b415110eb4d3a127b824a37ed08f4ec8a80227a284022aee06004dcf288"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/controller.ts",
-      "sha256": "a304f09513b2d4fe409054eace9f45789812c950efeedb354b35547c960ff671"
+      "sha256": "33c38cfe17afaf424a78839f869f0800c43fc28e29f62e2ad18570ff973f603f"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/excerpts.ts",
-      "sha256": "6045142208281b99be31248349959be5a9c0dedbc0defd256a3eb569e8314c9c"
+      "sha256": "a314615963bec6fc6411441b76ce7f0357dba4f3c355fe716a3f8d2983d0cf95"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
-      "sha256": "c618f341d804b3cfad28e82aad2294efd6e677d3ca7f108eaa4b7260473c75bb"
+      "sha256": "bcd18e444dee6e4f03d6fcff2393d63c3a80209ab98d22a316cd7cb57ef0da66"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts",
@@ -64,64 +65,104 @@
       "sha256": "02c18df4ecff2fa2bd0c752c984b7eb9ccfcceed37a46072c5f3e303cc3459a1"
     },
     {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/history-view.ts",
-      "sha256": "65a12af6706290a8ac27c7e505b977893de525025f415a881365d305eb3d13ee"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/note-envelope.ts",
-      "sha256": "688417206826dd744bbb6614aa82c76cdb32c5e2c2e71dd36ad002f1190ffa4c"
-    },
-    {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/notices.ts",
       "sha256": "3ba091ab0995492b6c17843b21ae78676376abcbb1e21bcb7ef4d489b2d278ef"
     },
     {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/preparation-candidate.ts",
-      "sha256": "4fedcf898714ef57b10b964a1a9f75c976a35632f2be277da76f8838c887d878"
-    },
-    {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/preparation.ts",
-      "sha256": "9c283934abb6eb9fea86d67a8f43217da5b98fa63fe1b0615766fe768d4fc9c9"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/quote-diagnostics.ts",
-      "sha256": "411c0a2d342a2be833ada3c9d831107b4d08c6a8b132ebc01fe24aae27e31a35"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/quote-repair.ts",
-      "sha256": "171e2d7cc1b4f1afc56c9c63dad665a47a17500015bfdde5e59a8aa116889e4e"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/reduction.ts",
-      "sha256": "459bd632e72ae3f2e718307e2157c665b1d3b61a20f30f659daa93e04d47d676"
+      "sha256": "b4f0a254b70044516a41acc35a2249c94d0c9a772eb1c870b6e7d79829499a36"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/render-projection.ts",
-      "sha256": "0a57e222c1a905aa71e449c6530fb2df36b8df4a3683ac740915f11250500210"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/schema-diagnostics.ts",
-      "sha256": "83adb86130f43eaffc4073e62f744b36c68f33a05dfee711b2db510f72c6e025"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/scope-diagnostics.ts",
-      "sha256": "59b93ec73aa6df0fa3b5786c91c3afb9a7f5a355b1f1ed00b9e6ad3e850040cc"
-    },
-    {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/sources-repair.ts",
-      "sha256": "13756e7b87c201d5eebfeb52ff96491b86983ac8ba5f85959b579d7a1dd18362"
+      "sha256": "3bb9639c2f0a1c14ea71690f279101a39425f2a449f40b5e3ba96f87e44269e4"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/status-line.ts",
       "sha256": "990b9142a41017e8daa60ea2d48f3fb783db72808e1e222ebfd5ec79c5636df9"
     },
     {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/work-notes.ts",
-      "sha256": "0f2d0b2c5d79756f0100d54e4f3d68b1f4818776be40d1e5b353b685593bca4f"
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/writer.ts",
+      "sha256": "e3fe8ae2b837912212b7604d6adce1c3b3d6762222153425e514dccc224ddb56"
     },
     {
-      "file": "packages/coding-agent/src/extensions/context-memory/preview/writer.ts",
-      "sha256": "a684ff46ef4b74d74d262449f023d4de8e45129c6c5531cdb161120d5e0feda1"
+      "file": "packages/compaction-core/src/call-journal.ts",
+      "sha256": "909b854b47eb412d872e1251e9a4e48a5cd89204a263fbcb747d6ac5b7638cc9"
+    },
+    {
+      "file": "packages/compaction-core/src/canonical.ts",
+      "sha256": "0040f6fcf421da6d9a9118b16bb89cc6a6b436403f1c39e4b8ca3ee35ed2850a"
+    },
+    {
+      "file": "packages/compaction-core/src/config.ts",
+      "sha256": "0afc08d6838abf7c28149b53f38ac53893cdeb62603b4444db67fe34053bd35d"
+    },
+    {
+      "file": "packages/compaction-core/src/cuts.ts",
+      "sha256": "3b2f2cff62e7bbbd4875530ef1c303aa95db245ea2c2c56e67eddc3a2e8470e3"
+    },
+    {
+      "file": "packages/compaction-core/src/excerpts.ts",
+      "sha256": "b8dc4e50ee6aab0616aa6c3d07add67383990edd09556c0caeda4dc81755a9b9"
+    },
+    {
+      "file": "packages/compaction-core/src/guards.ts",
+      "sha256": "e8a4690a93d601be76d75e9bd51ca5a6e6e4bf7d64431fe1c7b551e34e8ee777"
+    },
+    {
+      "file": "packages/compaction-core/src/history-view.ts",
+      "sha256": "9a30c77f6d9ba81f256e528da6a2a5e5a2ca722f403f9bc16032bb1bb9e64d24"
+    },
+    {
+      "file": "packages/compaction-core/src/history.ts",
+      "sha256": "762be08a116c347c15c152c6b63ad2c7a438a62f506f02b73a24963559128683"
+    },
+    {
+      "file": "packages/compaction-core/src/identity.ts",
+      "sha256": "66cd58e50d437d74c23df1e93255827f9f0580890ca1743d37118704022e86a9"
+    },
+    {
+      "file": "packages/compaction-core/src/note-envelope.ts",
+      "sha256": "d41e587d8b2489cfd420a94508cd53c1fcfcca033675637f9ba0064c08cb208a"
+    },
+    {
+      "file": "packages/compaction-core/src/notes.ts",
+      "sha256": "8aa45029923194718d8bf68810f612ac6529fe27cd905635e755f4897475584b"
+    },
+    {
+      "file": "packages/compaction-core/src/preparation-candidate.ts",
+      "sha256": "b0d3e717145df5dbb439a56a5df53d16b75c68c48c28afa0c08e80503a2f2bd1"
+    },
+    {
+      "file": "packages/compaction-core/src/quote-diagnostics.ts",
+      "sha256": "b9f09e242e3d81e02c97771e02b398443e93fd170420f6f195752a7a34067d70"
+    },
+    {
+      "file": "packages/compaction-core/src/quote-repair.ts",
+      "sha256": "18eaf1c0546ea4e01c88e78fc1924a93d91cac5c94b87267b0f6cefdd8879bcb"
+    },
+    {
+      "file": "packages/compaction-core/src/reduction.ts",
+      "sha256": "4f1441a33c366846cb7223b1dcf3828158c421f27d67863b1ce83d2365e54e5e"
+    },
+    {
+      "file": "packages/compaction-core/src/schema-diagnostics.ts",
+      "sha256": "e5d137bcf0c6d01f6e15caa5592dc570de5e5c00dc79a80b35c49bb2f266d0df"
+    },
+    {
+      "file": "packages/compaction-core/src/scope-diagnostics.ts",
+      "sha256": "4ebf5d64ec9e7030425589aae0e148d871bd7b751232486248fb9f60cd685f20"
+    },
+    {
+      "file": "packages/compaction-core/src/sources-repair.ts",
+      "sha256": "0310675e04c675af97d5cba23c6996bc8c375495de31219764d34b8c53ff6e0f"
+    },
+    {
+      "file": "packages/compaction-core/src/work-notes.ts",
+      "sha256": "63cd596fb1cc4b14252169c8b44bf84b7abe7439ce9175c12c279007d85baf08"
+    },
+    {
+      "file": "packages/compaction-core/src/writer.ts",
+      "sha256": "7d6009b9c7c61ba23fd0e8b9185b030abd6eccb45515d7bc4b0c4dd3f9eb4007"
     }
   ],
   "externalImports": [

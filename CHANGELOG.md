@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Maintenance
+
+- CI runs its full pipeline on every push to main, including a merge that changes Markdown documents alone; only such a pull request still skips it. Publication accepts a tagged commit only after its `verify` check concluded `success`, and a skipped job concludes `skipped`, so a release tagged on a documentation-only merge would have failed at its last step, after the whole stock-Pi acceptance had run. A regression runs the workflow's scope step on a documentation-only commit for a pull request, a push and a manual run.
+
 ## [v0.7.1] — 2026-10-25
 
 v0.7.1 is the first extension built on the v0.7.0 host-neutral core, and the first release under the SLICE name. It adds official Pi 1.4.0 as the primary host beside 1.3.0, 1.2.0 and 1.1.0 and behaves as extension-v0.6.0 did: the core lifts were byte-identical on scripted inputs, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The core's import gate now also refuses module loads it cannot verify. Every result is offline, on official Pi installations with loopback services; real-provider behavior is not part of this release.

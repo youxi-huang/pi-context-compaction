@@ -221,6 +221,45 @@ test("main CI requires strict scenarios without removing other gates", () => {
 	}
 });
 
+test("a push to main runs verify for Markdown alone, so publication can accept any main commit", () => {
+	const jobs = parseDocument(readFileSync(new URL("../.github/workflows/context-memory.yml", import.meta.url), "utf8")).toJS().jobs;
+	assert.equal(jobs.verify.if, "needs.scope.outputs.docs_only != 'true'");
+	const script = jobs.scope.steps.find((step) => step.id === "diff").run;
+	const root = mkdtempSync(join(tmpdir(), "context-memory-scope-"));
+	try {
+		const repo = join(root, "repo");
+		mkdirSync(join(repo, "docs"), { recursive: true });
+		const git = (...args) => {
+			const result = spawnSync("git", ["-c", "user.name=scope", "-c", "user.email=scope@example.invalid", "-c", "commit.gpgsign=false", ...args], { cwd: repo, encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
+			return result.stdout.trim();
+		};
+		git("init", "-q");
+		writeFileSync(join(repo, "README.md"), "base\n");
+		git("add", ".");
+		git("commit", "-qm", "base");
+		const before = git("rev-parse", "HEAD");
+		git("update-ref", "refs/remotes/origin/main", before);
+		writeFileSync(join(repo, "docs", "guide.md"), "guide\n");
+		git("add", ".");
+		git("commit", "-qm", "docs");
+		const scope = (event) => {
+			const output = join(root, `${event}.out`);
+			writeFileSync(output, "");
+			const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+				cwd: repo, encoding: "utf8", env: { ...process.env, EVENT: event, BASE_REF: "main", BEFORE: before, GITHUB_OUTPUT: output },
+			});
+			assert.equal(result.status, 0, result.stderr);
+			return readFileSync(output, "utf8").trim();
+		};
+		assert.equal(scope("pull_request"), "docs_only=true");
+		assert.equal(scope("push"), "docs_only=false");
+		assert.equal(scope("workflow_dispatch"), "docs_only=false");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("ops rejects ambiguous or misplaced acceptance-profile flags before running a pipeline", () => {
 	const script = fileURLToPath(new URL("./context-memory-ops.mjs", import.meta.url));
 	for (const args of [["verify", "--acceptance-profile", PROFILE], ["preview", "--acceptance-profile"], ["ci", "--acceptance-profile", "unapproved"], ["ci", "--acceptance-profile", PROFILE, "--acceptance-profile", PROFILE]]) {

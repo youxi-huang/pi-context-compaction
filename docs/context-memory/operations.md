@@ -28,11 +28,13 @@ and report the discrepancy. Preview install/acceptance commands come from
 ## Scale the check to the change
 
 Run the narrowest command that observes the change. CI runs the full pipeline
-on every pull request and push to main, and skips it only when a change touches
-nothing but Markdown under `docs/` or the repository root; `CHANGELOG.md` and
-`docs/context-memory/extension-preview.md` always run it, because release
-preparation reads the first and the package README is built from the second.
-The publication workflow re-verifies every release on its tag regardless.
+on every pull request and push to main, and skips it only for a pull request
+that touches nothing but Markdown under `docs/` or the repository root;
+`CHANGELOG.md` and `docs/context-memory/extension-preview.md` always run it,
+because release preparation reads the first and the package README is built
+from the second. A push to main always runs it: publication accepts a tagged
+commit only after its `verify` check passed, and a skipped job does not count.
+The publication workflow also re-verifies every release on its tag.
 
 | Change | Minimal local check |
 | --- | --- |

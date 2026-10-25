@@ -23,6 +23,10 @@ v0.7.1 is the first extension built on the v0.7.0 host-neutral core, and the fir
 - The core's import gate checked a dynamic import only when its specifier was a literal, so `import(name)` or an interpolated template passed unchecked. Such a specifier now fails the gate with its location and expression. A regression covers both forms beside the literal ones that stay allowed.
 - The core's import gate never saw a module loaded by name through `node:module`'s `createRequire`, through `process.getBuiltinModule`, which needs no import at all, or through a bare `require`. `node:module` now fails the gate, and `require(x)` and `process.getBuiltinModule(x)` are checked like `import(x)`, so a specifier that is not a literal fails closed. Nothing in the core used any of these routes. A regression plants each form beside a builtin that stays allowed.
 
+### Security
+
+- Update undici from 8.10.2 to 8.12.3 for GHSA-qrxm-fqhp-jwvm, GHSA-2m5v-pch6-74hx, GHSA-4w7w-5xrc-9h26, GHSA-xjj6-f33q-929c, GHSA-55wc-3pg8-jfw6, GHSA-f72v-6w45-q472, GHSA-4qv8-2p9j-2685 and GHSA-9fm3-97px-rjf6, and the development-only fast-uri, which the evaluation workspace pulls in through ajv, from 3.1.8 to 3.1.9 for GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr, GHSA-xhq7-xmqj-769h and GHSA-333x-w4r6-6crp. The coding agent built from this tree sends its HTTP requests through undici, so the generated coding-agent install lock moves with it. The independent extension ships neither package; on official Pi it runs with the undici that Pi installs.
+
 ### Maintenance
 
 - The **Publish extension preview** workflow recognizes a source release. A `v*` tag whose version differs from the extension package it builds, while that package version is already published, now ends after the build with a notice and publishes nothing, instead of running stock-Pi acceptance and failing at the publish step as v0.7.0 did. A tag beside an unpublished package version still fails, before any official Pi is installed.

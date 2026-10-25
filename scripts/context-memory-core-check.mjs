@@ -5,9 +5,12 @@
  *    imports, re-exports and dynamic imports included — must be relative and stay inside the
  *    package, `node:*`, or TypeBox. Anything else fails, explicitly including any
  *    `@earendil-works/*` specifier and any relative path that escapes the package (for example
- *    into packages/coding-agent/src). Test files may additionally import the repository's test
- *    runner, which is never bundled. Modeled on the preview builder's input and external-import
- *    allowlists in context-memory-preview-build.mjs, with the Pi peers removed.
+ *    into packages/coding-agent/src). `require(x)` and `process.getBuiltinModule(x)` count as
+ *    imports, a specifier that is not a literal fails, and so does `node:module`, which loads
+ *    modules by name where the gate cannot follow. Test files may additionally import the
+ *    repository's test runner, which is never bundled. Modeled on the preview builder's input
+ *    and external-import allowlists in context-memory-preview-build.mjs, with the Pi peers
+ *    removed.
  * 2. Isolation check: the core is copied to a temporary directory where no `@earendil-works/*`
  *    package resolves, built with tsc, and its tests run there — the roadmap's "builds and tests
  *    without Pi packages" made mechanical, in the manner of the stock-Pi acceptance's temporary
@@ -55,6 +58,8 @@ async function loadParser() {
 }
 
 function rejection(specifier, file, packageRoot) {
+	// createRequire and register load a module from a name computed at run time.
+	if (specifier === "node:module") return "loads modules by name where the gate cannot follow";
 	if (specifier.startsWith("node:")) return undefined;
 	if (specifier === "typebox" || specifier.startsWith("typebox/")) return undefined;
 	// The repository's test runner is allowed in test files only; it is never bundled or shipped.
@@ -77,6 +82,11 @@ export async function coreImportViolations(packageRoot) {
 	const { SyntaxKind, predicates, API } = await loadParser();
 	const isStringLiteralLike = (node) =>
 		node !== undefined && (predicates.isStringLiteral(node) || predicates.isNoSubstitutionTemplateLiteral(node));
+	// import(x), require(x) and process.getBuiltinModule(x), destructured or not, all load a module by name.
+	const loadsModule = (callee) =>
+		callee.kind === SyntaxKind.ImportKeyword ||
+		(predicates.isIdentifier(callee) && (callee.text === "require" || callee.text === "getBuiltinModule")) ||
+		(predicates.isPropertyAccessExpression(callee) && callee.name.text === "getBuiltinModule");
 	// Parse every file through one synthetic project. noResolve keeps the program to exactly these files.
 	const configPath = resolve(packageRoot, "tsconfig.core-import-gate.json");
 	const config = JSON.stringify({ compilerOptions: { noResolve: true, noLib: true, types: [] }, files });
@@ -107,11 +117,11 @@ export async function coreImportViolations(packageRoot) {
 					checkSpecifier(node.moduleSpecifier);
 				} else if (predicates.isExportDeclaration(node) && isStringLiteralLike(node.moduleSpecifier)) {
 					checkSpecifier(node.moduleSpecifier);
-				} else if (predicates.isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
+				} else if (predicates.isCallExpression(node) && loadsModule(node.expression)) {
 					// A specifier that is not a literal cannot be checked statically, so it fails closed.
 					const specifier = node.arguments[0];
 					if (isStringLiteralLike(specifier)) checkSpecifier(specifier);
-					else fail(node, `${node.getText(sourceFile)} (dynamic import specifier is not a literal)`);
+					else fail(node, `${node.getText(sourceFile)} (module specifier is not a literal)`);
 				} else if (predicates.isImportTypeNode(node)) {
 					if (predicates.isLiteralTypeNode(node.argument) && isStringLiteralLike(node.argument.literal)) {
 						checkSpecifier(node.argument.literal);

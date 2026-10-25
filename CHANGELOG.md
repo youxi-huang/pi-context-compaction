@@ -18,6 +18,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - The preview's host-independent logic now lives in the core package and the extension is the core's first adapter, with no change in behavior: the reduction, validation and repairs, note and work-note formats, checkpoint shapes, views and accounting, the pure cut and guard helpers, and the writer contract moved in five lift steps, each shown byte-identical on scripted inputs by the equivalence run, with the writer's transport (model resolution, dispatch, reasoning mapping, the session-ID cache key) staying with the adapter.
 - The resident runtime is frozen as of 2026-10-22 under the v0.7.0 plan's H5: no further Pi ports or features, dependency and security maintenance only, retirement by 0.10.0; recorded in the upstream delta and the preview guide.
 
+### Fixed
+
+- The core's import gate checked a dynamic import only when its specifier was a literal, so `import(name)` or an interpolated template passed unchecked. Such a specifier now fails the gate with its location and expression. A regression covers both forms beside the literal ones that stay allowed.
+
 ### Security
 
 - Update the development-only Vite dependency from 8.0.16 to 8.3.5 for GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm, GHSA-9jrq-w75r-8gcw and GHSA-rq7h-c2jc-7f22, and Vitest with `@vitest/mocker` from 4.1.11 to 4.1.12 for GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp. These updates affect the development and test toolchain; the independent extension does not ship either package, and the generated coding-agent install lock is unchanged.

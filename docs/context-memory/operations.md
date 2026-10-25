@@ -79,7 +79,7 @@ gate, 2 means invalid usage; a failed command retains its own exit code.
 Preview `--prepare` requires a clean committed checkout. It only prepares local
 archives and never publishes. Do not bypass its clean-source check.
 
-The v0.6.0 independent extension keeps a source fingerprint to bind package
+The independent extension keeps a source fingerprint to bind package
 acceptance and scenario evidence to its exact inputs. Host file hashes before
 and after acceptance check that testing did not patch official Pi. Checkpoint
 source hashes protect persisted evidence and recovery. These checks cover

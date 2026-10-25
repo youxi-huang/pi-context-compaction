@@ -153,8 +153,8 @@ export function releaseNotes({ repository, branch, tag, packageTag, sourceCommit
 	if (functionalPreview) assertFunctionalProfile(scenarioAcceptance);
 	if (latencyRelease) assertStrictReleaseProfile(scenarioAcceptance, reviewed.version);
 	const introduction = reviewed.preview
-		? `Pi Context Compaction ${tag} is an **experimental A-stage preview candidate** for **unmodified official Pi ${hosts}**.\n\n`
-		: `Pi Context Compaction ${tag} supplies an ordinary extension for **unmodified official Pi ${hosts}**.\n\n`;
+		? `SLICE ${tag} is an **experimental A-stage preview candidate** for **unmodified official Pi ${hosts}**.\n\n`
+		: `SLICE ${tag} supplies an ordinary extension for **unmodified official Pi ${hosts}**.\n\n`;
 	const preparation = latencyRelease
 		? `Optional preparation has two arms, both **disabled by default**: A prepares with the configured writer; B merges data-only work notes from the session model. A validated candidate can commit its covered prefix without a writer call while every later original stays verbatim. B carries covered user messages in full and falls back to the configured writer when they do not fit. Every writer call is journaled, including cancelled or discarded preparation and unknown usage. These are experimental paths; real-provider pause, total cost, cache behavior and recovery benefits remain unproven.\n\n`
 		: reviewed.preview

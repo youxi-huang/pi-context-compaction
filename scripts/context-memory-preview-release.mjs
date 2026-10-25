@@ -189,7 +189,7 @@ if (!publish) {
 			assert(matching.length <= 1, "Multiple release records for the tag; resolve without overwriting assets");
 			release = matching[0] ?? null;
 		}
-		if (!release) release = await api("releases", "POST", { tag_name: tag, target_commitish: sourceCommit, name: `${tag} — Independent extension preview for Pi ${hostList(hosts)}`, body: notes, draft: true, prerelease: true, make_latest: "false" });
+		if (!release) release = await api("releases", "POST", { tag_name: tag, target_commitish: sourceCommit, name: `${tag}: SLICE extension preview for Pi ${hostList(hosts)}`, body: notes, draft: true, prerelease: true, make_latest: "false" });
 		assert.equal(release.prerelease, true);
 		for (const file of assets) {
 			const bytes = readFileSync(join(artifacts, file));

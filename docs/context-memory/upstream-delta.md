@@ -23,7 +23,7 @@ This is an example and dependency change, with no host runtime source changes or
 ## Independent preview
 
 `context-memory/preview/` is a separate ordinary extension using public imports
-from official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 in the source after v0.7.0 (1.3.0, 1.2.0 and 1.1.0 in v0.6.0). Its package builder rejects runtime imports of resident
+from official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 in v0.7.1 (1.3.0, 1.2.0 and 1.1.0 in v0.6.0). Its package builder rejects runtime imports of resident
 lifecycle or host source code, bundles only preview code and shared note/history
 primitives, and gives that artifact its own source fingerprint. None of the six
 resident host files or their existing fingerprint changes for the v0.3.1 preview.

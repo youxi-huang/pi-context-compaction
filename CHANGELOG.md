@@ -1,14 +1,22 @@
 # Changelog
 
-This file records changes to Pi Context Compaction. The changelogs under `packages/` retain the upstream Pi package history. Project releases use their own version numbers; the initial host baseline is Pi `v0.85.1`.
+This file records changes to SLICE, called Pi Context Compaction before v0.7.1. The changelogs under `packages/` retain the upstream Pi package history. Project releases use their own version numbers; the initial host baseline is Pi `v0.85.1`.
 
 Changes under **Unreleased** are not included in an existing release tag or its downloadable assets. Entries describe user-visible behavior, compatibility, security and significant maintenance changes.
 
 ## [Unreleased]
 
+## [v0.7.1] — 2026-10-25
+
+v0.7.1 is the first extension built on the v0.7.0 host-neutral core, and the first release under the SLICE name. It adds official Pi 1.4.0 as the primary host beside 1.3.0, 1.2.0 and 1.1.0 and behaves as extension-v0.6.0 did: the core lifts were byte-identical on scripted inputs, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The core's import gate now also refuses module loads it cannot verify. Every result is offline, on official Pi installations with loopback services; real-provider behavior is not part of this release.
+
 ### Added
 
 - Official Pi 1.4.0 is supported and becomes the primary host, beside 1.3.0, 1.2.0 and 1.1.0. Its extension API declarations, extension runner and session storage match 1.3.0, and it installs the same seven runtime packages, without `chord`. Stock-Pi acceptance runs on all four hosts: each older host compacts a checkpoint written on 1.4.0, and 1.4.0 reopens the result. Pi 1.4.0's summary changes, the ignored `reserveTokens` and custom instructions on a split turn, concern Pi's own summarizer, which the extension does not call. Its persistent omission of a truncated attempt's tool results arrives as context edits, which the extension already validates in full before the next request.
+
+### Changed
+
+- The project is now called SLICE, Source-Linked Indexed Compaction of Everything, in the documentation, the release notes and the package description, and the README is rewritten for first-time readers. The repository, the install source, the package name `pi-context-compaction-preview`, the `/compaction-*` commands, the `pi-context-memory.json` configuration file and stored checkpoint identifiers keep their names, so existing installations and sessions need no change.
 
 ### Fixed
 

@@ -104,12 +104,16 @@ export async function coreImportViolations(packageRoot) {
 					checkSpecifier(node.moduleSpecifier);
 				} else if (predicates.isExportDeclaration(node) && isStringLiteralLike(node.moduleSpecifier)) {
 					checkSpecifier(node.moduleSpecifier);
-				} else if (
-					predicates.isCallExpression(node) &&
-					node.expression.kind === SyntaxKind.ImportKeyword &&
-					isStringLiteralLike(node.arguments[0])
-				) {
-					checkSpecifier(node.arguments[0]);
+				} else if (predicates.isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
+					const specifier = node.arguments[0];
+					if (isStringLiteralLike(specifier)) {
+						checkSpecifier(specifier);
+					} else {
+						const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+						failures.push(
+							`${relative(packageRoot, file)}:${line + 1}:${character + 1}: dynamic import specifier must be a string literal or no-substitution template literal`,
+						);
+						}
 				} else if (predicates.isImportTypeNode(node)) {
 					if (predicates.isLiteralTypeNode(node.argument) && isStringLiteralLike(node.argument.literal)) {
 						checkSpecifier(node.argument.literal);

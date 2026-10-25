@@ -56,6 +56,34 @@ test("a deliberately planted host import is rejected, in type position too", asy
 	assert.equal(violations.length, 5);
 });
 
+test("dynamic imports reject specifiers that cannot be checked statically", async (t) => {
+	const directory = scratch(t);
+	writeFileSync(
+		join(directory, "src/dynamic.ts"),
+		[
+			'const hostName = "@earendil-works/pi-ai";',
+			'const name = "pi-ai";',
+			'export const allowedLiteral = () => import("./helper.ts");',
+			'export const allowedTemplate = () => import(`./helper.ts`);',
+			'export const disallowedLiteral = () => import("@earendil-works/pi-ai");',
+			'export const disallowedTemplate = () => import(`fs`);',
+			'export const variable = () => import(hostName);',
+			'export const interpolated = () => import(`@earendil-works/${name}`);',
+			"",
+		].join("\n"),
+	);
+	const violations = await coreImportViolations(directory);
+	assert.equal(violations.length, 4, violations.join("\n"));
+	assert.ok(violations.some((violation) => violation.includes(" @earendil-works/pi-ai (host package import)")));
+	assert.ok(violations.some((violation) => violation.includes(" fs (not relative-in-package, node:*, or typebox)")));
+	for (const line of [7, 8]) {
+		assert.match(
+			violations.find((violation) => violation.startsWith(`src/dynamic.ts:${line}:`)) ?? "",
+			/dynamic import specifier must be a string literal or no-substitution template literal/,
+		);
+	}
+});
+
 test("undeclared bare specifiers fail, including bare builtins and vitest outside test files", async (t) => {
 	const directory = scratch(t);
 	writeFileSync(join(directory, "src/bare.ts"), 'export { readFileSync } from "fs";\nexport { describe } from "vitest";\n');

@@ -1,5 +1,41 @@
 # Validation record
 
+## Pi 1.4.0 as the preview's primary host, 2026-10-25 UTC
+
+Official Pi 1.4.0 joins the independent preview's hosts as the primary one,
+beside 1.3.0, 1.2.0 and 1.1.0. The published npm packages of 1.3.0 and 1.4.0
+were compared first: the extension API declarations, the extension runner, the
+session manager and the SDK index are identical, and 1.4.0 installs the same
+seven runtime packages without `chord`. All evidence below is synthetic and
+offline (`PI_OFFLINE=1`, zero model budget, loopback providers); no provider
+was called.
+
+| Command | Result and exit code |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` on the unchanged base 2fc5c01 | Exit 0, all eight steps |
+| `node scripts/context-memory-ops.mjs ci` on 1ae8fb5 | Exit 0, all 22 steps; "Published runtime fingerprint is unchanged" |
+| Stock acceptance, inside `ci` | 34/34 on official Pi 1.4.0 with cross-version checkpoints for 1.3.0, 1.2.0 and 1.1.0; 28/28 on each of 1.3.0, 1.2.0 and 1.1.0 |
+| Strict scenarios, inside `ci`, official Pi 1.4.0 with 1.0.4 as the unsupported host | 157 passed, 0 failed, 0 known gaps, strict profile accepted; 0 ms request overhead at 20 checkpoints |
+| `node scripts/context-memory-preview-scenarios.mjs --acceptance-profile strict`, official Pi 1.3.0 with 1.0.4 | 157 passed, 0 failed, 0 known gaps, exit 0; 0 ms request overhead at 20 checkpoints |
+| Release checks and `context-memory-preview-release.mjs --prepare`, inside `ci` | 32/32; prepare exit 0 |
+| `eval/check.mjs`, inside `ci` | 148 passed, 3 skipped (the zero-record vectors on the adapter path) |
+
+The five new `tool-loadout` checks cover Pi 1.4.0's change to tool activation
+on resume and `/tree`: extension tools a branch never recorded are activated
+unless they register with `defaultActive: false`, which `context_note` does
+while arm B is off. On both 1.4.0 and 1.3.0 the provider was offered
+`context_history` and not `context_note` in a fresh session, after a restart,
+after `/tree` and in a session started before the extension was installed, and
+both tools after a restart on a branch with an earlier `context_note` call.
+
+Findings recorded for follow-up:
+
+- Pi 1.4.0 now omits a truncated attempt's tool results with persistent
+  context edits (upstream #11227). The path runs only when a run's last
+  response is a truncated tool call, and the public agent loop always
+  continues after failing those calls, so no scenario reproduces it without an
+  abort. Any context edit already sends the extension to full validation.
+
 ## 0.7.0 host-neutral core: specification, five lifts, conformance vectors and host-neutral fixtures, 2026-10-22 UTC
 
 The core package lands with its specification (reviewed by the maintainer the

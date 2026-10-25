@@ -44,6 +44,7 @@ const CASES = [
 	{ name: "other-pi-version", variants: ["extension", "control"], otherHost: true },
 	{ name: "failed-compaction-notices", variants: ["extension"] },
 	{ name: "work-notes", variants: ["extension"] },
+	{ name: "tool-loadout", variants: ["extension"] },
 	{ name: "prepared-candidate", variants: ["extension"] },
 	{ name: "reduction", variants: ["extension"] },
 	{ name: "long-session-overhead", variants: ["extension"], timeoutMs: 1_200_000 },
@@ -134,6 +135,8 @@ async function worker() {
 	let writerDelayMs = 0;
 	let writerOmitsUsage = false;
 	let lastMainPayload = "";
+	// The tool names the provider was offered in the last main request.
+	let lastMainTools = [];
 	let lastWriterPayload = "";
 	let manager;
 	function sourceId() {
@@ -220,6 +223,7 @@ async function worker() {
 			return stream(response, payload.model, "Synthetic native summary: port 4317, deployment unauthorized.");
 		}
 		lastMainPayload = serialized;
+		lastMainTools = (payload.tools ?? []).map((tool) => tool.function?.name ?? tool.name);
 		const noteGuideline = serialized.includes("Call context_note after a decision");
 		if (toolCalls.length) {
 			const call = toolCalls.shift();
@@ -878,6 +882,51 @@ async function worker() {
 				await open(stock.SessionManager.open(file));
 				const changed = await prompt("Continue.");
 				check("same-id-edit-blocks", "Changing an original's content under the same entry ID blocks the session with CONTEXT_SOURCE_CHANGED", !changed.reached && changed.marker?.code === "CONTEXT_SOURCE_CHANGED", changed);
+				break;
+			}
+			case "tool-loadout": {
+				// What the provider is offered after a restart and /tree navigation, with arm B off by default.
+				// Since Pi 1.4.0 an extension tool the branch never recorded is activated unless it registers with
+				// defaultActive: false, which context_note does while arm B is off.
+				const offered = async (text) => {
+					lastMainTools = [];
+					const turn = await prompt(text);
+					return { turn, tools: lastMainTools, history: lastMainTools.includes("context_history"), note: lastMainTools.includes("context_note") };
+				};
+				writeSettings(true);
+				await open(newSession());
+				const fresh = await offered(SOURCE_TEXT);
+				check("fresh-loadout", "A fresh session offers context_history and, with arm B off, not context_note", fresh.turn.reached && fresh.history && !fresh.note, { sent: fresh.turn.sent, tools: fresh.tools });
+				const file = manager.getSessionFile();
+				await open(stock.SessionManager.open(file));
+				const restarted = await offered("Continue after the restart.");
+				check("reopen-loadout", "After a restart the session still offers context_history and not context_note", restarted.turn.reached && restarted.history && !restarted.note, { sent: restarted.turn.sent, tools: restarted.tools });
+				const firstReply = manager.getBranch().find((entry) => entry.type === "message" && entry.message.role === "assistant")?.id;
+				await session.navigateTree(firstReply);
+				const navigated = await offered("Continue on this branch.");
+				check("tree-loadout", "After /tree navigation the branch still offers context_history and not context_note", navigated.turn.reached && navigated.history && !navigated.note, { sent: navigated.turn.sent, tools: navigated.tools });
+				// A branch that called context_note while arm B was on offers it again once B is off.
+				writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ previewWorkNotes: { enabled: true } }));
+				await open(newSession());
+				await prompt(SOURCE_TEXT);
+				toolCalls = [{ name: "context_note", args: () => ({ state: [{ text: "The service uses port 4317.", sources: [sourceId()] }] }) }];
+				observe("context_note call with arm B on", await prompt("Record where the work stands."));
+				const notedFile = manager.getSessionFile();
+				rmSync(join(agentDir, "pi-context-memory.json"));
+				await open(stock.SessionManager.open(notedFile));
+				const earlier = await offered("Continue with arm B off.");
+				check("earlier-call-reopen", "With arm B off, a branch that called context_note offers it again after a restart", earlier.turn.reached && earlier.history && earlier.note, { sent: earlier.turn.sent, tools: earlier.tools });
+				// A session started before the extension was installed recorded a tool loadout without its tools.
+				writeSettings(false);
+				await open(newSession());
+				await prompt(SOURCE_TEXT);
+				const preInstallFile = manager.getSessionFile();
+				writeSettings(true);
+				await open(stock.SessionManager.open(preInstallFile));
+				const installed = await offered("Continue with the extension installed.");
+				// Recorded per host: which of the extension's tools such a session is offered.
+				observe("session started before the extension was installed", { pi: piVersion, tools: installed.tools });
+				check("pre-install-no-note", "A session started before the extension was installed stays usable and, with arm B off, is not offered context_note", installed.turn.reached && !installed.note, { sent: installed.turn.sent, tools: installed.tools });
 				break;
 			}
 			case "prepared-candidate": {

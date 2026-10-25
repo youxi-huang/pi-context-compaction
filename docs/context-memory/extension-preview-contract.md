@@ -6,7 +6,8 @@ publication instructions. Resident build fingerprints and the six host
 integration files remain unchanged; provider-quality validation is separate.
 
 v0.4.2 extended the host matrix to official Pi 1.2.0 and 1.1.0, and v0.4.3
-added 1.3.0 as the primary host; v0.5.0 to v0.6.0 keep that matrix. The checkpoint schema and the resident 1.1.0 baseline stay
+added 1.3.0 as the primary host; v0.5.0 to v0.6.0 keep that matrix, and
+v0.7.1 adds 1.4.0 as the primary host. The checkpoint schema and the resident 1.1.0 baseline stay
 unchanged. CI and publication read the matrix from the candidate's
 `preview-build.json` and run acceptance on every listed host. The first-candidate scope
 below records the original 1.1.0 delivery.
@@ -84,8 +85,8 @@ claim on it: a checkpoint written by the preview (`details.kind` is
 the session file, or a pending or blocked marker, or a same-process sticky
 failure or active attempt. Content alone never removes protection.
 
-A session without such a claim is eligible on a reviewed official host (Pi 1.3.0,
-1.2.0 or 1.1.0 for v0.6.0),
+A session without such a claim is eligible on a reviewed official host (Pi 1.4.0,
+1.3.0, 1.2.0 or 1.1.0 for v0.7.1; 1.3.0, 1.2.0 or 1.1.0 for v0.6.0),
 the session is persistent, its branch has only preview checkpoints, text
 content and validated failed-response omissions. Eligible sessions get the full
 request guards and manual compaction. A compaction attempt, including the

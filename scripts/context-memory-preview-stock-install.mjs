@@ -15,7 +15,7 @@ export const OFFICIAL_PI_COHORT = Object.freeze([
 	"@earendil-works/pi-tui",
 	"@earendil-works/pi-telemetry",
 ]);
-export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.3.0", "1.2.0", "1.1.0", "1.0.4"]);
+export const OFFICIAL_PI_VERSIONS = Object.freeze(["1.4.0", "1.3.0", "1.2.0", "1.1.0", "1.0.4"]);
 // A newer host that still needed chord fails inspection as an unreviewed dependency instead of installing it silently.
 export const CHORD_PI_VERSIONS = Object.freeze(["1.1.0", "1.0.4"]);
 const cohort = new Set(OFFICIAL_PI_COHORT);

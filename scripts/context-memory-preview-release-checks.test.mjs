@@ -118,11 +118,11 @@ test("the plan reads every declared host from the candidate and fails closed on 
 		writeFileSync(join(directory, "preview-build.json"), JSON.stringify(build));
 	};
 	const script = fileURLToPath(new URL("./context-memory-preview-release-checks.mjs", import.meta.url));
-	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.3.0", supportedPiVersions: ["1.3.0", "1.2.0", "1.1.0"] });
+	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.4.0", supportedPiVersions: ["1.4.0", "1.3.0", "1.2.0", "1.1.0"] });
 	const result = spawnSync(process.execPath, [script, "--plan", directory], { encoding: "utf8" });
 	assert.equal(result.status, 0, result.stderr);
-	assert.equal(result.stdout, "hosts=1.3.0 1.2.0 1.1.0\nprofile=strict\nother=1.0.4\n");
-	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.4.0", supportedPiVersions: ["1.4.0", "1.3.0"] });
+	assert.equal(result.stdout, "hosts=1.4.0 1.3.0 1.2.0 1.1.0\nprofile=strict\nother=1.0.4\n");
+	write({ version: "0.4.3" }, { version: "0.4.3", supportedPi: "1.5.0", supportedPiVersions: ["1.5.0", "1.4.0"] });
 	assert.notEqual(spawnSync(process.execPath, [script, "--plan", directory], { encoding: "utf8" }).status, 0);
 	assert.equal(spawnSync(process.execPath, [script, "--plan"], { encoding: "utf8" }).status, 2);
 	assert.throws(() => releasePlan({ manifest: { version: "0.4.3" }, build: { version: "0.4.2", supportedPi: "1.2.0" } }), /packaged version/);
@@ -168,7 +168,7 @@ test("historical tags keep their own host contract and the current source declar
 	assert.deepEqual(releasePiVersions({ supportedPi: PRIMARY_PI_VERSION, supportedPiVersions: SUPPORTED_PI_VERSIONS }), SUPPORTED_PI_VERSIONS);
 	for (const build of [
 		undefined, {}, { supportedPiVersions: [] }, { supportedPi: "1.2.0", supportedPiVersions: ["1.1.0", "1.2.0"] },
-		{ supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.2.0"] }, { supportedPi: "1.4.0" }, { supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.0.4"] },
+		{ supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.2.0"] }, { supportedPi: "1.5.0" }, { supportedPi: "1.2.0", supportedPiVersions: ["1.2.0", "1.0.4"] },
 	]) assert.throws(() => releasePiVersions(build));
 });
 
@@ -195,7 +195,7 @@ test("acceptance floors grow with each cross-version host and cross-version name
 		["primary host reopens the Pi 1.1.0 checkpoint", "primary host reopens the compatible host checkpoint"],
 	]]);
 	assert.deepEqual(crossVersionChecks(["1.3.0", "1.2.0", "1.1.0"]).map((check) => check.primary), [["primary host reopens the Pi 1.2.0 checkpoint"], ["primary host reopens the Pi 1.1.0 checkpoint"]]);
-	assert.deepEqual([["1.1.0"], ["1.2.0", "1.1.0"], ["1.3.0", "1.2.0", "1.1.0"]].map(hostList), ["1.1.0", "1.2.0 and 1.1.0", "1.3.0, 1.2.0 and 1.1.0"]);
+	assert.deepEqual([["1.1.0"], ["1.2.0", "1.1.0"], ["1.3.0", "1.2.0", "1.1.0"], ["1.4.0", "1.3.0", "1.2.0", "1.1.0"]].map(hostList), ["1.1.0", "1.2.0 and 1.1.0", "1.3.0, 1.2.0 and 1.1.0", "1.4.0, 1.3.0, 1.2.0 and 1.1.0"]);
 });
 
 test("local preparation can use Unreleased without authorizing publication from it", () => {

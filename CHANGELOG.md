@@ -1,10 +1,36 @@
 # Changelog
 
-This file records changes to Pi Context Compaction. The changelogs under `packages/` retain the upstream Pi package history. Project releases use their own version numbers; the initial host baseline is Pi `v0.85.1`.
+This file records changes to SLICE, called Pi Context Compaction before v0.7.1. The changelogs under `packages/` retain the upstream Pi package history. Project releases use their own version numbers; the initial host baseline is Pi `v0.85.1`.
 
 Changes under **Unreleased** are not included in an existing release tag or its downloadable assets. Entries describe user-visible behavior, compatibility, security and significant maintenance changes.
 
 ## [Unreleased]
+
+## [v0.7.1] — 2026-10-25
+
+v0.7.1 is the first extension built on the v0.7.0 host-neutral core, and the first release under the SLICE name. It adds official Pi 1.4.0 as the primary host beside 1.3.0, 1.2.0 and 1.1.0 and behaves as extension-v0.6.0 did: the core lifts were byte-identical on scripted inputs, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The core's import gate now also refuses module loads it cannot verify. Every result is offline, on official Pi installations with loopback services; real-provider behavior is not part of this release.
+
+### Added
+
+- Official Pi 1.4.0 is supported and becomes the primary host, beside 1.3.0, 1.2.0 and 1.1.0. Its extension API declarations, extension runner and session storage match 1.3.0, and it installs the same seven runtime packages, without `chord`. Stock-Pi acceptance runs on all four hosts: each older host compacts a checkpoint written on 1.4.0, and 1.4.0 reopens the result. Pi 1.4.0's summary changes, the ignored `reserveTokens` and custom instructions on a split turn, concern Pi's own summarizer, which the extension does not call. Its persistent omission of a truncated attempt's tool results arrives as context edits, which the extension already validates in full before the next request.
+
+### Changed
+
+- The project is now called SLICE, Source-Linked Indexed Compaction of Everything, in the documentation, the release notes and the package description, and the README is rewritten for first-time readers. Its commit diagram is redrawn for the extension's checks and disk readback, and the opening illustration no longer says that checkpoints are written only on a manual `/compact`. The repository, the install source, the package name `pi-context-compaction-preview`, the `/compaction-*` commands, the `pi-context-memory.json` configuration file and stored checkpoint identifiers keep their names, so existing installations and sessions need no change.
+
+### Fixed
+
+- The core's import gate checked a dynamic import only when its specifier was a literal, so `import(name)` or an interpolated template passed unchecked. Such a specifier now fails the gate with its location and expression. A regression covers both forms beside the literal ones that stay allowed.
+- The core's import gate never saw a module loaded by name through `node:module`'s `createRequire`, through `process.getBuiltinModule`, which needs no import at all, or through a bare `require`. `node:module` now fails the gate, and `require(x)` and `process.getBuiltinModule(x)` are checked like `import(x)`, so a specifier that is not a literal fails closed. Nothing in the core used any of these routes. A regression plants each form beside a builtin that stays allowed.
+
+### Maintenance
+
+- The **Publish extension preview** workflow recognizes a source release. A `v*` tag whose version differs from the extension package it builds, while that package version is already published, now ends after the build with a notice and publishes nothing, instead of running stock-Pi acceptance and failing at the publish step as v0.7.0 did. A tag beside an unpublished package version still fails, before any official Pi is installed.
+- The stock-Pi scenarios add `tool-loadout`. With arm B off, the provider is offered `context_history` and not `context_note` in a fresh session, after a restart and after `/tree` navigation; a branch that called `context_note` while B was on is offered it again after a restart; and a session started before the extension was installed stays usable without `context_note`. Pi 1.4.0 activates an extension tool a restored branch never recorded unless the tool registers with `defaultActive: false`, which `context_note` does while B is off, so the v0.5.3 saving of about 1,209 tokens per request holds. The case passes on official Pi 1.4.0 and 1.3.0.
+
+## [v0.7.0] — 2026-10-22
+
+v0.7.0 is a source release. It lands the host-neutral core and publishes no extension, so `extension-v0.6.0` stays the installable package. The preview's host-independent logic moved into `packages/compaction-core` in five lift steps, each shown byte-identical on scripted inputs, and the core gains its specification, 34 conformance vectors and two mechanical gates in `verify`. The extension's behavior, the checkpoint schema, the resident build fingerprint, the frozen fixtures and the evaluation pin are unchanged. From this release on, the resident runtime receives dependency and security maintenance only.
 
 ### Added
 
@@ -18,18 +44,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 - The preview's host-independent logic now lives in the core package and the extension is the core's first adapter, with no change in behavior: the reduction, validation and repairs, note and work-note formats, checkpoint shapes, views and accounting, the pure cut and guard helpers, and the writer contract moved in five lift steps, each shown byte-identical on scripted inputs by the equivalence run, with the writer's transport (model resolution, dispatch, reasoning mapping, the session-ID cache key) staying with the adapter.
 - The resident runtime is frozen as of 2026-10-22 under the v0.7.0 plan's H5: no further Pi ports or features, dependency and security maintenance only, retirement by 0.10.0; recorded in the upstream delta and the preview guide.
 
-### Fixed
-
-- The core's import gate checked a dynamic import only when its specifier was a literal, so `import(name)` or an interpolated template passed unchecked. Such a specifier now fails the gate with its location and expression. A regression covers both forms beside the literal ones that stay allowed.
-- The core's import gate never saw a module loaded by name through `node:module`'s `createRequire`, through `process.getBuiltinModule`, which needs no import at all, or through a bare `require`. `node:module` now fails the gate, and `require(x)` and `process.getBuiltinModule(x)` are checked like `import(x)`, so a specifier that is not a literal fails closed. Nothing in the core used any of these routes. A regression plants each form beside a builtin that stays allowed.
-
 ### Security
 
 - Update the development-only Vite dependency from 8.0.16 to 8.3.5 for GHSA-698v-4r3x-3vcv, GHSA-r825-w8mm-5pxw, GHSA-587h-7wmj-h5pm, GHSA-9jrq-w75r-8gcw and GHSA-rq7h-c2jc-7f22, and Vitest with `@vitest/mocker` from 4.1.11 to 4.1.12 for GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp. These updates affect the development and test toolchain; the independent extension does not ship either package, and the generated coding-agent install lock is unchanged.
 
 ### Maintenance
 
-- The **Publish extension preview** workflow recognizes a source release. A `v*` tag whose version differs from the extension package it builds, while that package version is already published, now ends after the build with a notice and publishes nothing, instead of running stock-Pi acceptance and failing at the publish step as v0.7.0 did. A tag beside an unpublished package version still fails, before any official Pi is installed.
 - The offline evaluation's scripted writer no longer cites part of the run directory's random UUID as an entry ID. About one UUID in 900 holds a run such as `bff1-12345`, which the writer's prompt carries before every fixture ID; the note then cited `f1-12345` and `verify` failed with `CONTEXT_NOTE_SCOPE`. A regression covers the case.
 
 ## [v0.6.0] — 2026-10-22

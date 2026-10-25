@@ -1,10 +1,10 @@
-# Independent extension preview — v0.6.0
+# SLICE for Pi: independent extension preview v0.7.1
 
-This extension runs on unmodified official Pi **1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.6.0 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.7.1 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.6.0 supports manual and completed-turn threshold compaction.** Optional
+**v0.7.1 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -17,17 +17,24 @@ benefits remain unproven. v0.4.1 fixes how checkpoints carry notes; see the
 [validation record](validation.md).
 
 Since 0.7.0 this extension is the first adapter of the host-neutral core
-package (`packages/compaction-core`), with identical behavior, install lines
-and supported hosts, and the resident runtime is frozen as of 2026-10-22: no
-further ports or features, maintenance only, retirement by 0.10.0 (see
-[the delta's freeze note](upstream-delta.md#the-resident-freeze)).
+package (`packages/compaction-core`), and the resident runtime is frozen as of
+2026-10-22: no further ports or features, maintenance only, retirement by
+0.10.0 (see [the delta's freeze note](upstream-delta.md#the-resident-freeze)).
+v0.7.1 is the first extension built on that core. It behaves as v0.6.0 did and
+adds official Pi 1.4.0 as the primary host.
+
+The project is now called SLICE, Source-Linked Indexed Compaction of
+Everything. The repository, the install source, the package name, the
+`/compaction-*` commands, the `pi-context-memory.json` configuration file and
+stored checkpoint identifiers keep their earlier names, so nothing needs
+migrating.
 
 ## Install, update and remove
 
-Official Pi 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
+Official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.6.0
+pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -47,13 +54,13 @@ pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.6.0
-preview supports Pi 1.3.0, 1.2.0 and 1.1.0.
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.7.1
+preview supports Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.6.0 lists
-1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
+Check that the installed preview lists the new Pi version first; v0.7.1 lists
+1.4.0, 1.3.0, 1.2.0 and 1.1.0, and v0.6.0 lists 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
 on that host. To continue such a session, reopen it with a listed Pi version
@@ -70,7 +77,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.6.0 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.6.0)
+The [v0.7.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.7.1)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not
@@ -148,13 +155,13 @@ The preview distinguishes three kinds of session:
 - **Protected:** the session has a checkpoint written by this preview, or a
   pending or failed attempt recorded by it. Every check below is strict, and a
   failure is recorded durably.
-- **Eligible:** a persistent, text-only session on Pi 1.3.0, 1.2.0 or 1.1.0 with no
+- **Eligible:** a persistent, text-only session on Pi 1.4.0, 1.3.0, 1.2.0 or 1.1.0 with no
   checkpoint from another compactor. The preview handles its compaction: Pi's
   threshold compaction after a completed turn and `/compact` both write a
   checked checkpoint, and overflow recovery is cancelled until `/compact`. The
   first attempt, or a cancelled overflow recovery, makes it protected.
 - **Not protected:** a session the preview has never protected and cannot
-  check: Pi outside 1.3.0, 1.2.0 and 1.1.0, an in-memory session, a native or other
+  check: Pi outside 1.4.0, 1.3.0, 1.2.0 and 1.1.0, an in-memory session, a native or other
   compactor's checkpoint, an image or other non-text content, or an
   unsupported context edit. The preview stands aside. It writes no failure
   record, does not stop requests, leaves manual and automatic compaction and
@@ -572,10 +579,10 @@ that official Pi first:
 
 ```sh
 node scripts/context-memory-preview-stock-install.mjs \
-  --stock-root ./.artifacts/context-memory-preview-stock --version 1.3.0
+  --stock-root ./.artifacts/context-memory-preview-stock --version 1.4.0
 ```
 
-The installer pins all seven official runtime packages for Pi 1.3.0 and 1.2.0,
+The installer pins all seven official runtime packages for Pi 1.4.0, 1.3.0 and 1.2.0,
 or all eight for 1.1.0 and 1.0.4, which still require `chord`, to the same
 release. A newer host that still depended on `chord` would fail the installer's
 dependency review rather than receive it silently. npm verifies download
@@ -591,26 +598,27 @@ Install each older supported host for the same-package and cross-version
 checks:
 
 ```sh
-node scripts/context-memory-preview-stock-install.mjs \
-  --stock-root ./.artifacts/context-memory-preview-stock-1.2.0 --version 1.2.0
-node scripts/context-memory-preview-stock-install.mjs \
-  --stock-root ./.artifacts/context-memory-preview-stock-1.1.0 --version 1.1.0
+for host in 1.3.0 1.2.0 1.1.0; do
+  node scripts/context-memory-preview-stock-install.mjs \
+    --stock-root ./.artifacts/context-memory-preview-stock-$host --version $host
+done
 ```
 
 Then run acceptance on every host. The first command also writes a checkpoint,
-compacts it on each older host in turn and reopens it on 1.3.0 after each:
+compacts it on each older host in turn and reopens it on 1.4.0 after each:
 
 ```sh
 node scripts/context-memory-preview-acceptance.mjs \
   --package-dir ./.artifacts/context-memory-preview-package \
   --stock-root ./.artifacts/context-memory-preview-stock \
+  --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.3.0 \
   --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.2.0 \
   --compatible-stock-root ./.artifacts/context-memory-preview-stock-1.1.0 \
   --output-dir ./.artifacts/context-memory-preview-acceptance
 ```
 
 ```sh
-for host in 1.2.0 1.1.0; do
+for host in 1.3.0 1.2.0 1.1.0; do
   node scripts/context-memory-preview-acceptance.mjs \
     --package-dir ./.artifacts/context-memory-preview-package \
     --stock-root ./.artifacts/context-memory-preview-stock-$host \

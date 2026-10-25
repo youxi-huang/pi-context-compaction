@@ -2179,7 +2179,7 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(unsupportedReason(session)).toBe("image");
 		expect(() => assertPreviewSession(session)).toThrow(/CONTEXT_PREVIEW_UNSUPPORTED/);
 	});
-	it.each(["1.3.0", "1.2.0", "1.1.0"])(
+	it.each(["1.4.0", "1.3.0", "1.2.0", "1.1.0"])(
 		"continues protected checkpoints on reviewed Pi %s and reports that host as supported",
 		(version) => {
 			protect();
@@ -2192,13 +2192,13 @@ describe("independent extension preview: sessions it does not protect", () => {
 				state: "ready",
 				protection: "protected",
 				host: version,
-				supportedHost: "1.3.0",
-				supportedHosts: ["1.3.0", "1.2.0", "1.1.0"],
+				supportedHost: "1.4.0",
+				supportedHosts: ["1.4.0", "1.3.0", "1.2.0", "1.1.0"],
 			});
 			expect(doctorReport(preview.diagnose(ctx), { disabled: false })).toContain(`host: ok - Pi ${version}`);
 		},
 	);
-	it.each(["1.0.4", "1.2.1", "1.3.1", "1.4.0", "1.2.0-custom"])(
+	it.each(["1.0.4", "1.2.1", "1.3.1", "1.4.1", "1.5.0", "1.2.0-custom"])(
 		"keeps protected sessions blocked on unreviewed Pi %s",
 		(version) => {
 			protect();

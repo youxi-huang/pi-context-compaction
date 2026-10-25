@@ -8,7 +8,7 @@ import { PRIMARY_PI_VERSION, SUPPORTED_PI_VERSIONS } from "../packages/coding-ag
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const name = "pi-context-compaction-preview";
-const version = "0.6.0";
+const version = "0.7.1";
 const extensionRoot = "packages/coding-agent/src/extensions/context-memory/";
 const previewRoot = `${extensionRoot}preview/`;
 // The host-neutral core (v0.7.0 WP2): lifted modules may be bundled alongside preview files.
@@ -89,7 +89,7 @@ const manifest = {
 	name,
 	version,
 	private: true,
-	description: `Source-linked compaction preview for unmodified Pi ${SUPPORTED_PI_VERSIONS.join(" and ")}`,
+	description: `SLICE source-linked compaction preview for unmodified Pi ${SUPPORTED_PI_VERSIONS.join(" and ")}`,
 	repository: { type: "git", url: "https://github.com/youxi-huang/pi-context-compaction.git" },
 	homepage: "https://github.com/youxi-huang/pi-context-compaction/blob/main/docs/context-memory/extension-preview.md",
 	type: "module",

@@ -14,11 +14,13 @@ This repository is a snapshot of upstream Pi plus one new extension directory, a
 
 The upstream `README.md`, `CONTRIBUTING.md` and `AGENTS.md` are kept as `UPSTREAM_README.md`, `UPSTREAM_CONTRIBUTING.md` and `UPSTREAM_AGENTS.md`. They describe upstream Pi, not this distribution.
 
-## Omitted upstream example
+## Omitted upstream examples
 
 The Gondolin micro-VM example under `packages/coding-agent/examples/extensions/gondolin/` is omitted after the maintainer authorized removal of unused examples for dependency security maintenance. The documented agent operations, CI, evaluation and independent extension do not load it. Its workspace declaration, standalone lockfile, TypeScript exclusion, Dependabot directory and audit exception are removed together; the root lockfile is regenerated with npm. The example index and containerization guide describe the remaining distribution.
 
-This is an example and dependency change, with no host runtime source changes or new fingerprint inputs. The preserved `UPSTREAM_README.md` still describes the original upstream snapshot, including its Gondolin example.
+The sandbox example under `packages/coding-agent/examples/extensions/sandbox/` is omitted on the same authority. Its only dependency, `@anthropic-ai/sandbox-runtime`, requires zod 3 up to its latest release, 0.0.81, and GHSA-mrhx-c7xc-m3w5 is fixed only in zod 4.6.6. Nothing else in the tree loads either package. Its workspace declaration, root development dependency, standalone lockfile and Dependabot directory are removed together, and the example index no longer lists it. The root lockfile is regenerated with npm 11, which keeps the `libc` fields, and its orphaned entry for the removed workspace, which npm marks extraneous but does not prune, is deleted; a second npm run leaves the result unchanged. Every remaining dependent accepts zod 4, so zod moves from 3.25.76 to 4.6.7.
+
+These are example and dependency changes, with no host runtime source changes or new fingerprint inputs. The preserved `UPSTREAM_README.md` still describes the original upstream snapshot, including both examples.
 
 ## Independent preview
 

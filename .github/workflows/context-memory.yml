@@ -24,24 +24,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - name: Detect a change of Markdown documents alone
+      - name: Detect a pull request of Markdown documents alone
         id: diff
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
-          BEFORE: ${{ github.event.before }}
         run: |
           # CHANGELOG.md feeds release preparation and extension-preview.md becomes
-          # the package README, so a change to either runs the full pipeline.
-          range=""
-          if [ "$EVENT" = "pull_request" ]; then
-            range="origin/$BASE_REF...HEAD"
-          elif [ "$EVENT" = "push" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
-            range="$BEFORE..HEAD"
-          fi
+          # the package README, so a change to either runs the full pipeline. A push
+          # to main always runs it, so every commit on main can carry a release tag.
           docs_only=false
-          if [ -n "$range" ]; then
-            changed="$(git diff --name-only "$range")"
+          if [ "$EVENT" = "pull_request" ]; then
+            changed="$(git diff --name-only "origin/$BASE_REF...HEAD")"
             if [ -n "$changed" ] \
               && ! printf '%s\n' "$changed" | grep -qvE '^(docs/.+\.md|[^/]+\.md)$' \
               && ! printf '%s\n' "$changed" | grep -qxE 'CHANGELOG\.md|docs/context-memory/extension-preview\.md'; then
@@ -50,8 +44,9 @@ jobs:
           fi
           echo "docs_only=$docs_only" >> "$GITHUB_OUTPUT"
   verify:
-    # A skipped verify reports as a passed check; the publication workflow
-    # re-verifies every release on its tag either way.
+    # A skipped verify satisfies a pull request's required check, but its check
+    # run concludes "skipped", and publication accepts a tagged commit only after
+    # verify concluded "success" there.
     needs: scope
     if: needs.scope.outputs.docs_only != 'true'
     runs-on: ubuntu-latest

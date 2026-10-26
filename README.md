@@ -13,13 +13,17 @@ The aim is continuity with evidence, not perfect memory.
   <img src="docs/context-memory/assets/pi-context-compaction-hero-editorial.png" alt="A compact handover cites an earlier failure and a later decision, with references back to the original session entries.">
 </picture>
 
-SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-built [DSH and OpenCode previews](#dsh-and-opencode-previews) add current-session history access; SLICE checkpoint writing on those hosts remains planned.
+SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-built [DSH and OpenCode previews](#dsh-and-opencode) add current-session history access; SLICE checkpoint writing on those hosts remains planned.
 
 **Current release:** [v0.7.2](https://github.com/youxi-huang/slice/releases/tag/v0.7.2), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It installs from the repository's new address and compacts as v0.7.1 did, except that a second installed copy now stands aside instead of pausing the session. Before v0.7.1 the project was called Pi Context Compaction.
 
 [Get started](#get-started) · [How it works](#how-it-works) · [Current scope](#current-scope) · [Evidence](#evidence-and-limits)
 
 ## Get started
+
+SLICE runs on three hosts, at two levels. On **Pi** it is a published extension that writes checked checkpoints. On **DSH** and **OpenCode** it is a source-built preview that adds one tool, `context_history`, and leaves compaction to the host.
+
+### Pi
 
 You need a working installation of official Pi **1.4.0, 1.3.0, 1.2.0 or 1.1.0**, **Node.js 22.19 or later**, and macOS or Linux. Windows has not been validated.
 
@@ -44,6 +48,42 @@ If Pi says `Nothing to compact (session too small)`, there simply is not enough 
 There is no Pi source patch, separate model or second history service to set up. By default the extension writes with the session's own model, and Pi continues to manage authentication.
 
 The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`. GitHub redirects the old address, so an installation made from it keeps loading and updating; [moving it](#move-an-older-installation) is optional. **`extension-v0.7.2` is the installable package tag; `v0.7.2` marks the source tree, which is not a Pi package.** Please use the installation command above rather than installing the development tree.
+
+### DSH and OpenCode
+
+For [DSH](https://github.com/deepseek-ai/deepseek-harness) `0.2.1-rc.3` and [OpenCode](https://github.com/anomalyco/opencode) `1.19.4`, the tool searches and reads the current session's original records through the host's own storage and cites the host's native IDs. Both packages are built from source and are not published to npm. Building them needs Git and **Node.js 22.19 or later**:
+
+```sh
+git clone https://github.com/youxi-huang/slice && cd slice
+node scripts/context-memory-ops.mjs deps
+node scripts/context-memory-adapters-build.mjs --output-dir ~/slice-adapters
+```
+
+**DSH.** `dsh plugin` runs pnpm, which must be on your `PATH`. Add the package to a profile built on DSH's base bundle, which provides the sessions, persistence and tools it needs:
+
+```sh
+dsh plugin --profile <profile> add file:$HOME/slice-adapters/dsh
+```
+
+Then load it from that profile's `cordis.patch.yml`, in place of an empty `[]` or as one more list item:
+
+```yaml
+- insert:
+    - id: slice-history
+      name: slice-dsh-preview
+```
+
+**OpenCode.** Install the package's two runtime dependencies, then list its entry file under `plugin` in `opencode.json` with an absolute file URL:
+
+```sh
+npm install --prefix ~/slice-adapters/opencode --omit=dev --ignore-scripts
+```
+
+```json
+{ "plugin": ["file:///absolute/path/to/slice-adapters/opencode/dist/index.js"] }
+```
+
+The tool asks for OpenCode's `context_history` permission, which is allowed unless your configuration says otherwise. On both hosts it reads only the current session and refuses forked or child sessions. To uninstall, remove the patch row or the plugin entry. The [host adapter guide](docs/context-memory/host-adapters.md) covers the pinned APIs, the evidence and what is not yet supported.
 
 ## Why keep the evidence?
 
@@ -108,7 +148,7 @@ You can review the [validation record](docs/context-memory/validation.md), [chan
 
 ## Updates and recovery
 
-The command above pins a release. If you would rather follow the moving preview branch, install it instead:
+The Pi command above pins a release. If you would rather follow the moving preview branch, install it instead:
 
 ```sh
 pi install git:github.com/youxi-huang/slice@extension-preview
@@ -144,42 +184,6 @@ Add `-l` to both commands for a project installation. Then restart Pi, reopen th
 **Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict, and renames their commands `/compaction-doctor:1`, `/compaction-doctor:2` and so on. From v0.7.2, a copy that finds another one loaded stands aside, so only one compacts, and it says once which address to remove. Two copies of v0.7.1 or earlier still compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
 
 For specific failure states and recovery steps, see the [extension guide](docs/context-memory/extension-preview.md#failure-and-recovery).
-
-## DSH and OpenCode previews
-
-For [DSH](https://github.com/deepseek-ai/deepseek-harness) `0.2.1-rc.3` and [OpenCode](https://github.com/anomalyco/opencode) `1.19.4`, SLICE provides one tool, `context_history`, which searches and reads the current session's original records through the host's own storage and cites the host's native IDs. It does not write SLICE checkpoints or change how the host compacts. Both packages are built from source and are not published to npm:
-
-```sh
-git clone https://github.com/youxi-huang/slice && cd slice
-node scripts/context-memory-ops.mjs deps
-node scripts/context-memory-adapters-build.mjs --output-dir ~/slice-adapters
-```
-
-**DSH.** `dsh plugin` runs pnpm, which must be on your `PATH`. Add the package to a profile built on DSH's base bundle, which provides the sessions, persistence and tools it needs:
-
-```sh
-dsh plugin --profile <profile> add file:$HOME/slice-adapters/dsh
-```
-
-Then load it from that profile's `cordis.patch.yml`, in place of an empty `[]` or as one more list item:
-
-```yaml
-- insert:
-    - id: slice-history
-      name: slice-dsh-preview
-```
-
-**OpenCode.** Install the package's two runtime dependencies, then list its entry file under `plugin` in `opencode.json` with an absolute file URL:
-
-```sh
-npm install --prefix ~/slice-adapters/opencode --omit=dev --ignore-scripts
-```
-
-```json
-{ "plugin": ["file:///absolute/path/to/slice-adapters/opencode/dist/index.js"] }
-```
-
-The tool asks for OpenCode's `context_history` permission, which is allowed unless your configuration says otherwise. On both hosts it reads only the current session and refuses forked or child sessions. To uninstall, remove the patch row or the plugin entry. The [host adapter guide](docs/context-memory/host-adapters.md) covers the pinned APIs, the evidence and what is not yet supported.
 
 ## Development and care
 

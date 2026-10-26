@@ -91,7 +91,7 @@ packages. This is not a live-provider run or full interactive-host acceptance.
 For the separate **Linux x64 OpenCode 1.19.4** installed-package acceptance:
 
 ```sh
-npm install --prefix .artifacts/opencode-stock --ignore-scripts --no-audit --no-fund opencode-ai@1.19.4
+npm install --prefix .artifacts/opencode-stock --save-exact --ignore-scripts --no-audit --no-fund opencode-ai@1.19.4
 node scripts/context-memory-opencode-acceptance.mjs \
   --stock-root .artifacts/opencode-stock \
   --package-dir .artifacts/host-adapters/opencode

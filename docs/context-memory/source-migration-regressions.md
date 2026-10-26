@@ -1,30 +1,24 @@
 # Repository-source migration regressions
 
-These tests cover the v0.7.2 change from `youxi-huang/pi-context-compaction` to
-`youxi-huang/slice`. They change no package name, command, checkpoint schema,
-source hash or storage path. They do not rename the repository or prepare a release.
+In v0.7.2 the install source moves from `youxi-huang/pi-context-compaction` to
+`youxi-huang/slice`. Pi keys a Git package by host and path, so the two addresses
+are two packages. These regressions show what that means for an installation
+before the repository is renamed. They change no package name, command,
+checkpoint format, source hash or storage path.
 
 ## Run
-
-After the normal dependency installation and offline build:
 
 ```sh
 node --test scripts/context-memory-preview-source-migration.test.mjs
 ```
 
-`context-memory-check.mjs` includes this command, so `context-memory-ops.mjs verify`
-and CI run it. It uses the repository's actual package manager and settings
-manager. It never copies their identity or deduplication algorithm into a mock.
-As in `context-memory-preview-stock-install.test.mjs`, a disposable directory,
-synthetic packages and the existing `eval/deny-network.mjs` isolate the test.
-Git is restricted to `file` transport. Two per-process URL rewrites map the old
-and new GitHub spellings to one local repository. npm has no package dependencies
-to fetch, runs offline without scripts, and inherits the Node network denial.
-Pi's offline flag is briefly disabled for its otherwise skipped update operation;
-the independent Node and Git network guards remain active.
+`context-memory-check.mjs` runs it, so `verify` and CI do too. It drives the real
+package and settings managers over a local repository that both addresses alias.
+Git may use only `file` transport and npm installs nothing, so nothing reaches
+the network. It finishes in about ten seconds.
 
-To run the same cases using a reviewed official host's **package-manager and
-settings APIs**, install its exact cohort with the existing stock installer:
+To use an official Pi's package and settings managers instead, install it with
+the stock installer and point the test at it:
 
 ```sh
 node scripts/context-memory-preview-stock-install.mjs \
@@ -33,69 +27,56 @@ CONTEXT_MEMORY_MIGRATION_STOCK_ROOT=.artifacts/stock-1.4.0 \
   node --test scripts/context-memory-preview-source-migration.test.mjs
 ```
 
-Repeat with `1.3.0`, `1.2.0` and `1.1.0`. This route calls `inspectOfficialPi`
-before importing the SDK; a mixed cohort, linked workspace host or unsupported
-version fails rather than silently falling back to the repository's host.
+Repeat for 1.3.0, 1.2.0 and 1.1.0. A mixed, linked or unofficial host is refused.
 
 ## What is asserted
 
-The 21 cases include both user and project scope and both an immutable synthetic
-`extension-v0.7.1` tag and an advancing `extension-preview` branch. The fixture tag
-uses synthetic bytes, not historical release bytes.
-
-| Path | Assertions |
+| Case | Assertion |
 | --- | --- |
-| Keep the old source | The configured address remains old; the branch advances on explicit update, the tag stays pinned; one extension resource resolves; removing the source without a ref removes its checkout and declaration. |
-| Remove old, then install new | The intermediate state has no extension; the new address has a distinct checkout and a single declaration; its updates respect the ref; the same protected checkpoint validates after reopening from disk. |
-| Install both by mistake | Both declarations and two resources survive resolution even with identical Git commits and manifest names; removing either address deletes only that checkout and leaves the other resolvable. |
-| User/project overlap | Two refs of one repository dedupe with project precedence; two repository paths do not. Default removal affects user scope; `-l` affects project scope. Each leaves the other settings file and checkout intact. |
-| Configuration | Extension configuration and session bytes are unchanged; unrelated package files, package declarations and arbitrary settings survive. Object-form package filters survive a ref change on the same identity, but are not transferred to a new identity by remove/install. |
-| Recovery | A fresh session surface and failure store read the original checkpoint and source hashes. A staged durable checkpoint needs explicit recovery; an unsaved candidate cannot recover. Altering a source under the same ID or the saved candidate is rejected. A previous failure remains blocked. |
-| Failed install | An unavailable new ref leaves no misleading declaration or checkout; configuration and sessions survive and a subsequent valid install can recover them. |
+| Replace, for a tag and for `extension-preview` | `pi remove` without a ref deletes the old checkout and declaration, and nothing is loaded until the new install completes. The new address gets its own checkout and one declaration. The tag stays pinned and the branch updates. |
+| Both installed | Two resources resolve even with one commit and one manifest name. Removing either address leaves the other loadable. |
+| Scopes | Refs of one address dedupe with project precedence, two addresses do not. Removal without `-l` touches only user scope, with `-l` only the project. |
+| Resource filters | An object-form filter follows a new ref on the same address, never a new address. |
+| Failed install | No declaration or checkout is left behind, and a later install succeeds. |
+| Interrupted or failed compaction | Both states survive the switch, and the staged checkpoint still recovers only through its own check. |
 
-Recovery uses the candidate's real `assertPreviewSession`, `PreviewFailureStore`
-and configuration reader, with synthetic JSONL on a public read-only session
-surface. The installed package is a discovery fixture, not the extension bundle.
-The tests neither invoke a writer nor assert that marker absence alone proves
-checkpoint validity.
+Every operation must leave the extension configuration, the session file, other
+packages and other settings untouched. Each case ends by revalidating the
+checkpoint and its source hashes from disk with the candidate's own validator.
+Tampering and the recovery rules themselves are covered by the preview suites;
+here they are only shown to survive a reinstall. The installed package is a
+discovery fixture, not the built extension.
 
-## Evidence boundaries
+## What this does not establish
 
-Record these independently; success in one row does not complete the next.
+The official-host route tests only those package and settings managers. The
+built extension on each official Pi is covered by the
+[stock-Pi acceptance](extension-preview.md#verification), which also removes the
+package by repository whichever ref is installed. Neither can exercise GitHub's
+redirect: the aliasing here is local.
 
-| Layer | What a pass establishes | What remains outside it |
-| --- | --- | --- |
-| Repository-source regression | Local aliasing, real package/settings operations, candidate recovery guards | Official Pi compatibility or real redirects |
-| Official-host API regression, one result per version | Those installed package/settings APIs pass the same local cases | Loading the actual bundle from both addresses, command conflicts, concurrent handlers |
-| Existing stock-Pi acceptance, one result per version | Actual built extension loaded by the official CLI/SDK, synthetic provider, checkpoint commit/reopen/recovery | This rename's end-to-end source switch and real GitHub redirects |
-| Post-rename GitHub/CLI acceptance | Old and new public URLs, real clone/fetch/ref resolution and removal, protected-session reopen after the actual source switch | Real-provider quality, unless separately measured |
+That waits for the rename. After it, on every listed official Pi: clone, fetch,
+update and removal through both public addresses; both addresses installed
+together, with load errors, command registration and `/compaction-doctor`
+recorded; then removal of one and a protected-session reopen. Before publishing,
+the repository name in `scripts/context-memory-preview-release.mjs` must change,
+since the publication workflow checks it against `GITHUB_REPOSITORY`.
 
-The post-rename run must also install both addresses and record load errors,
-loaded extension paths, command/tool registration and `/compaction-doctor`
-output before removing one source and reopening the protected session. Two
-resolved resources in these regressions do not prove two active compaction
-handlers or a runtime failure. Do not mark this gate complete from local aliasing.
+## The user's command after the rename
 
-The release script's `GITHUB_REPOSITORY` check still needs its separate rename
-change before publishing. This test-only patch leaves it intact.
-
-## Short user command
-
-After the repository has been renamed **and `extension-v0.7.2` is published**,
-exit the running Pi process, then run this for an ordinary global installation:
+Once the repository is renamed and `extension-v0.7.2` is published, exit Pi and
+run, for a global installation:
 
 ```sh
 pi remove git:github.com/youxi-huang/pi-context-compaction &&
 pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
-For a project installation, add `-l` to both commands from that project. If both
-scopes contain the old source, remove it in both scopes and reinstall only in the
-intended scope. Keep any object-form package resource filters before removal
-and apply them to the new entry; the two-command shortcut does not transfer them.
-For the updating channel, use `@extension-preview` in the install command.
+Add `-l` to both commands for a project installation, and use
+`@extension-preview` for the updating channel. If both scopes hold the old
+address, remove it from both and reinstall in one. An object-form resource
+filter has to be copied to the new entry by hand.
 
-Restart Pi, reopen the existing session, and run `/compaction-doctor`. Do not
-continue a protected session during the remove/install gap or after a failed
-install. A pre-existing pending or failed compaction is still pending or failed;
-changing the source does not authorise bypassing its recovery checks.
+Restart Pi, reopen the session and run `/compaction-doctor`. Do not continue a
+protected session between the two commands or after a failed install. A pending
+or failed compaction stays pending or failed across the switch.

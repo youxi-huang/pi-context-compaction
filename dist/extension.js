@@ -1,4 +1,5 @@
 // packages/coding-agent/src/extensions/context-memory/preview/extension.ts
+import { fileURLToPath } from "node:url";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 // packages/compaction-core/src/history-view.ts
@@ -707,7 +708,7 @@ var matches = (text, terms) => {
 function noteItems(entries, kind, terms) {
   const position = new Map(entries.map((entry, index) => [entry.id, index]));
   const distinct = /* @__PURE__ */ new Map();
-  const recorded = /* @__PURE__ */ new Map();
+  const recorded2 = /* @__PURE__ */ new Map();
   let latest = -1;
   entries.forEach((entry, index) => {
     if (entry.type !== "compaction" || !isRecord(entry.details)) return;
@@ -731,7 +732,7 @@ function noteItems(entries, kind, terms) {
         distinct.set(key, { section, sources, supersedes });
         if (section !== kind) continue;
         const newest2 = sources.reduce((a, b) => position.get(a) >= position.get(b) ? a : b);
-        recorded.set(key, {
+        recorded2.set(key, {
           item: {
             kind,
             summary: fact4.text,
@@ -742,7 +743,7 @@ function noteItems(entries, kind, terms) {
               position: position.get(id)
             })),
             ...supersedes.length ? { supersedes } : {},
-            recordedAt: recorded.get(key)?.item.recordedAt ?? index,
+            recordedAt: recorded2.get(key)?.item.recordedAt ?? index,
             excerpt: excerpt(entries[position.get(newest2)], terms)
           },
           lastSeen: index
@@ -763,7 +764,7 @@ function noteItems(entries, kind, terms) {
         if (!fact4.supersedes.includes(id)) onSource.set(id, (onSource.get(id) ?? 0) + 1);
     }
   }
-  return [...recorded.values()].map(({ item, lastSeen }) => {
+  return [...recorded2.values()].map(({ item, lastSeen }) => {
     const own = new Set(item.sources.map((source) => source.entryId));
     const replaced = /* @__PURE__ */ new Set();
     const revised = /* @__PURE__ */ new Set();
@@ -2376,7 +2377,7 @@ function summarizeUsage(usage) {
 }
 
 // packages/coding-agent/src/extensions/context-memory/preview/build.ts
-var PREVIEW_BUILD_ID = "stock-preview+src.1a4f2d4911b1a0a3";
+var PREVIEW_BUILD_ID = "stock-preview+src.ae7bb53ee105c16a";
 
 // packages/coding-agent/src/extensions/context-memory/preview/compatibility.ts
 var SUPPORTED_PI_VERSIONS = Object.freeze(["1.4.0", "1.3.0", "1.2.0", "1.1.0"]);
@@ -2890,6 +2891,52 @@ function readExcerptSettings(agentDir) {
   return result;
 }
 
+// packages/coding-agent/src/extensions/context-memory/preview/copies.ts
+import { realpathSync as realpathSync2 } from "node:fs";
+var RECORDED = /* @__PURE__ */ Symbol.for("slice.preview.copies");
+function real(path) {
+  try {
+    return realpathSync2(path);
+  } catch {
+    return path;
+  }
+}
+function recorded() {
+  const global = globalThis;
+  global[RECORDED] ??= /* @__PURE__ */ new Set();
+  return global[RECORDED];
+}
+function recordCopy(entry) {
+  recorded().add(real(entry));
+}
+function loadedCopies(pi, entry) {
+  const self = real(entry);
+  const known = recorded();
+  const copies = /* @__PURE__ */ new Map();
+  for (const command of pi.getCommands()) {
+    if (command.source !== "extension" || command.name.replace(/:\d+$/, "") !== "compaction-recover") continue;
+    const path = real(command.sourceInfo.path);
+    if (copies.has(path)) continue;
+    const { source, scope } = command.sourceInfo;
+    copies.set(path, { source, scope, self: path === self, recorded: known.has(path) });
+  }
+  return [...copies.values()];
+}
+function compactingCopy(copies) {
+  return copies.find((copy) => !copy.recorded) ?? copies[0];
+}
+function standsAside(copies) {
+  return copies.length > 1 && copies.some((copy) => copy.self) && compactingCopy(copies)?.self === false;
+}
+function keptCopy(copies) {
+  return copies.find((copy) => /github\.com[/:]youxi-huang\/slice(?:\.git)?(?:@|$)/.test(copy.source)) ?? compactingCopy(copies);
+}
+function removalStep(copy) {
+  if (copy.scope === "temporary") return `leave out -e ${copy.source}`;
+  const source = copy.source.startsWith("git:") || copy.source.includes("://") ? copy.source.replace(/@[^/@]*$/, "") : copy.source;
+  return `run pi remove ${source}${copy.scope === "project" ? " -l" : ""}`;
+}
+
 // packages/coding-agent/src/extensions/context-memory/preview/notices.ts
 var NOTICE_PREFIX = "Source-linked compaction";
 var RETRY = "Run /compact to try again.";
@@ -3108,6 +3155,14 @@ function inactiveNotice(reason, version) {
   const [why, hint] = INACTIVE[reason](version);
   return `${NOTICE_PREFIX} is off in this session because ${why}. Pi's own compaction applies, and nothing was changed. ${hint}`;
 }
+function keepOne(copies) {
+  const kept = keptCopy(copies);
+  const steps = copies.filter((copy) => copy !== kept).map(removalStep);
+  return `Keep one: exit Pi, ${steps.join(", ")}, and restart Pi.`;
+}
+function duplicateNotice(copies) {
+  return `${NOTICE_PREFIX}: ${copies.length} copies are installed. The copy from ${compactingCopy(copies)?.source} compacts this session, and this one stands aside. ${keepOne(copies)} (CONTEXT_PREVIEW_DUPLICATE)`;
+}
 function doctorReport(diagnosis, settings) {
   const lines = [`${NOTICE_PREFIX} doctor (read-only: no model call, nothing written)`];
   const line = (label, result, detail) => lines.push(`  ${label}: ${result} - ${detail}`);
@@ -3123,6 +3178,20 @@ function doctorReport(diagnosis, settings) {
     settings.configError ? "blocked" : "ok",
     settings.configError ? `pi-context-memory.json can't be read. Fix or remove it, then restart Pi. (${settings.configError})` : `loaded, build ${diagnosis.build}`
   );
+  const copies = settings.copies ?? [];
+  if (copies.length > 1) {
+    const compacting = compactingCopy(copies);
+    const listed = copies.map(
+      (copy) => `${copy.source}${copy.self ? " (this one)" : ""} ${copy === compacting ? "compacts" : "stands aside"}`
+    );
+    line("copies", "duplicate", `${copies.length} loaded: ${listed.join(", ")}. ${keepOne(copies)}`);
+    if (standsAside(copies)) {
+      lines.push(
+        "Result: this copy stands aside. The copy that compacts protects the session; nothing was changed."
+      );
+      return lines.join("\n");
+    }
+  }
   line(
     "host",
     supportsPi(diagnosis.host) ? "ok" : inactive ? "inactive" : "blocked",
@@ -5767,6 +5836,17 @@ function show(ctx, text, kind = "info") {
   }
 }
 function contextMemoryPreview(pi) {
+  const entry = fileURLToPath(import.meta.url);
+  recordCopy(entry);
+  let copies;
+  function loaded() {
+    try {
+      copies ??= loadedCopies(pi, entry);
+    } catch {
+    }
+    return copies ?? [];
+  }
+  const live = (handler) => (...args) => standsAside(loaded()) ? void 0 : handler(...args);
   const agentDir = getAgentDir();
   let config;
   let configError;
@@ -5805,7 +5885,12 @@ function contextMemoryPreview(pi) {
       try {
         show(
           ctx,
-          doctorReport(controller.diagnose(ctx), { disabled, configError, writerModel: config?.writerModel })
+          doctorReport(controller.diagnose(ctx), {
+            disabled,
+            configError,
+            writerModel: config?.writerModel,
+            copies: loaded()
+          })
         );
       } catch (error) {
         reportPreviewError(ctx, previewErrorCode(error));
@@ -5816,7 +5901,7 @@ function contextMemoryPreview(pi) {
   function activateEarlierWorkNotes(ctx) {
     if (preparation.notes.enabled) return;
     const called = ctx.sessionManager.getBranch().some(
-      (entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.content.some((part) => part.type === "toolCall" && part.name === "context_note")
+      (entry2) => entry2.type === "message" && entry2.message.role === "assistant" && entry2.message.content.some((part) => part.type === "toolCall" && part.name === "context_note")
     );
     if (!called) return;
     const active = pi.getActiveTools();
@@ -5825,6 +5910,10 @@ function contextMemoryPreview(pi) {
   pi.registerCommand("compaction-recover", {
     description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
     handler: async (_args, ctx) => {
+      if (standsAside(loaded())) {
+        show(ctx, duplicateNotice(loaded()), "warning");
+        return;
+      }
       await ctx.waitForIdle();
       const reason = controller.safeInactive(ctx);
       if (reason) {
@@ -5852,12 +5941,20 @@ function contextMemoryPreview(pi) {
     const active = new Set(pi.getActiveTools());
     return pi.getAllTools().filter((tool) => active.has(tool.name)).map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
   });
-  pi.on("input", (event, ctx) => controller.input(event, ctx));
+  pi.on(
+    "input",
+    live((event, ctx) => controller.input(event, ctx))
+  );
   pi.on(
     "cache_warming_decision",
-    (_event, ctx) => controller.safeInactive(ctx) ? void 0 : { action: "stop" }
+    live((_event, ctx) => controller.safeInactive(ctx) ? void 0 : { action: "stop" })
   );
   pi.on("session_start", (_event, ctx) => {
+    copies = void 0;
+    if (standsAside(loaded())) {
+      if (controller.notices.once("duplicate")) notify(ctx, duplicateNotice(loaded()), "warning");
+      return;
+    }
     controller.sessionStart(ctx);
     activateEarlierWorkNotes(ctx);
     if (config && config.writerModel !== SESSION_WRITER && !controller.safeInactive(ctx)) {
@@ -5873,10 +5970,20 @@ function contextMemoryPreview(pi) {
       }
     }
   });
-  pi.on("context", (event, ctx) => ({ messages: controller.context(event.messages, ctx) }));
-  pi.on("context_with_system", (event, ctx) => ({ messages: controller.context(event.messages, ctx) }));
-  pi.on("before_provider_request", (event, ctx) => controller.beforeRequest(event.payload, ctx));
+  pi.on(
+    "context",
+    live((event, ctx) => ({ messages: controller.context(event.messages, ctx) }))
+  );
+  pi.on(
+    "context_with_system",
+    live((event, ctx) => ({ messages: controller.context(event.messages, ctx) }))
+  );
+  pi.on(
+    "before_provider_request",
+    live((event, ctx) => controller.beforeRequest(event.payload, ctx))
+  );
   pi.on("session_before_compact", async (event, ctx) => {
+    if (standsAside(loaded())) return void 0;
     try {
       const reason = controller.safeInactive(ctx);
       if (reason) {
@@ -5892,17 +5999,41 @@ function contextMemoryPreview(pi) {
       return { cancel: true };
     }
   });
-  pi.on("session_compact", (event, ctx) => controller.committed(event, ctx));
-  pi.on("session_compact_failed", (event, ctx) => controller.compactionFailed(event, ctx));
-  pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
-  pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
-  pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-  pi.on("session_tree", (_event, ctx) => {
-    controller.branchChanged(ctx);
-    activateEarlierWorkNotes(ctx);
-  });
-  pi.on("model_select", () => controller.invalidatePreparation("model-change"));
-  pi.on("session_shutdown", () => controller.shutdownPreparation());
+  pi.on(
+    "session_compact",
+    live((event, ctx) => controller.committed(event, ctx))
+  );
+  pi.on(
+    "session_compact_failed",
+    live((event, ctx) => controller.compactionFailed(event, ctx))
+  );
+  pi.on(
+    "agent_settled",
+    live((_event, ctx) => controller.prepare(ctx))
+  );
+  pi.on(
+    "session_before_switch",
+    live(() => controller.invalidatePreparation("session-switch"))
+  );
+  pi.on(
+    "session_before_tree",
+    live(() => controller.invalidatePreparation("branch-switch"))
+  );
+  pi.on(
+    "session_tree",
+    live((_event, ctx) => {
+      controller.branchChanged(ctx);
+      activateEarlierWorkNotes(ctx);
+    })
+  );
+  pi.on(
+    "model_select",
+    live(() => controller.invalidatePreparation("model-change"))
+  );
+  pi.on(
+    "session_shutdown",
+    live(() => controller.shutdownPreparation())
+  );
   pi.registerTool({
     name: "context_note",
     label: "Context note",

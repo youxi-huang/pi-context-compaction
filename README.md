@@ -1,10 +1,10 @@
-# SLICE for Pi: independent extension preview v0.7.1
+# SLICE for Pi: independent extension preview v0.7.2
 
-This extension runs on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.7.1 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.7.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.7.1 supports manual and completed-turn threshold compaction.** Optional
+**v0.7.2 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,10 +21,13 @@ package (`packages/compaction-core`), and the resident runtime is frozen as of
 2026-10-22: no further ports or features, maintenance only, retirement by
 0.10.0 (see [the delta's freeze note](upstream-delta.md#the-resident-freeze)).
 v0.7.1 is the first extension built on that core. It behaves as v0.6.0 did and
-adds official Pi 1.4.0 as the primary host.
+adds official Pi 1.4.0 as the primary host. v0.7.2 installs from the new
+repository address and lets a second installed copy stand aside; it compacts
+as v0.7.1 did.
 
 The project is now called SLICE, Source-Linked Indexed Compaction of
-Everything. The repository, the install source, the package name, the
+Everything. Its repository moved to `youxi-huang/slice`, and GitHub redirects
+the old `youxi-huang/pi-context-compaction` address. The package name, the
 `/compaction-*` commands, the `pi-context-memory.json` configuration file and
 stored checkpoint identifiers keep their earlier names, so nothing needs
 migrating.
@@ -34,33 +37,33 @@ migrating.
 Official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
 
-Pi records one source per package repository, so installing the same
-repository with another tag or branch replaces the recorded source. To follow
+Pi records one source per package address, so installing the same address
+with another tag or branch replaces the recorded source. To follow
 later compatible previews instead of a pinned tag, install the moving branch:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi install git:github.com/youxi-huang/slice@extension-preview
 ```
 
 Update only this package:
 
 ```sh
-pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi update --extension git:github.com/youxi-huang/slice@extension-preview
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.7.1
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.7.2
 preview supports Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.7.1 lists
-1.4.0, 1.3.0, 1.2.0 and 1.1.0, and v0.6.0 lists 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
+Check that the installed preview lists the new Pi version first; v0.7.2 and
+v0.7.1 list 1.4.0, 1.3.0, 1.2.0 and 1.1.0, and v0.6.0 lists 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
 on that host. To continue such a session, reopen it with a listed Pi version
@@ -70,14 +73,34 @@ and run `/compact` there, or keep the file and continue in a new session.
 Remove the package, whichever tag or branch is installed:
 
 ```sh
-pi remove git:github.com/youxi-huang/pi-context-compaction
+pi remove git:github.com/youxi-huang/slice
 ```
+
+An installation made from the old address keeps working through GitHub's
+redirect, and removing or updating it still names that address. To move it,
+exit Pi and run:
+
+```sh
+pi remove git:github.com/youxi-huang/pi-context-compaction &&
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
+```
+
+Add `-l` to both for a project installation, then restart Pi, reopen the
+session and run `/compaction-doctor`. Do not continue a protected session
+between the two commands. Never install both addresses: Pi loads both copies,
+reports only that their tools conflict, and numbers their commands
+(`/compaction-doctor:1`, `/compaction-doctor:2`). From v0.7.2, a copy that
+finds another one loaded stands aside, so only one compacts, and it says once
+which address to remove. Two copies of v0.7.1 or earlier still compete for the
+next compaction and pause the session. In testing, neither
+`/compaction-recover` nor `/compact` cleared that pause; remove one address,
+restart Pi and continue in a new session.
 
 Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.7.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.7.1)
+The [v0.7.2 release](https://github.com/youxi-huang/slice/releases/tag/v0.7.2)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not

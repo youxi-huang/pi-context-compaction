@@ -1,7 +1,7 @@
 {
-  "build": "stock-preview+src.1a4f2d4911b1a0a3",
-  "version": "0.7.1",
-  "sourceCommit": "4d97d35dd8c164999103662c664f987370fe5e47",
+  "build": "stock-preview+src.ae7bb53ee105c16a",
+  "version": "0.7.2",
+  "sourceCommit": "738722ad2fa03fda6c3eb9032f38a1f6302b473f",
   "supportedPi": "1.4.0",
   "supportedPiVersions": [
     "1.4.0",
@@ -10,7 +10,7 @@
     "1.1.0"
   ],
   "checkpointSchema": 1,
-  "sourceHash": "1a4f2d4911b1a0a3c3cd6c135b2f33a1ceb3cf7256ab6edddfdb7b336a4d242a",
+  "sourceHash": "ae7bb53ee105c16ab56848eaa3de5cc1835beed7868ced4d0468e43e60040b06",
   "sources": [
     {
       "file": "packages/coding-agent/src/extensions/context-memory/config.ts",
@@ -49,12 +49,16 @@
       "sha256": "33c38cfe17afaf424a78839f869f0800c43fc28e29f62e2ad18570ff973f603f"
     },
     {
+      "file": "packages/coding-agent/src/extensions/context-memory/preview/copies.ts",
+      "sha256": "8e0e6ff38777f814648960c879f67103088fe744e6fb08e8b44352a94432e892"
+    },
+    {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/excerpts.ts",
       "sha256": "a314615963bec6fc6411441b76ce7f0357dba4f3c355fe716a3f8d2983d0cf95"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/extension.ts",
-      "sha256": "bcd18e444dee6e4f03d6fcff2393d63c3a80209ab98d22a316cd7cb57ef0da66"
+      "sha256": "c969b1e230f0dc8f0e9b1815b7d68384c29c0a6afb6c277db71aae991743e008"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/failure-io.ts",
@@ -66,7 +70,7 @@
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/notices.ts",
-      "sha256": "3ba091ab0995492b6c17843b21ae78676376abcbb1e21bcb7ef4d489b2d278ef"
+      "sha256": "bea9156f62b7374480ad9edb6d06f57e891213e7515dc5431c85c082f9589d68"
     },
     {
       "file": "packages/coding-agent/src/extensions/context-memory/preview/preparation.ts",
@@ -114,7 +118,7 @@
     },
     {
       "file": "packages/compaction-core/src/history.ts",
-      "sha256": "762be08a116c347c15c152c6b63ad2c7a438a62f506f02b73a24963559128683"
+      "sha256": "b8d325731ae94414a0fc4fdae4094ce131e652601d5e1d89e41a5fc0f0c718f0"
     },
     {
       "file": "packages/compaction-core/src/identity.ts",
@@ -171,6 +175,7 @@
     "node:crypto",
     "node:fs",
     "node:path",
+    "node:url",
     "typebox",
     "typebox/value"
   ]

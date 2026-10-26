@@ -47,6 +47,6 @@ for (const host of ["dsh", "opencode"]) {
 	writeFileSync(resolve(target, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 	writeFileSync(resolve(target, "README.md"), readFileSync(resolve(root, "docs/context-memory/host-adapters.md")));
 	writeFileSync(resolve(target, "LICENSE"), readFileSync(resolve(root, "LICENSE")));
-	writeFileSync(resolve(target, "adapter-build.json"), `${JSON.stringify({ host, mode: "retrieval-only", sourceHash: hash.digest("hex"), sources: inputs, peers: manifest.peerDependencies }, null, 2)}\n`);
+	writeFileSync(resolve(target, "adapter-build.json"), `${JSON.stringify({ host, mode: "retrieval-only", sourceHash: hash.digest("hex"), sources: inputs }, null, 2)}\n`);
 	console.log(`${host}: built independent retrieval package (${bundled.outputFiles[0].contents.length} bytes)`);
 }

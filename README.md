@@ -15,7 +15,7 @@ The aim is continuity with evidence, not perfect memory.
 
 SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-built [DSH and OpenCode previews](#dsh-and-opencode-previews) add current-session history access; SLICE checkpoint writing on those hosts remains planned.
 
-**Current release:** [v0.7.1](https://github.com/youxi-huang/slice/releases/tag/v0.7.1), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It is the first extension built on the v0.7.0 core and behaves as v0.6.0 did. Until this release the project was called Pi Context Compaction.
+**Current release:** [v0.7.2](https://github.com/youxi-huang/slice/releases/tag/v0.7.2), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It installs from the repository's new address and compacts as v0.7.1 did, except that a second installed copy now stands aside instead of pausing the session. Before v0.7.1 the project was called Pi Context Compaction.
 
 [Get started](#get-started) · [How it works](#how-it-works) · [Current scope](#current-scope) · [Evidence](#evidence-and-limits)
 
@@ -26,7 +26,7 @@ You need a working installation of official Pi **1.4.0, 1.3.0, 1.2.0 or 1.1.0**,
 Install the published extension:
 
 ```sh
-pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Restart Pi and begin a new, persistent, text-only session. Then run:
@@ -43,7 +43,7 @@ If Pi says `Nothing to compact (session too small)`, there simply is not enough 
 
 There is no Pi source patch, separate model or second history service to set up. By default the extension writes with the session's own model, and Pi continues to manage authentication.
 
-The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`. GitHub redirects the old address, so an installation made from it keeps loading and updating; [moving it](#move-an-older-installation) is optional. **`extension-v0.7.1` is the installable package tag; `v0.7.1` marks the source tree, which is not a Pi package.** Please use the installation command above rather than installing the development tree.
+The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`. GitHub redirects the old address, so an installation made from it keeps loading and updating; [moving it](#move-an-older-installation) is optional. **`extension-v0.7.2` is the installable package tag; `v0.7.2` marks the source tree, which is not a Pi package.** Please use the installation command above rather than installing the development tree.
 
 ## Why keep the evidence?
 
@@ -136,12 +136,12 @@ An installation made from the old address keeps working through GitHub's redirec
 
 ```sh
 pi remove git:github.com/youxi-huang/pi-context-compaction &&
-pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Add `-l` to both commands for a project installation. Then restart Pi, reopen the session and run `/compaction-doctor`. Do not continue a protected session between the two commands; a pending or failed compaction stays pending or failed after the move. An object-form package filter has to be copied to the new entry by hand.
 
-**Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict. The two copies then compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
+**Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict, and renames their commands `/compaction-doctor:1`, `/compaction-doctor:2` and so on. From v0.7.2, a copy that finds another one loaded stands aside, so only one compacts, and it says once which address to remove. Two copies of v0.7.1 or earlier still compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
 
 For specific failure states and recovery steps, see the [extension guide](docs/context-memory/extension-preview.md#failure-and-recovery).
 

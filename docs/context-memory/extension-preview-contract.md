@@ -86,7 +86,7 @@ the session file, or a pending or blocked marker, or a same-process sticky
 failure or active attempt. Content alone never removes protection.
 
 A session without such a claim is eligible on a reviewed official host (Pi 1.4.0,
-1.3.0, 1.2.0 or 1.1.0 for v0.7.1; 1.3.0, 1.2.0 or 1.1.0 for v0.6.0),
+1.3.0, 1.2.0 or 1.1.0 for v0.7.1 and v0.7.2; 1.3.0, 1.2.0 or 1.1.0 for v0.6.0),
 the session is persistent, its branch has only preview checkpoints, text
 content and validated failed-response omissions. Eligible sessions get the full
 request guards and manual compaction. A compaction attempt, including the
@@ -109,6 +109,17 @@ session fails, the request path falls back to the ordinary guards, which fail
 closed. `/compaction-status` and `/compaction-doctor` use a non-latching read of
 the marker and session file; neither creates marker state, calls a model or
 changes the session.
+
+When Pi loads two copies of the package, from two addresses or two scopes,
+each copy's handlers run on every event. From v0.7.2 a copy finds the others
+through Pi's command list (each copy's `/compaction-recover`, in load order) and
+records its own entry file in a process-wide set. One copy compacts: the first
+copy older than v0.7.2, which cannot stand aside, or else the first loaded. Every
+other copy returns no result from any event, writes nothing and says once,
+with `CONTEXT_PREVIEW_DUPLICATE`, which copy compacts and which `pi remove`
+keeps one, preferring the `youxi-huang/slice` address. Its tools keep
+answering, since Pi runs the first copy's tools. A copy that cannot find
+itself in the list keeps compacting rather than leave the session to Pi.
 
 ## Independent acceptance and integration
 

@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { PRIMARY_PI_VERSION, SUPPORTED_PI_LABEL, supportsPi } from "./compatibility.ts";
 import type { InactiveReason, PreviewDiagnosis } from "./contracts.ts";
+import { compactingCopy, keptCopy, type LoadedCopy, removalStep, standsAside } from "./copies.ts";
 
 export const NOTICE_PREFIX = "Source-linked compaction";
 const RETRY = "Run /compact to try again.";
@@ -248,11 +249,25 @@ export function inactiveNotice(reason: InactiveReason, version: string): string 
 	return `${NOTICE_PREFIX} is off in this session because ${why}. Pi's own compaction applies, and nothing was changed. ${hint}`;
 }
 
+/** How to keep one copy: remove every other one, keeping the current address. */
+function keepOne(copies: readonly LoadedCopy[]): string {
+	const kept = keptCopy(copies);
+	const steps = copies.filter((copy) => copy !== kept).map(removalStep);
+	return `Keep one: exit Pi, ${steps.join(", ")}, and restart Pi.`;
+}
+
+/** Said once by a copy that stands aside: the session stays protected by the copy that compacts. */
+export function duplicateNotice(copies: readonly LoadedCopy[]): string {
+	return `${NOTICE_PREFIX}: ${copies.length} copies are installed. The copy from ${compactingCopy(copies)?.source} compacts this session, and this one stands aside. ${keepOne(copies)} (CONTEXT_PREVIEW_DUPLICATE)`;
+}
+
 export interface DoctorSettings {
 	/** `enabled: false` in pi-context-memory.json. */
 	disabled: boolean;
 	configError?: string;
 	writerModel?: string;
+	/** Every loaded copy of this package, when Pi lists more than one. */
+	copies?: readonly LoadedCopy[];
 }
 
 /** A read-only self-check; Pi's own history gate is unknown through the extension API. */
@@ -273,6 +288,21 @@ export function doctorReport(diagnosis: PreviewDiagnosis, settings: DoctorSettin
 			? `pi-context-memory.json can't be read. Fix or remove it, then restart Pi. (${settings.configError})`
 			: `loaded, build ${diagnosis.build}`,
 	);
+	const copies = settings.copies ?? [];
+	if (copies.length > 1) {
+		const compacting = compactingCopy(copies);
+		const listed = copies.map(
+			(copy) =>
+				`${copy.source}${copy.self ? " (this one)" : ""} ${copy === compacting ? "compacts" : "stands aside"}`,
+		);
+		line("copies", "duplicate", `${copies.length} loaded: ${listed.join(", ")}. ${keepOne(copies)}`);
+		if (standsAside(copies)) {
+			lines.push(
+				"Result: this copy stands aside. The copy that compacts protects the session; nothing was changed.",
+			);
+			return lines.join("\n");
+		}
+	}
 	line(
 		"host",
 		supportsPi(diagnosis.host) ? "ok" : inactive ? "inactive" : "blocked",

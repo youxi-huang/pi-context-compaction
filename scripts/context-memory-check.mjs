@@ -18,7 +18,7 @@ for (const [file, args] of checks) {
 	if (result.error) throw result.error;
 	if (result.status !== 0) process.exit(result.status ?? 1);
 }
-const prefixResult = spawnSync(process.execPath, ["--test", resolve(root, "scripts/context-memory-prefix-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-stock-install.test.mjs"), resolve(root, "scripts/context-memory-preview-acceptance-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-release-checks.test.mjs"), resolve(root, "scripts/context-memory-preview-bench.test.mjs"), resolve(root, "scripts/context-memory-equivalence-compare.test.mjs"), resolve(root, "scripts/context-memory-core-check.test.mjs")], {
+const prefixResult = spawnSync(process.execPath, ["--test", resolve(root, "scripts/context-memory-prefix-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-stock-install.test.mjs"), resolve(root, "scripts/context-memory-preview-acceptance-profile.test.mjs"), resolve(root, "scripts/context-memory-preview-release-checks.test.mjs"), resolve(root, "scripts/context-memory-preview-bench.test.mjs"), resolve(root, "scripts/context-memory-equivalence-compare.test.mjs"), resolve(root, "scripts/context-memory-core-check.test.mjs"), resolve(root, "scripts/context-memory-preview-source-migration.test.mjs")], {
 	cwd: root, stdio: "inherit", env: { ...process.env, PI_OFFLINE: "1" },
 });
 if (prefixResult.error) throw prefixResult.error;

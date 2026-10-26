@@ -12,6 +12,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
+- Regressions for the v0.7.2 install-source move show, on Pi's real package and settings managers over a local repository, what happens when the old address is replaced, when both addresses are installed and when either scope is changed: configuration and sessions survive, checkpoints still validate, and a pending or failed compaction stays guarded through the reinstall. The same cases run against an official Pi on request. GitHub's redirect can only be tested after the rename.
 - CI runs its full pipeline on every push to main, including a merge that changes Markdown documents alone; only such a pull request still skips it. Publication accepts a tagged commit only after its `verify` check concluded `success`, and a skipped job concludes `skipped`, so a release tagged on a documentation-only merge would have failed at its last step, after the whole stock-Pi acceptance had run. A regression runs the workflow's scope step on a documentation-only commit for a pull request, a push and a manual run.
 
 ## [v0.7.1] — 2026-10-25

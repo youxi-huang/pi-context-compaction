@@ -50,10 +50,9 @@ The OpenCode entry returns the public hook/tool object directly; the official
 `tool()` helper is an identity function. It uses Zod 4.6.7 without importing
 the full plugin package or its unused V2 dependency graph. The SDK is used for
 development typing and acceptance only; the running host supplies its client.
-The repository also pins DSH's development dependency graph to Zod 4.6.7 via
-its root override. This does not modify an installed host or its dependencies.
-The two DSH test entry packages are root development pins so npm applies that
-override to the workspace peer graph; they are not bundled into either adapter.
+DSH `0.2.1-rc.3` pins Zod 4.4.3, which GHSA-mrhx-c7xc-m3w5 affects, so the
+repository's root override lifts its development graph to 4.6.7. This does not
+modify an installed host or its dependencies.
 
 Remove the profile/plugin entry to uninstall. These plugins create no sidecar
 history, recovery markers or custom checkpoint records to clean up. Native

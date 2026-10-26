@@ -12,7 +12,7 @@ assert(!sourceRoot || isAbsolute(sourceRoot), "Release source root must be absol
 const root = realpathSync(sourceRoot ?? fileURLToPath(new URL("../", import.meta.url)));
 const artifacts = join(root, ".artifacts");
 const packageDir = join(artifacts, "context-memory-preview-package");
-const repository = "youxi-huang/pi-context-compaction";
+const repository = "youxi-huang/slice";
 const branch = "extension-preview";
 const expectedFiles = ["LICENSE", "README.md", "dist/extension.js", "package.json", "preview-build.json"].sort();
 const publish = process.argv[2] === "--publish";

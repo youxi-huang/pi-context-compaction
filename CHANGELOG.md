@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Changed
+
+- The README's Get started covers all three hosts: Pi first, then the DSH and OpenCode steps, which had sat in their own section after the Pi update and recovery notes.
+
 ## [v0.7.2] — 2026-10-26
 
 v0.7.2 moves the repository and its install source to `youxi-huang/slice`, and a second installed copy no longer pauses the session: a copy that finds another one loaded stands aside, so only one compacts. The extension otherwise compacts as v0.7.1 did, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The source tree also gains retrieval-only previews for DSH and OpenCode, built from source and not published. Results are offline, on official Pi installations with loopback services, except GitHub's redirect, which was tested against the renamed repository; real-provider behavior is not part of this release.

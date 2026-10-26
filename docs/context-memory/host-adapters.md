@@ -33,7 +33,7 @@ package. Keep one copy of the tool installed; do not register another
 | `slice-dsh-preview` | DSH `0.2.1-rc.3`, Cordis `4.0.5` | `dsh plugin --profile <profile> add file:<dir>/dsh` (it runs pnpm from `PATH`), then insert `{ id: slice-history, name: slice-dsh-preview }` in that profile's `cordis.patch.yml`. Profiles built on `dsh-base` provide the sessions, persistence and tools it injects. It exports `name`, `inject`, `apply`. |
 | `slice-opencode-preview` | OpenCode 1.x plugin contract and SDK `1.19.4` | `npm install --prefix <dir>/opencode --omit=dev`, then add the absolute `file://` URL of `<dir>/opencode/dist/index.js` to `plugin` in `opencode.json`. It exports only `SliceHistory`. |
 
-The [README](../../README.md#dsh-and-opencode-previews) gives the same steps
+The [README](../../README.md#dsh-and-opencode) gives the same steps
 as copyable commands.
 
 DSH requires an owning persistence backend and a successful session flush; a

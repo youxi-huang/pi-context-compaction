@@ -10,6 +10,11 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - Source-only retrieval previews for DSH `0.2.1-rc.3` and OpenCode 1.19.4. Each adds one `context_history` tool that searches and reads the current session's original records through the host's public storage API and the shared core, citing native event and part IDs, with bounded pages, continuation cursors and source-change checks. They keep no second history database and refuse forked or seeded sessions. Neither writes SLICE checkpoints yet: DSH's pinned persistence contract cannot carry a required external checkpoint record, and OpenCode keeps its native compactor.
 
+### Changed
+
+- The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`, and the install source is now `git:github.com/youxi-huang/slice`. GitHub redirects the old address, so existing installations keep loading and updating, and `pi update` and `pi remove` still name the address they were installed from. Pi counts the two addresses as two packages: moving means removing the old address and installing the new one, never installing both, because Pi then loads both copies and their next compaction pauses the session. The release script, the package's repository and homepage, and the install commands in the README and the preview guide follow the new name. The package name, the commands, the configuration file and stored checkpoints are unchanged.
+- The README now shows how to build and load the DSH and OpenCode previews. Both sets of steps were run on the official hosts.
+
 ### Security
 
 - DSH `0.2.1-rc.3` pins zod 4.4.3, affected by GHSA-mrhx-c7xc-m3w5. A root override lifts the new development dependencies to 4.6.7, so `npm audit` still reports no advisories. The OpenCode adapter imports zod 4.6.7 directly rather than the plugin package, whose V2 runtime it does not use.

@@ -21,16 +21,20 @@ node scripts/context-memory-adapters-check.mjs
 ```
 
 The builder emits `.artifacts/host-adapters/dsh` and
-`.artifacts/host-adapters/opencode`. Each bundles only its adapter and the
-private core, declares its runtime dependencies, and includes a source fingerprint.
-Neither publishes an npm package. Install the chosen local package in the
-host's plugin environment so its peer dependencies resolve. Keep one copy of
-the tool installed; do not register another `context_history` beside it.
+`.artifacts/host-adapters/opencode`, or the same two directories under
+`node scripts/context-memory-adapters-build.mjs --output-dir <dir>`. Each
+bundles only its adapter and the private core, declares its runtime
+dependencies, and includes a source fingerprint. Neither publishes an npm
+package. Keep one copy of the tool installed; do not register another
+`context_history` beside it.
 
-| Package | Pinned API | Load entry |
+| Package | Pinned API | Load |
 | --- | --- | --- |
-| `slice-dsh-preview` | DSH `0.2.1-rc.3`, Cordis `4.0.5` | Add `slice-dsh-preview` to the DSH profile after sessions, persistence and tools. It exports `name`, `inject`, `apply`. |
-| `slice-opencode-preview` | OpenCode 1.x plugin contract and SDK `1.19.4` | Add the built `dist/index.js` file URL to OpenCode's `plugin` configuration. It exports only `SliceHistory`. |
+| `slice-dsh-preview` | DSH `0.2.1-rc.3`, Cordis `4.0.5` | `dsh plugin --profile <profile> add file:<dir>/dsh` (it runs pnpm from `PATH`), then insert `{ id: slice-history, name: slice-dsh-preview }` in that profile's `cordis.patch.yml`. Profiles built on `dsh-base` provide the sessions, persistence and tools it injects. It exports `name`, `inject`, `apply`. |
+| `slice-opencode-preview` | OpenCode 1.x plugin contract and SDK `1.19.4` | `npm install --prefix <dir>/opencode --omit=dev`, then add the absolute `file://` URL of `<dir>/opencode/dist/index.js` to `plugin` in `opencode.json`. It exports only `SliceHistory`. |
+
+The [README](../../README.md#dsh-and-opencode-previews) gives the same steps
+as copyable commands.
 
 DSH requires an owning persistence backend and a successful session flush; a
 session with no persistence listener is refused. The tool opens a **read**
@@ -87,6 +91,14 @@ and official DSH Session/JSONL components. It covers two native DSH replacement
 cycles and a cold storage reopen, ID and role mapping, source mutation, cursor
 scope, missing durability and cancellation. It also builds both independent
 packages. This is not a live-provider run or full interactive-host acceptance.
+
+The built DSH package has also run inside the official `dsh` 0.2.1-rc.3 CLI,
+installed from npm into an isolated `DSH_HOME`: added to the `headless` profile
+with the two steps above, it was offered to the model, and a loopback
+Messages-API stand-in that called it received the session's original user
+message under its native event ID. No real model was called, and the run did
+not cover interactive UI, native compaction or reopen in the CLI. See the
+[validation record](validation.md).
 
 For the separate **Linux x64 OpenCode 1.19.4** installed-package acceptance:
 

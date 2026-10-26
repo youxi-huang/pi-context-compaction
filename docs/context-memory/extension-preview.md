@@ -24,7 +24,8 @@ v0.7.1 is the first extension built on that core. It behaves as v0.6.0 did and
 adds official Pi 1.4.0 as the primary host.
 
 The project is now called SLICE, Source-Linked Indexed Compaction of
-Everything. The repository, the install source, the package name, the
+Everything. Its repository moved to `youxi-huang/slice`, and GitHub redirects
+the old `youxi-huang/pi-context-compaction` address. The package name, the
 `/compaction-*` commands, the `pi-context-memory.json` configuration file and
 stored checkpoint identifiers keep their earlier names, so nothing needs
 migrating.
@@ -34,23 +35,23 @@ migrating.
 Official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.1
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
 
-Pi records one source per package repository, so installing the same
-repository with another tag or branch replaces the recorded source. To follow
+Pi records one source per package address, so installing the same address
+with another tag or branch replaces the recorded source. To follow
 later compatible previews instead of a pinned tag, install the moving branch:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi install git:github.com/youxi-huang/slice@extension-preview
 ```
 
 Update only this package:
 
 ```sh
-pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi update --extension git:github.com/youxi-huang/slice@extension-preview
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
@@ -70,14 +71,31 @@ and run `/compact` there, or keep the file and continue in a new session.
 Remove the package, whichever tag or branch is installed:
 
 ```sh
-pi remove git:github.com/youxi-huang/pi-context-compaction
+pi remove git:github.com/youxi-huang/slice
 ```
+
+An installation made from the old address keeps working through GitHub's
+redirect, and removing or updating it still names that address. To move it,
+exit Pi and run:
+
+```sh
+pi remove git:github.com/youxi-huang/pi-context-compaction &&
+pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+```
+
+Add `-l` to both for a project installation, then restart Pi, reopen the
+session and run `/compaction-doctor`. Do not continue a protected session
+between the two commands. Never install both addresses: Pi loads both copies,
+reports only that their tools conflict, and the two copies then compete for the
+next compaction and pause the session. In testing, neither
+`/compaction-recover` nor `/compact` cleared that pause; remove one address,
+restart Pi and continue in a new session.
 
 Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.7.1 release](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.7.1)
+The [v0.7.1 release](https://github.com/youxi-huang/slice/releases/tag/v0.7.1)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not

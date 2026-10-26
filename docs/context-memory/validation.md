@@ -1,5 +1,54 @@
 # Validation record
 
+## Repository rename to slice: real redirect and host runs, 2026-10-26 UTC
+
+The repository was renamed on GitHub at 08:02:56 UTC. From the cloud session
+afterwards, `git ls-remote` on both addresses returned the same refs (`main` at
+`c2f5b96`, `extension-preview` and `extension-v0.7.1` at `0dd97e4`), exit 0; the
+old web address answered 301 to `/youxi-huang/slice`, and the old API address
+301 "Moved Permanently". Everything below used isolated official installations
+and loopback synthetic providers. No real model was called.
+
+**Real redirect, official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0.** The official CLI
+ran against an isolated agent directory. Compaction and reopen reused the
+existing acceptance worker (`--runtime-case success` and `reopen-success` with
+`--reuse-agent-dir` and `--installed-package-dir`) on the checkout Pi had
+actually cloned from GitHub. Every host passed all 14 steps, exit 0:
+
+| Step | Result on each host |
+| --- | --- |
+| `pi install` the old address at `extension-preview`, `pi update --extension`, then at `extension-v0.7.1` | Clone and fetch through the redirect; checkout at `0dd97e4`; its origin stays the old URL |
+| Compact a session with the copy from the old address | Checkpoint committed, 1 writer request, no failure marker |
+| `pi remove` the old address without a ref, `pi install` the new one at `extension-v0.7.1` | Old checkout and declaration gone; new checkout at `0dd97e4` with the new origin |
+| Reopen that session with the copy from the new address | Original evidence retrieved through `context_history`, no failure marker |
+| One copy loaded through the official SDK | No load errors, one `context_history` |
+| Both addresses installed | Pi keeps both copies loaded and reports `Tool "context_note"` and `Tool "context_history"` conflicts for the second |
+| Remove the old address, then install, update and remove the new one at `extension-preview` | The new copy survives the first removal; the rest exit 0 and leave no declaration |
+
+**Both copies at compaction, official Pi 1.4.0.** With both addresses
+installed, a valid compaction ended in `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED` and
+paused the session. After removing the old address, `/compaction-recover`
+answered that nothing was waiting to be confirmed, and `/compact` was refused
+as "Already compacted". The README and the preview guide therefore tell users
+never to install both addresses, and to continue in a new session if they did.
+The roadmap's plan for `/compaction-doctor` to name a duplicate copy remains
+open.
+
+**DSH 0.2.1-rc.3 host run.** `@deepseek-ai/dsh@0.2.1-rc.3` was installed from
+npm into an isolated `DSH_HOME`. The built package was added with
+`dsh plugin --profile headless add file:<dir>/dsh` and loaded with one `insert`
+row in that profile's `cordis.patch.yml`. `dsh --profile headless` then ran a
+task with `DEEPSEEK_BASE_URL` pointing at a loopback Messages-API stand-in and
+every proxy pointing at a closed port, exit 0. The model was offered 26 tools,
+`context_history` among them; the stand-in called it once and received the
+task's original user message as entry `8`, role `user`. Three loopback requests
+were made: the agent turn, the session title and the turn after the tool.
+
+**OpenCode 1.19.4 user install.** The package built with `--output-dir` took
+its two runtime dependencies from `npm install --omit=dev` in its own
+directory, rather than from the repository as the acceptance script copies
+them. The acceptance otherwise unchanged passed 4/4 with 10 provider calls.
+
 ## Pi 1.4.0 as the preview's primary host, 2026-10-25 UTC
 
 Official Pi 1.4.0 joins the independent preview's hosts as the primary one,

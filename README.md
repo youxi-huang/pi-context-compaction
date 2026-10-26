@@ -13,9 +13,9 @@ The aim is continuity with evidence, not perfect memory.
   <img src="docs/context-memory/assets/pi-context-compaction-hero-editorial.png" alt="A compact handover cites an earlier failure and a later decision, with references back to the original session entries.">
 </picture>
 
-SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-only [DSH and OpenCode retrieval previews](docs/context-memory/host-adapters.md) add current-session history access; Slice checkpoint writing on those hosts remains planned.
+SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-built [DSH and OpenCode previews](#dsh-and-opencode-previews) add current-session history access; SLICE checkpoint writing on those hosts remains planned.
 
-**Current release:** [v0.7.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.7.1), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It is the first extension built on the v0.7.0 core and behaves as v0.6.0 did. Until this release the project was called Pi Context Compaction.
+**Current release:** [v0.7.1](https://github.com/youxi-huang/slice/releases/tag/v0.7.1), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It is the first extension built on the v0.7.0 core and behaves as v0.6.0 did. Until this release the project was called Pi Context Compaction.
 
 [Get started](#get-started) · [How it works](#how-it-works) · [Current scope](#current-scope) · [Evidence](#evidence-and-limits)
 
@@ -26,7 +26,7 @@ You need a working installation of official Pi **1.4.0, 1.3.0, 1.2.0 or 1.1.0**,
 Install the published extension:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.1
 ```
 
 Restart Pi and begin a new, persistent, text-only session. Then run:
@@ -43,7 +43,7 @@ If Pi says `Nothing to compact (session too small)`, there simply is not enough 
 
 There is no Pi source patch, separate model or second history service to set up. By default the extension writes with the session's own model, and Pi continues to manage authentication.
 
-The repository keeps the name `pi-context-compaction` for now, so existing installations need no change. **`extension-v0.7.1` is the installable package tag; `v0.7.1` marks the source tree, which is not a Pi package.** Please use the installation command above rather than installing the development tree.
+The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`. GitHub redirects the old address, so an installation made from it keeps loading and updating; [moving it](#move-an-older-installation) is optional. **`extension-v0.7.1` is the installable package tag; `v0.7.1` marks the source tree, which is not a Pi package.** Please use the installation command above rather than installing the development tree.
 
 ## Why keep the evidence?
 
@@ -111,34 +111,83 @@ You can review the [validation record](docs/context-memory/validation.md), [chan
 The command above pins a release. If you would rather follow the moving preview branch, install it instead:
 
 ```sh
-pi install git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi install git:github.com/youxi-huang/slice@extension-preview
 ```
 
 To update only that branch-based package:
 
 ```sh
-pi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview
+pi update --extension git:github.com/youxi-huang/slice@extension-preview
 ```
 
-Pi records one source per package repository, so installing the same repository with another tag or branch replaces the recorded source rather than adding a second copy.
+Pi records one source per package address, so installing the same address with another tag or branch replaces the recorded source rather than adding a second copy.
 
-To remove the extension:
+To remove the extension, whichever tag or branch is installed:
 
 ```sh
-pi remove git:github.com/youxi-huang/pi-context-compaction
+pi remove git:github.com/youxi-huang/slice
 ```
 
 Restart Pi after installation or update. A pinned tag does not move when updated; a plain `pi update` updates Pi itself. Updating or removing the extension does not rewrite the session history, and removing it is not a verified recovery method for a blocked checkpoint.
 
+### Move an older installation
+
+An installation made from the old address keeps working through GitHub's redirect, and `pi remove` and `pi update` still need that old address. To move it, exit Pi and run:
+
+```sh
+pi remove git:github.com/youxi-huang/pi-context-compaction &&
+pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+```
+
+Add `-l` to both commands for a project installation. Then restart Pi, reopen the session and run `/compaction-doctor`. Do not continue a protected session between the two commands; a pending or failed compaction stays pending or failed after the move. An object-form package filter has to be copied to the new entry by hand.
+
+**Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict. The two copies then compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
+
 For specific failure states and recovery steps, see the [extension guide](docs/context-memory/extension-preview.md#failure-and-recovery).
+
+## DSH and OpenCode previews
+
+For [DSH](https://github.com/deepseek-ai/deepseek-harness) `0.2.1-rc.3` and [OpenCode](https://github.com/anomalyco/opencode) `1.19.4`, SLICE provides one tool, `context_history`, which searches and reads the current session's original records through the host's own storage and cites the host's native IDs. It does not write SLICE checkpoints or change how the host compacts. Both packages are built from source and are not published to npm:
+
+```sh
+git clone https://github.com/youxi-huang/slice && cd slice
+node scripts/context-memory-ops.mjs deps
+node scripts/context-memory-adapters-build.mjs --output-dir ~/slice-adapters
+```
+
+**DSH.** `dsh plugin` runs pnpm, which must be on your `PATH`. Add the package to a profile built on DSH's base bundle, which provides the sessions, persistence and tools it needs:
+
+```sh
+dsh plugin --profile <profile> add file:$HOME/slice-adapters/dsh
+```
+
+Then load it from that profile's `cordis.patch.yml`, in place of an empty `[]` or as one more list item:
+
+```yaml
+- insert:
+    - id: slice-history
+      name: slice-dsh-preview
+```
+
+**OpenCode.** Install the package's two runtime dependencies, then list its entry file under `plugin` in `opencode.json` with an absolute file URL:
+
+```sh
+npm install --prefix ~/slice-adapters/opencode --omit=dev --ignore-scripts
+```
+
+```json
+{ "plugin": ["file:///absolute/path/to/slice-adapters/opencode/dist/index.js"] }
+```
+
+The tool asks for OpenCode's `context_history` permission, which is allowed unless your configuration says otherwise. On both hosts it reads only the current session and refuses forked or child sessions. To uninstall, remove the patch row or the plugin entry. The [host adapter guide](docs/context-memory/host-adapters.md) covers the pinned APIs, the evidence and what is not yet supported.
 
 ## Development and care
 
 SLICE's shared method lives in [`packages/compaction-core`](packages/compaction-core), separate from Pi's lifecycle and model transport. The Pi extension is the first adapter. The earlier resident build, which changed Pi's own source, is frozen and retained for comparison, not recommended for installation. See the [0.7.0 plan](docs/context-memory/v0.7.0-plan.md) and [operations runbook](docs/context-memory/operations.md) for the development and verification boundaries.
 
-The repository, the Git package source, the package name, the `/compaction-*` commands and stored identifiers such as `context-memory` and `pi-context-memory.json` retain their established names. They do not need to change for the SLICE name to be used here, and existing checkpoints require no migration.
+The package name, the `/compaction-*` commands and stored identifiers such as `context-memory` and `pi-context-memory.json` retain their established names; only the repository and its Git address carry the SLICE name. Existing checkpoints and settings need no migration.
 
-Original sessions remain in local JSONL files. Relevant content is still sent to the selected model when a note is written or history is returned to the agent. Please use synthetic examples rather than real transcripts, credentials or identifying paths in reports. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [Discussions](https://github.com/youxi-huang/pi-context-compaction/discussions).
+Original sessions remain in local JSONL files. Relevant content is still sent to the selected model when a note is written or history is returned to the agent. Please use synthetic examples rather than real transcripts, credentials or identifying paths in reports. See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) and [Discussions](https://github.com/youxi-huang/slice/discussions).
 
 The design was inspired in part by OpenAI's [public description](https://learn.chatgpt.com/docs/models) of notes across context windows and retrieval of earlier task messages, and by public community work on agent context management. No OpenAI context-management implementation has been copied. Codex assisted development.
 

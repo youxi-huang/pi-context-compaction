@@ -299,7 +299,7 @@ test("manual verification cannot replace the final main push verification", () =
 	assert.throws(() => assertFinalMainWorkflows([{ ...mainRuns[0], event: "workflow_dispatch" }, mainRuns[1]], sourceCommit));
 });
 
-const repository = "youxi-huang/pi-context-compaction";
+const repository = "youxi-huang/slice";
 const noteOptions = { repository, packageTag: "extension-v0.3.3", branch: "extension-preview", hosts: hostsFor("0.3.3") };
 const scenarioAcceptance = { profile: PROFILE, version: VERSION, accepted: true, rawPassed: false, exceptions: [
 	{ id: "long-session-overhead/per-request-budget", status: "known-gap", criterion: "per-request-budget", pi: "1.1.0" },
@@ -309,7 +309,7 @@ const notes = releaseNotes({ ...noteOptions, tag: "v0.3.3", sourceCommit, build:
 
 test("generated release notes install the fixed package tag alone in their first block", () => {
 	assert.doesNotThrow(() => assertReleaseNotes(notes, noteOptions));
-	assert.match(notes, /```sh\npi install git:github\.com\/youxi-huang\/pi-context-compaction@extension-v0\.3\.3\n```/);
+	assert.match(notes, /```sh\npi install git:github\.com\/youxi-huang\/slice@extension-v0\.3\.3\n```/);
 	assert.doesNotMatch(notes, /147 context checks|83 scenario checks/);
 	assert.match(notes, /Resident runtime keeps its v0\.3\.0 fingerprint/);
 	assert.doesNotMatch(notes, /experimental A-stage|full A\/B comparison/);
@@ -383,11 +383,11 @@ test("release notes reject mismatched or unreviewed source and package tags", ()
 });
 
 test("install, update and remove commands may not share a copyable block", () => {
-	const combined = "```sh\npi install git:github.com/youxi-huang/pi-context-compaction@extension-v0.3.3\npi update --extension git:github.com/youxi-huang/pi-context-compaction@extension-preview\n```\n";
+	const combined = "```sh\npi install git:github.com/youxi-huang/slice@extension-v0.3.3\npi update --extension git:github.com/youxi-huang/slice@extension-preview\n```\n";
 	assert.throws(() => assertReleaseNotes(combined, noteOptions));
 });
 
 test("the first copyable block may not install the moving branch", () => {
-	const moving = "```sh\npi install git:github.com/youxi-huang/pi-context-compaction@extension-preview\n```\n";
+	const moving = "```sh\npi install git:github.com/youxi-huang/slice@extension-preview\n```\n";
 	assert.throws(() => assertReleaseNotes(moving, noteOptions));
 });

@@ -1,9 +1,9 @@
 # Repository-source migration regressions
 
-In v0.7.2 the install source moves from `youxi-huang/pi-context-compaction` to
+In v0.7.2 the install source moved from `youxi-huang/pi-context-compaction` to
 `youxi-huang/slice`. Pi keys a Git package by host and path, so the two addresses
-are two packages. These regressions show what that means for an installation
-before the repository is renamed. They change no package name, command,
+are two packages. These regressions show what that means for an installation,
+without the network. They change no package name, command,
 checkpoint format, source hash or storage path.
 
 ## Run
@@ -55,21 +55,21 @@ built extension on each official Pi is covered by the
 package by repository whichever ref is installed. Neither can exercise GitHub's
 redirect: the aliasing here is local.
 
-That waits for the rename. After it, on every listed official Pi: clone, fetch,
-update and removal through both public addresses; both addresses installed
-together, with load errors, command registration and `/compaction-doctor`
-recorded; then removal of one and a protected-session reopen. Before publishing,
-the repository name in `scripts/context-memory-preview-release.mjs` must change,
-since the publication workflow checks it against `GITHUB_REPOSITORY`.
+The repository was renamed on 2026-10-26, and the real-redirect run followed
+on every listed official Pi; the [validation record](validation.md) has the
+results. In short: both public addresses install, update and remove; a session
+protected by the copy from the old address reopens under the copy from the new
+one; and with both addresses installed, Pi loads both copies, reports only a
+tool conflict, and their next compaction pauses the session. That last case is
+why the user's command removes before it installs.
 
-## The user's command after the rename
+## The user's command
 
-Once the repository is renamed and `extension-v0.7.2` is published, exit Pi and
-run, for a global installation:
+To move an installation, exit Pi and run, for a global installation:
 
 ```sh
 pi remove git:github.com/youxi-huang/pi-context-compaction &&
-pi install git:github.com/youxi-huang/slice@extension-v0.7.2
+pi install git:github.com/youxi-huang/slice@extension-v0.7.1
 ```
 
 Add `-l` to both commands for a project installation, and use

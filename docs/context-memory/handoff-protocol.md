@@ -48,7 +48,7 @@ and cannot find the handoff by itself. The user starts the next session with one
 line, in any language:
 
 ```text
-Continue youxi-huang/pi-context-compaction on branch <branch> (PR #<n>): read HANDOFF.md there, follow docs/context-memory/handoff-protocol.md, and push to that branch.
+Continue youxi-huang/slice on branch <branch> (PR #<n>): read HANDOFF.md there, follow docs/context-memory/handoff-protocol.md, and push to that branch.
 ```
 
 Naming the branch in the kickoff is the permission to push to it. Add commits

@@ -12,6 +12,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
+- Add isolated installation-source regressions for the v0.7.2 repository rename: retaining the old source, replacing it and removing either of two installed sources, in user and project scope. They exercise real package-manager APIs over local Git, preserve configuration and protected checkpoint evidence, and keep pending or failed compactions guarded through reinstall. Optional official-host API runs remain separate from installed-extension acceptance and real GitHub redirect checks.
 - CI runs its full pipeline on every push to main, including a merge that changes Markdown documents alone; only such a pull request still skips it. Publication accepts a tagged commit only after its `verify` check concluded `success`, and a skipped job concludes `skipped`, so a release tagged on a documentation-only merge would have failed at its last step, after the whole stock-Pi acceptance had run. A regression runs the workflow's scope step on a documentation-only commit for a pull request, a push and a manual run.
 
 ## [v0.7.1] — 2026-10-25

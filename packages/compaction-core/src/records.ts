@@ -2,8 +2,10 @@
  * The structural record types of the specification's record model (spec/specification.md, "The
  * record model"), settled against what the retyped modules actually read: `sourceText` and
  * `sourceRole` in notes.ts, the checkpoint validation walk, and `queryHistory` in history.ts.
- * A host's native record satisfies these shapes — it is not converted into them (rule K4) — and
- * whatever fields the host stores beyond the ones named here travel with the record unchanged.
+ * A compatible native record satisfies these shapes directly. Other hosts supply a deterministic,
+ * disposable view with native IDs and an exact lookup to the unchanged native payload (rule K4).
+ * Every field used as evidence must enter the view's structural fields or opaque payload so JCS
+ * covers it. This is a view contract, not another persisted transcript or a native-log rewrite.
  * `reduction.ts`'s `ReductionRecord` (lifted into this package) is the established pattern; these types are its
  * closure over the remaining classified modules.
  *
@@ -43,7 +45,7 @@ export interface RecordContentBlock {
 /**
  * The message fields the core reads across the recognized roles (`user`, `assistant`,
  * `toolResult`, `bashExecution`); any other role normalizes through its `content` field when one
- * exists. A host's native message satisfies this shape.
+ * exists. An adapter preserves the source role when projecting a native message into this shape.
  */
 export interface RecordMessage {
 	role: string;

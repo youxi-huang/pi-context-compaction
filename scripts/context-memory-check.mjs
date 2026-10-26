@@ -12,6 +12,7 @@ const checks = [
 	["scripts/generate-coding-agent-install-lock.mjs", ["--check"]],
 	["node_modules/typescript/bin/tsc", ["--noEmit"]],
 	["scripts/context-memory-core-check.mjs", []],
+	["scripts/context-memory-adapters-check.mjs", []],
 ];
 for (const [file, args] of checks) {
 	const result = spawnSync(process.execPath, [resolve(root, file), ...args], { cwd: root, stdio: "inherit" });

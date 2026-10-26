@@ -6,9 +6,14 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- Source-only retrieval previews for DSH `0.2.1-rc.3` and OpenCode 1.19.4. Each adds one `context_history` tool that searches and reads the current session's original records through the host's public storage API and the shared core, citing native event and part IDs, with bounded pages, continuation cursors and source-change checks. They keep no second history database and refuse forked or seeded sessions. Neither writes SLICE checkpoints yet: DSH's pinned persistence contract cannot carry a required external checkpoint record, and OpenCode keeps its native compactor.
+
 ### Security
 
-- Remove the unused upstream sandbox example, whose `@anthropic-ai/sandbox-runtime` dependency held zod at 3.25.76, affected by GHSA-mrhx-c7xc-m3w5. No zod 3 release carries the fix, and even the latest sandbox runtime requires zod 3. With the example gone, every remaining dependent accepts zod 4, so the root lockfile moves zod to 4.6.7 and `npm audit` reports no advisories. zod was never in the coding-agent install lock or the independent extension, and no code in this repository imports it; it arrived through the example, as an optional peer of the provider SDKs and as a dependency of the upstream evaluation tools.
+- DSH `0.2.1-rc.3` pins zod 4.4.3, affected by GHSA-mrhx-c7xc-m3w5. A root override lifts the new development dependencies to 4.6.7, so `npm audit` still reports no advisories. The OpenCode adapter imports zod 4.6.7 directly rather than the plugin package, whose V2 runtime it does not use.
+- Remove the unused upstream sandbox example, whose `@anthropic-ai/sandbox-runtime` dependency held zod at 3.25.76, affected by GHSA-mrhx-c7xc-m3w5. No zod 3 release carries the fix, and even the latest sandbox runtime requires zod 3. With the example gone, every remaining dependent accepts zod 4, so the root lockfile moves zod to 4.6.7 and `npm audit` reports no advisories. zod was never in the coding-agent install lock or the independent Pi extension; before the new OpenCode adapter, it arrived only through the example, as an optional peer of the provider SDKs and as a dependency of the upstream evaluation tools.
 
 ### Maintenance
 

@@ -38,9 +38,10 @@ Three conventions hold throughout:
 The durable facts of a session are its records. They live in the host's own
 storage; the core keeps no copy of history, and every view the core computes
 is derived on demand and disposable (rule K5). The core never invents a record
-ID and cites only the host's own IDs; an adapter can always return the host's
-native record, because the model below is structural (`records.ts`) — the native record
-*satisfies* the shape, it is not converted into it (rule K4).
+ID and cites only the host's own IDs. A compatible native record satisfies
+the structural model below (`records.ts`) directly. Otherwise the adapter
+supplies a deterministic, disposable view and keeps an exact lookup to the
+unchanged native payload (rule K4). This view is never a second stored transcript.
 
 A **branch** is a finite, ordered sequence of records: the ancestor chain from
 the session's first record to one leaf. All validation, retrieval and
@@ -58,12 +59,15 @@ Every record carries:
 | `kind` | string | The record's type discriminator. The values below are frozen identifiers of this model; a kind the core does not recognize passes through opaque, normalizes to empty text, and is therefore not citable. |
 | `timestamp` | string | The record's stored creation time, parseable to milliseconds. Time-dependent rules (the reduction's idle trigger) read gaps between consecutive records' timestamps, never a clock. |
 
-The native payload is the record itself: whatever fields the host stores
-beyond the ones named here travel with the record unchanged and are never
-rewritten by the core. Whether the source hash covers them depends on the
-serialization (see "The source hash"): the compatibility form hashes the
-host's full stored serialization, native fields included; the canonical form
-hashes the record model's structural fields only.
+When the native record already satisfies the model, its extra fields travel
+unchanged. A codec for a different native format must put every evidence field
+into structural fields or opaque payloads covered by canonical hashing; placing
+it only on an extra top-level property does not cover it. Native message or part
+IDs remain citations; a codec may not manufacture IDs to split embedded tools.
+Native append order and the host's current model-visible order are distinct.
+The core never rewrites either. The compatibility serialization hashes the
+complete supplied record; the canonical form hashes structural fields and their
+opaque payloads (see "The source hash"). Existing Pi bytes remain unchanged.
 
 ### Kinds
 

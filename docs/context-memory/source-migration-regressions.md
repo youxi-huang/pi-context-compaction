@@ -71,7 +71,7 @@ To move an installation, exit Pi and run, for a global installation:
 
 ```sh
 pi remove git:github.com/youxi-huang/pi-context-compaction &&
-pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Add `-l` to both commands for a project installation, and use

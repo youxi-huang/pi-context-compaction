@@ -1,6 +1,6 @@
 {
 	"name": "compaction-core",
-	"version": "0.7.1",
+	"version": "0.7.2",
 	"private": true,
 	"description": "Host-neutral context-compaction core: structural records, notes, checkpoints and the commit gate, importing nothing from any host",
 	"type": "module",

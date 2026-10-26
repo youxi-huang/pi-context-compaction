@@ -1,10 +1,10 @@
-# SLICE for Pi: independent extension preview v0.7.1
+# SLICE for Pi: independent extension preview v0.7.2
 
-This extension runs on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.7.1 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
+This extension runs on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0** as an ordinary Pi package. v0.7.2 retains the checkpoint schema and source-hash format used by v0.4.1, so existing preview checkpoints reopen unchanged, and a v0.5.0 checkpoint reopens under v0.4.3.
 It is distributed through the `extension-preview` Git branch and immutable
 `extension-v*` package tags, separately from the v0.3.0 resident source build.
 
-**v0.7.1 supports manual and completed-turn threshold compaction.** Optional
+**v0.7.2 supports manual and completed-turn threshold compaction.** Optional
 background preparation with the configured writer (A) and data-only work notes
 from the session model (B) are both disabled by default. B carries covered user
 messages in full or asks the configured writer to compact them. Sources are
@@ -21,7 +21,9 @@ package (`packages/compaction-core`), and the resident runtime is frozen as of
 2026-10-22: no further ports or features, maintenance only, retirement by
 0.10.0 (see [the delta's freeze note](upstream-delta.md#the-resident-freeze)).
 v0.7.1 is the first extension built on that core. It behaves as v0.6.0 did and
-adds official Pi 1.4.0 as the primary host.
+adds official Pi 1.4.0 as the primary host. v0.7.2 installs from the new
+repository address and lets a second installed copy stand aside; it compacts
+as v0.7.1 did.
 
 The project is now called SLICE, Source-Linked Indexed Compaction of
 Everything. Its repository moved to `youxi-huang/slice`, and GitHub redirects
@@ -35,7 +37,7 @@ migrating.
 Official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 users can install the pinned package:
 
 ```sh
-pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Restart Pi afterwards. Tags and commits stay pinned.
@@ -55,13 +57,13 @@ pi update --extension git:github.com/youxi-huang/slice@extension-preview
 ```
 
 `pi update --extensions` updates every installed package. A plain `pi update`
-updates Pi itself and `pi update --all` updates Pi and all packages; the v0.7.1
+updates Pi itself and `pi update --all` updates Pi and all packages; the v0.7.2
 preview supports Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0.
 
 ### Before updating Pi
 
-Check that the installed preview lists the new Pi version first; v0.7.1 lists
-1.4.0, 1.3.0, 1.2.0 and 1.1.0, and v0.6.0 lists 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
+Check that the installed preview lists the new Pi version first; v0.7.2 and
+v0.7.1 list 1.4.0, 1.3.0, 1.2.0 and 1.1.0, and v0.6.0 lists 1.3.0, 1.2.0 and 1.1.0. On a Pi version the preview does not list, sessions it never protected are left to
 Pi's own compaction, but a session it protects stays blocked: requests stop and
 a failure record is written, because the preview cannot check its checkpoints
 on that host. To continue such a session, reopen it with a listed Pi version
@@ -80,7 +82,7 @@ exit Pi and run:
 
 ```sh
 pi remove git:github.com/youxi-huang/pi-context-compaction &&
-pi install git:github.com/youxi-huang/slice@extension-v0.7.1
+pi install git:github.com/youxi-huang/slice@extension-v0.7.2
 ```
 
 Add `-l` to both for a project installation, then restart Pi, reopen the
@@ -98,7 +100,7 @@ Install the package from one scope only (global by default, or project-local
 with `-l`). A compatible older preview can reopen its own checkpoint schema;
 resident and native checkpoints are not migrated.
 
-The [v0.7.1 release](https://github.com/youxi-huang/slice/releases/tag/v0.7.1)
+The [v0.7.2 release](https://github.com/youxi-huang/slice/releases/tag/v0.7.2)
 also provides the extension `.tgz`, source archive, provenance, exact-package
 scenario evidence and SHA256 checksums.
 The Git package contains five reviewed files and no host runtime. It is not

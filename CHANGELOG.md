@@ -6,6 +6,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+## [v0.7.2] — 2026-10-26
+
+v0.7.2 moves the repository and its install source to `youxi-huang/slice`, and a second installed copy no longer pauses the session: a copy that finds another one loaded stands aside, so only one compacts. The extension otherwise compacts as v0.7.1 did, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The source tree also gains retrieval-only previews for DSH and OpenCode, built from source and not published. Results are offline, on official Pi installations with loopback services, except GitHub's redirect, which was tested against the renamed repository; real-provider behavior is not part of this release.
+
 ### Added
 
 - Source-only retrieval previews for DSH `0.2.1-rc.3` and OpenCode 1.19.4. Each adds one `context_history` tool that searches and reads the current session's original records through the host's public storage API and the shared core, citing native event and part IDs, with bounded pages, continuation cursors and source-change checks. They keep no second history database and refuse forked or seeded sessions. Neither writes SLICE checkpoints yet: DSH's pinned persistence contract cannot carry a required external checkpoint record, and OpenCode keeps its native compactor.

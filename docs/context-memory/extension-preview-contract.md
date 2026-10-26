@@ -86,7 +86,7 @@ the session file, or a pending or blocked marker, or a same-process sticky
 failure or active attempt. Content alone never removes protection.
 
 A session without such a claim is eligible on a reviewed official host (Pi 1.4.0,
-1.3.0, 1.2.0 or 1.1.0 for v0.7.1; 1.3.0, 1.2.0 or 1.1.0 for v0.6.0),
+1.3.0, 1.2.0 or 1.1.0 for v0.7.1 and v0.7.2; 1.3.0, 1.2.0 or 1.1.0 for v0.6.0),
 the session is persistent, its branch has only preview checkpoints, text
 content and validated failed-response omissions. Eligible sessions get the full
 request guards and manual compaction. A compaction attempt, including the

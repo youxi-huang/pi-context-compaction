@@ -119,10 +119,14 @@ async function runtimeAcceptance() {
 	const fixedWriterUnavailable = workerCase === "writer-unavailable";
 	const warmingCase = workerCase === "cache-warming";
 	const automaticCase = workerCase === "automatic-compaction";
+	// A second copy at another path, as installing a second address adds one; both load and both register.
+	const duplicateCase = workerCase === "duplicate-copies";
+	const secondCopy = join(caseDir, "second-copy");
 	if (!reuseAgentDir) {
 		writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ enabled: true, writerModel: fixedWriterUnavailable ? "missing-provider/missing-writer" : "session", eventLog: false, noteRepair: false, keepRecentTokens: 0 }));
 		if (workerCase === "config-invalid") writeFileSync(join(agentDir, "pi-context-memory.json"), "{invalid config");
-		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [installedPackage], compaction: { enabled: automaticCase, keepRecentTokens: 0, reserveTokens: 16_384 }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: warmingCase ? "idle" : "off", defaultTools: [] }));
+		if (duplicateCase) cpSync(packageDir, secondCopy, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: duplicateCase ? [installedPackage, secondCopy] : [installedPackage], compaction: { enabled: automaticCase, keepRecentTokens: 0, reserveTokens: 16_384 }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: warmingCase ? "idle" : "off", defaultTools: [] }));
 	}
 	const requests = [];
 	const diagnostics = [];
@@ -133,7 +137,7 @@ async function runtimeAcceptance() {
 	let manager;
 	let capturedPendingMarker;
 	let writerMode = ["bad-quote", "bad-source", "bad-supersedes"].includes(workerCase) ? workerCase : ["cache-warming", "marker-corrupt"].includes(workerCase) ? "bad-source" : "good";
-	let mainMode = ["success", "repeat-compaction", "reopen-success"].includes(workerCase) ? "history" : "ack";
+	let mainMode = ["success", "repeat-compaction", "reopen-success", "duplicate-copies"].includes(workerCase) ? "history" : "ack";
 	let onWriter;
 	const server = createHttpServer(async (request, response) => {
 		let raw = "";
@@ -175,7 +179,10 @@ async function runtimeAcceptance() {
 		const loader = new stock.DefaultResourceLoader({ cwd: caseDir, agentDir, settingsManager: settings, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true, systemPromptOverride: () => "Use the synthetic evidence. Call context_history to verify original decisions." });
 		await loader.reload();
 		const extensions = loader.getExtensions();
-		assert.deepEqual(extensions.errors, [], `Package load errors: ${JSON.stringify(extensions.errors)}`);
+		// Pi keeps both copies loaded and reports only that the second one's tools conflict with the first's.
+		const loadErrors = duplicateCase ? extensions.errors.filter((error) => !(error.path.startsWith(secondCopy) && /^Tool "context_(?:note|history)" conflicts with /.test(error.error))) : extensions.errors;
+		assert.deepEqual(loadErrors, [], `Package load errors: ${JSON.stringify(extensions.errors)}`);
+		if (duplicateCase) assert.equal(extensions.extensions.filter((extension) => extension.path.startsWith(secondCopy)).length, 1, "Official Pi did not load the second copy");
 		assert(extensions.extensions.some((extension) => extension.path.startsWith(installedPackage)), "The installed package was not loaded by official Pi");
 		const loadedPreview = extensions.extensions.find((extension) => extension.path.startsWith(installedPackage));
 		const warmingHandlers = loadedPreview.handlers.get("cache_warming_decision");
@@ -185,12 +192,23 @@ async function runtimeAcceptance() {
 				for (const handler of warmingHandlers) assert.deepEqual(await handler({ type: "cache_warming_decision", action, ...economics }, { sessionManager: manager }), { action: "stop" }, "A warming decision may bypass failure/request guards");
 			}
 		}
+		const warnings = [];
+		const warn = console.warn;
+		console.warn = (...parts) => { warnings.push(parts.map(String).join(" ")); warn(...parts); };
 		const created = await stock.createAgentSession({ cwd: caseDir, agentDir, modelRuntime: runtime, model, thinkingLevel: "off", sessionManager: manager, settingsManager: settings, resourceLoader: loader, noTools: "builtin" });
 		session = created.session;
 		await session.bindExtensions({ onError: (error) => diagnostics.push(error.message ?? String(error)) });
+		console.warn = warn;
 		assert(session.getAllTools().some((tool) => tool.name === "context_history"), "context_history is not registered");
 		session.subscribe((event) => { if (event.type === "tool_execution_end" && event.toolName === "context_history") toolResults.push(event.result); });
 		const marker = join(agentDir, "context-memory-preview", "failures", `${createHash("sha256").update(manager.getSessionId()).digest("hex")}.json`);
+		async function commandOutput(text) {
+			const printed = [];
+			const original = console.log;
+			console.log = (...parts) => { printed.push(parts.map(String).join(" ")); };
+			try { await session.prompt(text); } finally { console.log = original; }
+			return printed.join("\n");
+		}
 		async function assertBlocked() {
 			const count = requests.length;
 			await session.prompt("Continue despite the earlier failed compaction.");
@@ -220,13 +238,6 @@ async function runtimeAcceptance() {
 			assert(requests.length > beforeRecovery, "Confirmed interrupted commit did not restore sending");
 		} else if (workerCase === "doctor-read-only") {
 			// First-use self-check: no provider, no marker, and no promise that Pi will accept /compact yet.
-			async function commandOutput(text) {
-				const printed = [];
-				const original = console.log;
-				console.log = (...parts) => { printed.push(parts.map(String).join(" ")); };
-				try { await session.prompt(text); } finally { console.log = original; }
-				return printed.join("\n");
-			}
 			const doctor = await commandOutput("/compaction-doctor");
 			const status = JSON.parse(await commandOutput("/compaction-status"));
 			assert.equal(requests.length, 0, "The self-check reached the local HTTP provider");
@@ -261,7 +272,7 @@ async function runtimeAcceptance() {
 			let compactError;
 			let result;
 			try { result = await session.compact(); } catch (error) { compactError = error; }
-			if (["success", "repeat-compaction", "unobserved-commit"].includes(workerCase)) {
+			if (["success", "repeat-compaction", "unobserved-commit", "duplicate-copies"].includes(workerCase)) {
 				assert(!compactError, `Valid compaction failed: ${compactError?.message}`);
 				assert(result?.details?.kind === "pi-context-memory", "Stock host used native summarization instead of the extension");
 				assert(!existsSync(marker), "Confirmed successful commit did not clear the marker");
@@ -277,6 +288,17 @@ async function runtimeAcceptance() {
 					assert(!existsSync(marker), "Nothing/Already compacted operation manufactured a new failure marker");
 					await session.prompt("Verify the original decision with context_history.");
 					assert(toolResults.some((value) => JSON.stringify(value).includes("Do not deploy this synthetic service.")), "context_history did not retrieve the original evidence");
+					if (duplicateCase) {
+						// One copy compacts; the second stands aside, says so once and names the copy to remove.
+						assert.equal(requests.filter((request) => request.writer).length, 1, "Both copies wrote a checkpoint for one compaction");
+						assert.deepEqual(warnings.filter((text) => text.includes("CONTEXT_PREVIEW_DUPLICATE")).length, 1, "The second copy did not say once that it stands aside");
+						assert(warnings.some((text) => text.includes(`run pi remove ${secondCopy}, and restart Pi`)), "The notice did not name the command that removes the second copy");
+						const first = await commandOutput("/compaction-doctor:1");
+						const second = await commandOutput("/compaction-doctor:2");
+						assert(first.includes("  copies: duplicate - 2 loaded:") && first.includes("(this one) compacts") && first.includes("Result: ready for requests"), "The first copy's doctor did not report itself compacting");
+						assert(second.includes("(this one) stands aside") && second.includes("Result: this copy stands aside"), "The second copy's doctor did not report itself standing aside");
+						assert(!existsSync(marker), "A doctor run wrote a failure marker");
+					}
 					if (workerCase === "repeat-compaction") {
 						await session.compact();
 						assert(!existsSync(marker), "Repeated compaction left a failure marker");
@@ -481,7 +503,7 @@ async function parentAcceptance() {
 			assertExistingSettingsPreserved();
 			return { ref: "preview-compatible-initial", commit };
 		});
-		const runtimeCases = ["doctor-read-only", "success", "repeat-compaction", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
+		const runtimeCases = ["doctor-read-only", "success", "duplicate-copies", "repeat-compaction", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
 		const results = new Map();
 		for (const name of runtimeCases) {
 			const value = await check(`official host runtime: ${name}`, async () => {

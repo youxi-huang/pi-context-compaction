@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { HistorySnapshot as CoreHistorySnapshot } from "../../../../../compaction-core/src/history.ts";
 import {
@@ -17,9 +18,17 @@ import { freezeHistory, type HistorySnapshot, queryHistory } from "../history.ts
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
+import { type LoadedCopy, loadedCopies, recordCopy, standsAside } from "./copies.ts";
 import { readExcerptSettings } from "./excerpts.ts";
 import { PreviewFailureStore } from "./failure-store.ts";
-import { doctorReport, inactiveNotice, NOTICE_PREFIX, notify, recoverRefusedNotice } from "./notices.ts";
+import {
+	doctorReport,
+	duplicateNotice,
+	inactiveNotice,
+	NOTICE_PREFIX,
+	notify,
+	recoverRefusedNotice,
+} from "./notices.ts";
 import { PreviewPreparation, readPreparationSettings } from "./preparation.ts";
 import { resolveWriterModel } from "./writer.ts";
 
@@ -38,6 +47,23 @@ function show(ctx: ExtensionContext, text: string, kind: "info" | "warning" = "i
 
 /** Ordinary Pi package entry. It installs no resident loader, host patches or global settings. */
 export default function contextMemoryPreview(pi: ExtensionAPI): void {
+	const entry = fileURLToPath(import.meta.url);
+	recordCopy(entry);
+	let copies: LoadedCopy[] | undefined;
+	/** Pi lists every extension's commands once all have loaded; until then this copy acts alone, as before. */
+	function loaded(): LoadedCopy[] {
+		try {
+			copies ??= loadedCopies(pi, entry);
+		} catch {
+			// Not listed yet: checked again at the next event.
+		}
+		return copies ?? [];
+	}
+	/** A copy that stands aside leaves every event to the copy that compacts. Its tools still answer: Pi runs the first copy's. */
+	const live =
+		<A extends unknown[], R>(handler: (...args: A) => R) =>
+		(...args: A): R | undefined =>
+			standsAside(loaded()) ? undefined : handler(...args);
 	const agentDir = getAgentDir();
 	let config: ReturnType<typeof readMemoryConfig> | undefined;
 	let configError: string | undefined;
@@ -77,7 +103,12 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			try {
 				show(
 					ctx,
-					doctorReport(controller.diagnose(ctx), { disabled, configError, writerModel: config?.writerModel }),
+					doctorReport(controller.diagnose(ctx), {
+						disabled,
+						configError,
+						writerModel: config?.writerModel,
+						copies: loaded(),
+					}),
 				);
 			} catch (error) {
 				reportPreviewError(ctx, previewErrorCode(error));
@@ -105,6 +136,10 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 	pi.registerCommand("compaction-recover", {
 		description: "Confirm a checkpoint Pi already saved when a compaction was interrupted",
 		handler: async (_args, ctx) => {
+			if (standsAside(loaded())) {
+				show(ctx, duplicateNotice(loaded()), "warning");
+				return;
+			}
 			await ctx.waitForIdle();
 			const reason = controller.safeInactive(ctx);
 			if (reason) {
@@ -137,13 +172,22 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			.map((tool) => ({ name: tool.name, description: tool.description, parameters: tool.parameters }));
 	});
 	// Each submitted input starts a new notice episode, so a blocked input is reported once.
-	pi.on("input", (event, ctx) => controller.input(event, ctx));
+	pi.on(
+		"input",
+		live((event, ctx) => controller.input(event, ctx)),
+	);
 	// Stock cache warming uses a separate registry stream and bypasses request guards.
 	// Stop it wherever this preview guards requests; throwing here would restore the stock decision.
-	pi.on("cache_warming_decision", (_event, ctx) =>
-		controller.safeInactive(ctx) ? undefined : { action: "stop" as const },
+	pi.on(
+		"cache_warming_decision",
+		live((_event, ctx) => (controller.safeInactive(ctx) ? undefined : { action: "stop" as const })),
 	);
 	pi.on("session_start", (_event, ctx) => {
+		copies = undefined;
+		if (standsAside(loaded())) {
+			if (controller.notices.once("duplicate")) notify(ctx, duplicateNotice(loaded()), "warning");
+			return;
+		}
 		controller.sessionStart(ctx);
 		activateEarlierWorkNotes(ctx);
 		if (config && config.writerModel !== SESSION_WRITER && !controller.safeInactive(ctx)) {
@@ -159,10 +203,20 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			}
 		}
 	});
-	pi.on("context", (event, ctx) => ({ messages: controller.context(event.messages, ctx) }));
-	pi.on("context_with_system", (event, ctx) => ({ messages: controller.context(event.messages, ctx) }));
-	pi.on("before_provider_request", (event, ctx) => controller.beforeRequest(event.payload, ctx));
+	pi.on(
+		"context",
+		live((event, ctx) => ({ messages: controller.context(event.messages, ctx) })),
+	);
+	pi.on(
+		"context_with_system",
+		live((event, ctx) => ({ messages: controller.context(event.messages, ctx) })),
+	);
+	pi.on(
+		"before_provider_request",
+		live((event, ctx) => controller.beforeRequest(event.payload, ctx)),
+	);
 	pi.on("session_before_compact", async (event, ctx) => {
+		if (standsAside(loaded())) return undefined;
 		try {
 			const reason = controller.safeInactive(ctx);
 			if (reason) {
@@ -181,17 +235,41 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 			return { cancel: true };
 		}
 	});
-	pi.on("session_compact", (event, ctx) => controller.committed(event, ctx));
-	pi.on("session_compact_failed", (event, ctx) => controller.compactionFailed(event, ctx));
-	pi.on("agent_settled", (_event, ctx) => controller.prepare(ctx));
-	pi.on("session_before_switch", () => controller.invalidatePreparation("session-switch"));
-	pi.on("session_before_tree", () => controller.invalidatePreparation("branch-switch"));
-	pi.on("session_tree", (_event, ctx) => {
-		controller.branchChanged(ctx);
-		activateEarlierWorkNotes(ctx);
-	});
-	pi.on("model_select", () => controller.invalidatePreparation("model-change"));
-	pi.on("session_shutdown", () => controller.shutdownPreparation());
+	pi.on(
+		"session_compact",
+		live((event, ctx) => controller.committed(event, ctx)),
+	);
+	pi.on(
+		"session_compact_failed",
+		live((event, ctx) => controller.compactionFailed(event, ctx)),
+	);
+	pi.on(
+		"agent_settled",
+		live((_event, ctx) => controller.prepare(ctx)),
+	);
+	pi.on(
+		"session_before_switch",
+		live(() => controller.invalidatePreparation("session-switch")),
+	);
+	pi.on(
+		"session_before_tree",
+		live(() => controller.invalidatePreparation("branch-switch")),
+	);
+	pi.on(
+		"session_tree",
+		live((_event, ctx) => {
+			controller.branchChanged(ctx);
+			activateEarlierWorkNotes(ctx);
+		}),
+	);
+	pi.on(
+		"model_select",
+		live(() => controller.invalidatePreparation("model-change")),
+	);
+	pi.on(
+		"session_shutdown",
+		live(() => controller.shutdownPreparation()),
+	);
 	pi.registerTool({
 		name: "context_note",
 		label: "Context note",

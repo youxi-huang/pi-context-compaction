@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	type Api,
@@ -56,6 +57,7 @@ import {
 	prefixCut,
 	unsupportedReason,
 } from "../src/extensions/context-memory/preview/controller.ts";
+import { recordCopy } from "../src/extensions/context-memory/preview/copies.ts";
 import contextMemoryPreview from "../src/extensions/context-memory/preview/extension.ts";
 import * as failureIo from "../src/extensions/context-memory/preview/failure-io.ts";
 import { PreviewFailureStore } from "../src/extensions/context-memory/preview/failure-store.ts";
@@ -1761,13 +1763,21 @@ describe("independent extension preview: sessions it does not protect", () => {
 		value.details!.build = "stock-preview+test";
 		session.append(saved(session, value));
 	}
+	type Command = (args: string, ctx: ExtensionContext) => Promise<void>;
 	function loadPreview(
-		options: { tools?: Map<string, ToolDefinition>; active?: string[] } = {},
+		options: {
+			tools?: Map<string, ToolDefinition>;
+			active?: string[];
+			commands?: Map<string, Command>;
+			listed?: () => unknown[];
+		} = {},
 	): Map<string, Handler[]> {
 		const handlers = new Map<string, Handler[]>();
 		const active = options.active ?? [];
 		const pi = {
-			registerCommand: () => {},
+			registerCommand: (name: string, command: { handler: Command }) => options.commands?.set(name, command.handler),
+			// Without getCommands, as in every other test here, the copy acts alone.
+			...(options.listed ? { getCommands: options.listed } : {}),
 			registerTool: (tool: ToolDefinition) => {
 				options.tools?.set(tool.name, tool);
 				if (tool.defaultActive !== false && !active.includes(tool.name)) active.push(tool.name);
@@ -2496,6 +2506,107 @@ describe("independent extension preview: sessions it does not protect", () => {
 		expect(await emit(handlers, "cache_warming_decision", warming, ctx)).toBeUndefined();
 		expect(await emit(handlers, "session_before_compact", event, ctx)).toBeUndefined();
 		expect(fs.existsSync(markerPath())).toBe(false);
+	});
+	describe("a second installed copy", () => {
+		const self = fileURLToPath(new URL("../src/extensions/context-memory/preview/extension.ts", import.meta.url));
+		const current = { source: "git:github.com/youxi-huang/slice@extension-v0.7.2", scope: "user", path: self };
+		const event = {
+			type: "session_before_compact",
+			preparation: { tokensBefore: 115_000 },
+			branchEntries: [],
+			reason: "manual",
+			willRetry: false,
+			signal: new AbortController().signal,
+		};
+		function other(name: string, scope = "user") {
+			const source = "git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1";
+			return { source, scope, path: join(tmpdir(), `slice-copy-${name}`, "dist", "extension.js") };
+		}
+		/** Pi's command list: each copy registers three commands, suffixed in load order when two register them. */
+		function listed(...copies: { source: string; scope: string; path: string }[]) {
+			return () =>
+				copies.flatMap((copy, index) =>
+					["compaction-status", "compaction-doctor", "compaction-recover"].map((name) => ({
+						name: `${name}:${index + 1}`,
+						source: "extension",
+						sourceInfo: { path: copy.path, source: copy.source, scope: copy.scope, origin: "package" },
+					})),
+				);
+		}
+		async function printed(command: Command | undefined, ctx: ExtensionContext): Promise<string> {
+			const lines: string[] = [];
+			const log = vi.spyOn(console, "log").mockImplementation((text: unknown) => {
+				lines.push(String(text));
+			});
+			await command?.("", ctx);
+			log.mockRestore();
+			return lines.join("\n");
+		}
+		it("stands aside after an older copy, which cannot, and says once how to keep one", async () => {
+			protect();
+			const commands = new Map<string, Command>();
+			const handlers = loadPreview({ commands, listed: listed(other("older"), current) });
+			const ctx = context();
+			await emit(handlers, "session_start", {}, ctx);
+			await emit(handlers, "session_start", {}, ctx);
+			const keep =
+				"Keep one: exit Pi, run pi remove git:github.com/youxi-huang/pi-context-compaction, and restart Pi.";
+			expect(warnings).toEqual([
+				`Source-linked compaction: 2 copies are installed. The copy from git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1 compacts this session, and this one stands aside. ${keep} (CONTEXT_PREVIEW_DUPLICATE)`,
+			]);
+			for (const [name, value] of [
+				["input", { type: "input", text: "Continue.", source: "interactive" }],
+				["cache_warming_decision", { type: "cache_warming_decision", action: "warm" }],
+				["context", { type: "context", messages: messages() }],
+				["context_with_system", { type: "context_with_system", messages: messages() }],
+				["before_provider_request", { payload: { messages: [] } }],
+				["session_before_compact", event],
+				["session_compact_failed", { type: "session_compact_failed", aborted: false }],
+			] as const)
+				expect(await emit(handlers, name, value, ctx), name).toBeUndefined();
+			expect(ctx.abort).not.toHaveBeenCalled();
+			expect(fs.existsSync(markerPath())).toBe(false);
+			expect(await printed(commands.get("compaction-recover"), ctx)).toBe(warnings[0]);
+			const doctor = await printed(commands.get("compaction-doctor"), ctx);
+			expect(doctor).toContain(
+				`  copies: duplicate - 2 loaded: git:github.com/youxi-huang/pi-context-compaction@extension-v0.7.1 compacts, git:github.com/youxi-huang/slice@extension-v0.7.2 (this one) stands aside. ${keep}`,
+			);
+			expect(doctor.split("\n").at(-1)).toBe(
+				"Result: this copy stands aside. The copy that compacts protects the session; nothing was changed.",
+			);
+		});
+		it("stands aside when it loads first and an older copy loads later", async () => {
+			const handlers = loadPreview({ listed: listed(current, other("later-older", "project")) });
+			await emit(handlers, "session_start", {}, context());
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0]).toContain(
+				"Keep one: exit Pi, run pi remove git:github.com/youxi-huang/pi-context-compaction -l, and restart Pi.",
+			);
+			expect(await emit(handlers, "context", { type: "context", messages: messages() }, context())).toBeUndefined();
+		});
+		it("compacts when it loads first and the later copy can stand aside", async () => {
+			const later = other("later-recorded");
+			recordCopy(later.path);
+			const commands = new Map<string, Command>();
+			const handlers = loadPreview({ commands, listed: listed(current, later) });
+			const ctx = context();
+			await emit(handlers, "session_start", {}, ctx);
+			expect(warnings).toEqual([readyNotice()]);
+			expect(await emit(handlers, "context", { type: "context", messages: messages() }, ctx)).toEqual({
+				messages: messages(),
+			});
+			const doctor = await printed(commands.get("compaction-doctor"), ctx);
+			expect(doctor).toContain("(this one) compacts, git:github.com/youxi-huang/pi-context-compaction");
+			expect(doctor).toContain("Result: ready for requests.");
+		});
+		it("keeps compacting when it cannot find itself among the copies", async () => {
+			const handlers = loadPreview({ listed: listed(other("first"), other("second")) });
+			await emit(handlers, "session_start", {}, context());
+			expect(warnings).toEqual([readyNotice()]);
+			expect(await emit(handlers, "context", { type: "context", messages: messages() }, context())).toEqual({
+				messages: messages(),
+			});
+		});
 	});
 });
 

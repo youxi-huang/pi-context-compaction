@@ -86,7 +86,10 @@ pi install git:github.com/youxi-huang/slice@extension-v0.7.1
 Add `-l` to both for a project installation, then restart Pi, reopen the
 session and run `/compaction-doctor`. Do not continue a protected session
 between the two commands. Never install both addresses: Pi loads both copies,
-reports only that their tools conflict, and the two copies then compete for the
+reports only that their tools conflict, and numbers their commands
+(`/compaction-doctor:1`, `/compaction-doctor:2`). From v0.7.2, a copy that
+finds another one loaded stands aside, so only one compacts, and it says once
+which address to remove. Two copies of v0.7.1 or earlier still compete for the
 next compaction and pause the session. In testing, neither
 `/compaction-recover` nor `/compact` cleared that pause; remove one address,
 restart Pi and continue in a new session.

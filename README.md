@@ -141,7 +141,7 @@ pi install git:github.com/youxi-huang/slice@extension-v0.7.1
 
 Add `-l` to both commands for a project installation. Then restart Pi, reopen the session and run `/compaction-doctor`. Do not continue a protected session between the two commands; a pending or failed compaction stays pending or failed after the move. An object-form package filter has to be copied to the new entry by hand.
 
-**Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict. The two copies then compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
+**Never install both addresses.** Pi counts them as two packages and loads both copies, reporting only that their `context_history` and `context_note` tools conflict, and renames their commands `/compaction-doctor:1`, `/compaction-doctor:2` and so on. From v0.7.2, a copy that finds another one loaded stands aside, so only one compacts, and it says once which address to remove. Two copies of v0.7.1 or earlier still compete for the next compaction and pause the session, and in testing neither `/compaction-recover` nor `/compact` cleared that pause. If this has happened, remove one address, restart Pi and continue in a new session; the paused session's history stays in its file.
 
 For specific failure states and recovery steps, see the [extension guide](docs/context-memory/extension-preview.md#failure-and-recovery).
 

@@ -12,8 +12,12 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Changed
 
-- The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`, and the install source is now `git:github.com/youxi-huang/slice`. GitHub redirects the old address, so existing installations keep loading and updating, and `pi update` and `pi remove` still name the address they were installed from. Pi counts the two addresses as two packages: moving means removing the old address and installing the new one, never installing both, because Pi then loads both copies and their next compaction pauses the session. The release script, the package's repository and homepage, and the install commands in the README and the preview guide follow the new name. The package name, the commands, the configuration file and stored checkpoints are unchanged.
+- The repository moved from `youxi-huang/pi-context-compaction` to `youxi-huang/slice`, and the install source is now `git:github.com/youxi-huang/slice`. GitHub redirects the old address, so existing installations keep loading and updating, and `pi update` and `pi remove` still name the address they were installed from. Pi counts the two addresses as two packages: moving means removing the old address and installing the new one, never installing both, since Pi then loads both copies. The release script, the package's repository and homepage, and the install commands in the README and the preview guide follow the new name. The package name, the commands, the configuration file and stored checkpoints are unchanged.
 - The README now shows how to build and load the DSH and OpenCode previews. Both sets of steps were run on the official hosts.
+
+### Fixed
+
+- Two installed copies of the extension, from two addresses or two scopes, no longer pause the session at their next compaction. Pi loads both and runs both copies' handlers, so each wrote its own checkpoint for one attempt and the commit could not be confirmed. A copy now finds the others in Pi's command list: one compacts, the first loaded unless a copy of v0.7.1 or earlier is loaded, since that one cannot stand aside, and every other copy stands aside, says once which copy compacts and names the `pi remove` command that keeps one, preferring the `youxi-huang/slice` address. `/compaction-doctor:1` and `:2`, as Pi names the commands of two copies, list both. Two copies of v0.7.1 or earlier still conflict. On official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 a v0.7.2 copy installed after or before v0.7.1 leaves one writer request per compaction and a committed checkpoint; the stock-Pi acceptance gains the case with two v0.7.2 copies.
 
 ### Security
 
@@ -22,7 +26,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
-- Regressions for the v0.7.2 install-source move show, on Pi's real package and settings managers over a local repository, what happens when the old address is replaced, when both addresses are installed and when either scope is changed: configuration and sessions survive, checkpoints still validate, and a pending or failed compaction stays guarded through the reinstall. The same cases run against an official Pi on request. GitHub's redirect can only be tested after the rename.
+- Regressions for the v0.7.2 install-source move show, on Pi's real package and settings managers over a local repository, what happens when the old address is replaced, when both addresses are installed and when either scope is changed: configuration and sessions survive, checkpoints still validate, and a pending or failed compaction stays guarded through the reinstall. The same cases run against an official Pi on request. GitHub's redirect itself was tested after the rename, on each official host.
 - CI runs its full pipeline on every push to main, including a merge that changes Markdown documents alone; only such a pull request still skips it. Publication accepts a tagged commit only after its `verify` check concluded `success`, and a skipped job concludes `skipped`, so a release tagged on a documentation-only merge would have failed at its last step, after the whole stock-Pi acceptance had run. A regression runs the workflow's scope step on a documentation-only commit for a pull request, a push and a manual run.
 
 ## [v0.7.1] — 2026-10-25

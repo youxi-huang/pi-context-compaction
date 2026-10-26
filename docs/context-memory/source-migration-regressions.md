@@ -61,7 +61,9 @@ results. In short: both public addresses install, update and remove; a session
 protected by the copy from the old address reopens under the copy from the new
 one; and with both addresses installed, Pi loads both copies, reports only a
 tool conflict, and their next compaction pauses the session. That last case is
-why the user's command removes before it installs.
+why the user's command removes before it installs. From v0.7.2 a second copy
+stands aside instead, as long as at most one copy is v0.7.1 or earlier; the
+[preview contract](extension-preview-contract.md) states the rule.
 
 ## The user's command
 

@@ -110,6 +110,17 @@ closed. `/compaction-status` and `/compaction-doctor` use a non-latching read of
 the marker and session file; neither creates marker state, calls a model or
 changes the session.
 
+When Pi loads two copies of the package, from two addresses or two scopes,
+each copy's handlers run on every event. From v0.7.2 a copy finds the others
+through Pi's command list (each copy's `/compaction-recover`, in load order) and
+records its own entry file in a process-wide set. One copy compacts: the first
+copy older than v0.7.2, which cannot stand aside, or else the first loaded. Every
+other copy returns no result from any event, writes nothing and says once,
+with `CONTEXT_PREVIEW_DUPLICATE`, which copy compacts and which `pi remove`
+keeps one, preferring the `youxi-huang/slice` address. Its tools keep
+answering, since Pi runs the first copy's tools. A copy that cannot find
+itself in the list keeps compacting rather than leave the session to Pi.
+
 ## Independent acceptance and integration
 
 Agent C owns `packages/coding-agent/test/context-memory-preview.test.ts`, matching

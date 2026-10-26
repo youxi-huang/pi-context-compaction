@@ -1,5 +1,42 @@
 # Validation record
 
+## v0.7.2: a second copy stands aside, 2026-10-26 UTC
+
+Official Pi installations, loopback synthetic providers, no real model. The
+candidate is `stock-preview+src.ae7bb53ee105c16a`, version 0.7.2, built from
+`6ebec80`; the older copy is the published `extension-v0.7.1` package tree
+(`0dd97e4`).
+
+**The failure, reproduced.** Two copies of v0.7.1 at two local paths on Pi
+1.4.0: both wrote a note for one `/compact` (2 writer requests), the session
+paused with `CONTEXT_PREVIEW_COMMIT_UNCONFIRMED`, and `context_history` could
+not answer afterwards.
+
+**Each order on each host.** The same scratch harness (one session, one
+`/compact`, one history prompt, then `/compaction-doctor:1` and `:2`) ran the
+v0.7.2 candidate beside v0.7.1 in both load orders and beside a second v0.7.2
+copy, on official Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0. All 12 runs gave the same
+result: Pi reported the two tool conflicts and kept both copies loaded; the
+compaction committed with 1 writer request; no failure marker was written;
+the original message was read back through `context_history`; and the v0.7.2
+copy that stood aside printed one `CONTEXT_PREVIEW_DUPLICATE` notice. Beside
+v0.7.1 the v0.7.2 copy stood aside in both orders; beside another v0.7.2 copy
+the first one loaded compacted. The v0.7.1 copy's doctor has no copies line,
+as expected.
+
+**Release pipeline.** `node scripts/context-memory-ops.mjs verify` and
+`node scripts/context-memory-ops.mjs preview`, exit 0 at `6ebec80`. Stock-Pi
+acceptance passed 35 checks on 1.4.0 and 29 on each of 1.3.0, 1.2.0 and 1.1.0,
+122 in all, with the new `duplicate-copies` case on every host (two candidate
+copies, 1 writer request, 3 loopback requests, no marker). The default-settings
+scenarios passed 157 of 157 on 1.4.0 under the strict profile, with 1.0.4 as
+the other host. Release preparation wrote `pi-context-compaction-preview-0.7.2.tgz`
+(SHA-256 `c52fe40f…0fbac6`) and release notes that install
+`git:github.com/youxi-huang/slice@extension-v0.7.2`.
+
+Not covered: a v0.7.2 copy installed from GitHub under either address, which
+waits for the tag, and two copies of v0.7.1 or earlier, which still conflict.
+
 ## Repository rename to slice: real redirect and host runs, 2026-10-26 UTC
 
 The repository was renamed on GitHub at 08:02:56 UTC. From the cloud session

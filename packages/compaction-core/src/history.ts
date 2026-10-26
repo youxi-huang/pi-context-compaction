@@ -15,6 +15,7 @@ import type { SessionRecord } from "./records.ts";
 export interface HistorySnapshot {
 	sessionId: string;
 	leafId: string | null;
+	/** Cursor identity uses hashEntries(entries), including for hosts whose checkpoint hash is JCS. */
 	scopeHash: string;
 	entries: readonly SessionRecord[];
 }

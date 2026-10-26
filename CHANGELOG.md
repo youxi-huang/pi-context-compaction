@@ -6,9 +6,15 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- Independent, retrieval-only DSH and OpenCode 1.x previews, each exposing one current-session `context_history` tool through the host's public storage API and the shared core. Native event/part IDs, tool-result attribution, bounded cursor reads and source-change checks remain intact without a second history database. Forks are refused in this first preview. DSH checkpoint writing is deferred because its pinned persistence contract does not support required external checkpoint records; OpenCode 1.x keeps its native compactor. These previews do not claim Slice checkpoint validation or failure blocking.
+
 ### Security
 
-- Remove the unused upstream sandbox example, whose `@anthropic-ai/sandbox-runtime` dependency held zod at 3.25.76, affected by GHSA-mrhx-c7xc-m3w5. No zod 3 release carries the fix, and even the latest sandbox runtime requires zod 3. With the example gone, every remaining dependent accepts zod 4, so the root lockfile moves zod to 4.6.7 and `npm audit` reports no advisories. zod was never in the coding-agent install lock or the independent extension, and no code in this repository imports it; it arrived through the example, as an optional peer of the provider SDKs and as a dependency of the upstream evaluation tools.
+- Keep Zod at the repository's fixed 4.6.7 throughout the new host development dependencies. The OpenCode adapter uses the public hook object with Zod directly and does not depend on the full plugin package's unused V2 runtime.
+
+- Remove the unused upstream sandbox example, whose `@anthropic-ai/sandbox-runtime` dependency held zod at 3.25.76, affected by GHSA-mrhx-c7xc-m3w5. No zod 3 release carries the fix, and even the latest sandbox runtime requires zod 3. With the example gone, every remaining dependent accepts zod 4, so the root lockfile moves zod to 4.6.7 and `npm audit` reports no advisories. zod was never in the coding-agent install lock or the independent Pi extension; before the new OpenCode adapter, it arrived only through the example, as an optional peer of the provider SDKs and as a dependency of the upstream evaluation tools.
 
 ### Maintenance
 

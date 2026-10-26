@@ -13,7 +13,7 @@ The aim is continuity with evidence, not perfect memory.
   <img src="docs/context-memory/assets/pi-context-compaction-hero-editorial.png" alt="A compact handover cites an earlier failure and a later decision, with references back to the original session entries.">
 </picture>
 
-SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first adapter. Other hosts are planned, not yet available.
+SLICE currently runs as an independent extension for [Pi](https://github.com/earendil-works/pi). Its host-neutral core is in the source tree, with Pi as the first compaction adapter. Source-only [DSH and OpenCode retrieval previews](docs/context-memory/host-adapters.md) add current-session history access; Slice checkpoint writing on those hosts remains planned.
 
 **Current release:** [v0.7.1](https://github.com/youxi-huang/pi-context-compaction/releases/tag/v0.7.1), validated on unmodified official Pi **1.4.0, 1.3.0, 1.2.0 and 1.1.0**. It is the first extension built on the v0.7.0 core and behaves as v0.6.0 did. Until this release the project was called Pi Context Compaction.
 

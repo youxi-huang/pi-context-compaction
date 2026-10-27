@@ -10,6 +10,10 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 - The README's Get started covers all three hosts: Pi first, then the DSH and OpenCode steps, which had sat in their own section after the Pi update and recovery notes.
 
+### Maintenance
+
+- CI now builds the tree and runs both acceptance checks on Node 24 and 26 as well, for every pull request and push to main that changes more than Markdown. Node 22 still runs the full pipeline and remains the only Node a release is verified on. The newer majors run in a workflow of their own, because publication requires the whole Node 22 workflow run on main to succeed, so neither can block or approve a release. The supported range, `>=22.19.0`, the dependencies and the build fingerprints are unchanged.
+
 ## [v0.7.2] — 2026-10-26
 
 v0.7.2 moves the repository and its install source to `youxi-huang/slice`, and a second installed copy no longer pauses the session: a copy that finds another one loaded stands aside, so only one compacts. The extension otherwise compacts as v0.7.1 did, and the checkpoint schema, the source-hash format, the resident build fingerprint and the evaluation pin are unchanged. The source tree also gains retrieval-only previews for DSH and OpenCode, built from source and not published. Results are offline, on official Pi installations with loopback services, except GitHub's redirect, which was tested against the renamed repository; real-provider behavior is not part of this release.

@@ -2,7 +2,8 @@
 
 Claude Code and Codex use this repository-owned runbook. Read it before routine
 maintenance. Work from a checkout with the pinned evaluation commit in history;
-CI uses Node 22 and a full clone (`fetch-depth: 0`).
+CI uses Node 22 and a full clone (`fetch-depth: 0`), and repeats `verify` on
+Node 24 and 26.
 
 ## Entry points
 
@@ -35,6 +36,15 @@ because release preparation reads the first and the package README is built
 from the second. A push to main always runs it: publication accepts a tagged
 commit only after its `verify` check passed, and a skipped job does not count.
 The publication workflow also re-verifies every release on its tag.
+
+Node 22 is the only Node a release is verified on.
+[`context-memory-newer-node.yml`](../../.github/workflows/context-memory-newer-node.yml)
+runs `verify` on Node 24 and 26 for pull requests and pushes to main, with the
+same SHA-pinned actions, full clone and offline variables, and skips a change of
+Markdown alone under `docs/` or the repository root. It is a separate workflow
+because publication requires the whole `context-memory.yml` run on main to
+succeed, so a newer Node can neither block nor approve a release. The supported
+range in `engines` stays `>=22.19.0`.
 
 | Change | Minimal local check |
 | --- | --- |
@@ -118,6 +128,12 @@ Stop maintenance decisions at either gate and wait for the maintainer:
   do not replace them with tags.
 - **Red CI:** reproduce with `ci`, then check whether main fails too. Identify
   and fix the cause; do not retry for luck, skip tests, or disable checks.
+- **Red verify on Node 24 or 26:** run `verify` under that Node and under Node 22
+  to tell a Node change from a project change, and record the actual error. Do
+  not mark the job `continue-on-error`, pin an older Node patch or skip tests.
+  Add a new Node major to the matrix when it is released and drop one at its end
+  of life. Node 22 reaches end of life in April 2027; moving the release
+  baseline is the maintainer's decision.
 - **CodeQL alerts:** assess each alert to decide whether runtime code must change.
   Add needed regressions to `security-regression-check.mjs`. Follow CHANGELOG's
   Security entries for the fixes associated with alerts #43–#46 as writing models.

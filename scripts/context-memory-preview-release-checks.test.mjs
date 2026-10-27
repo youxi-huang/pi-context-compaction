@@ -260,6 +260,24 @@ test("a push to main runs verify for Markdown alone, so publication can accept a
 	}
 });
 
+test("newer Node majors run verify outside the workflow that gates publication", () => {
+	const read = (file) => {
+		const document = parseDocument(readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"));
+		assert.deepEqual(document.errors, []);
+		return document.toJS();
+	};
+	const steps = Object.values(read("context-memory.yml").jobs).flatMap((job) => job.steps);
+	assert.deepEqual(steps.filter((step) => step.uses?.startsWith("actions/setup-node@")).map((step) => step.with["node-version"]), ["22"]);
+	const jobs = Object.values(read("context-memory-newer-node.yml").jobs);
+	assert.equal(jobs.length, 1);
+	const [job] = jobs;
+	assert.deepEqual(job.strategy.matrix.node, ["24", "26"]);
+	assert.deepEqual(job.env, { PI_OFFLINE: "1", EVAL_PROVIDER_MODE: "scripted", EVAL_MODEL_CALL_BUDGET: "0" });
+	for (const step of job.steps.filter((entry) => entry.uses)) assert.match(step.uses, /@[0-9a-f]{40}$/);
+	assert.equal(job.steps.find((step) => step.uses?.startsWith("actions/checkout@")).with["fetch-depth"], 0);
+	assert(job.steps.some((step) => step.run?.startsWith("node scripts/context-memory-ops.mjs verify")));
+});
+
 test("ops rejects ambiguous or misplaced acceptance-profile flags before running a pipeline", () => {
 	const script = fileURLToPath(new URL("./context-memory-ops.mjs", import.meta.url));
 	for (const args of [["verify", "--acceptance-profile", PROFILE], ["preview", "--acceptance-profile"], ["ci", "--acceptance-profile", "unapproved"], ["ci", "--acceptance-profile", PROFILE, "--acceptance-profile", PROFILE]]) {

@@ -9,17 +9,21 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import { pressureProfile } from "./context-memory-pressure-profile.mjs";
 
 // Linux x64 acceptance on the unmodified npm binary. No inherited credentials or real provider.
 const root = fileURLToPath(new URL("../", import.meta.url));
 const args = process.argv.slice(2);
 const options = {};
 for (let i = 0; i < args.length; i += 2) {
-	if (!["--stock-root", "--package-dir"].includes(args[i]) || !args[i + 1] || options[args[i]]) {
-		throw new Error("Usage: node scripts/context-memory-opencode-acceptance.mjs --stock-root <npm installation> --package-dir <built adapter>");
+	if (!["--stock-root", "--package-dir", "--pressure-mode"].includes(args[i]) || !args[i + 1] || options[args[i]]) {
+		throw new Error("Usage: node scripts/context-memory-opencode-acceptance.mjs --stock-root <npm installation> --package-dir <built adapter> [--pressure-mode declared|missing-input]");
 	}
-	options[args[i]] = resolve(args[i + 1]);
+	options[args[i]] = args[i] === "--pressure-mode" ? args[i + 1] : resolve(args[i + 1]);
 }
+const pressureMode = options["--pressure-mode"];
+assert(pressureMode === undefined || ["declared", "missing-input"].includes(pressureMode));
+const pressure = pressureProfile({ contextWindow: 200_000, maxOutputTokens: 32_000, ...(pressureMode === "declared" ? { inputLimit: 200_000 } : {}) });
 assert(options["--stock-root"] && options["--package-dir"], "Both paths are required");
 assert(process.platform === "linux" && process.arch === "x64", "This acceptance fixture currently covers Linux x64 only");
 const stock = options["--stock-root"];
@@ -52,18 +56,27 @@ const evidence = [];
 let calls = 0;
 let toolRequest;
 let toolOutput;
+let nextUsage = 110;
+let failAfter;
 const provider = createServer(async (request, response) => {
 	const chunks = [];
 	for await (const chunk of request) chunks.push(chunk);
 	const body = JSON.parse(Buffer.concat(chunks).toString());
-	if (++calls > 30) { response.writeHead(429); response.end(); return; }
+	if (++calls > 50) { response.writeHead(429); response.end(); return; }
+	if (failAfter !== undefined && failAfter-- === 0) {
+		failAfter = undefined;
+		response.writeHead(400, { "content-type": "application/json" });
+		response.end(JSON.stringify({ error: { type: "invalid_request_error", message: "Synthetic compaction failure" } }));
+		return;
+	}
 	const last = body.messages?.at(-1);
 	if (last?.role === "tool") toolOutput = last.content;
 	const invoke = toolRequest && last?.role !== "tool" && body.tools?.some((tool) => tool.function?.name === "context_history");
 	const message = invoke
 		? { role: "assistant", tool_calls: [{ index: 0, id: `call_${calls}`, type: "function", function: { name: "context_history", arguments: JSON.stringify(toolRequest) } }] }
 		: { role: "assistant", content: "Synthetic summary or response." };
-	const usage = { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 };
+	const usage = { prompt_tokens: nextUsage - 10, completion_tokens: 10, total_tokens: nextUsage };
+	nextUsage = 110; // Summaries and auto-continuations return to a small active context.
 	const common = { id: `synthetic_${calls}`, created: 1, model: "scripted" };
 	if (!body.stream) {
 		response.setHeader("content-type", "application/json");
@@ -86,6 +99,10 @@ const config = {
 	permission: { "*": "deny", context_history: "allow" }, compaction: { auto: false },
 };
 const configPath = join(work, "opencode.json");
+if (pressureMode) {
+	config.provider.synthetic.models.scripted.limit = { context: 200_000, output: 32_000, ...(pressureMode === "declared" ? { input: 200_000 } : {}) };
+	config.compaction = pressure.opencode.config.compaction;
+}
 const env = {
 	PATH: process.env.PATH, HOME: work, CI: "1",
 	XDG_DATA_HOME: join(work, "data"), XDG_CONFIG_HOME: join(work, "config"), XDG_CACHE_HOME: join(work, "cache"), XDG_STATE_HOME: join(work, "state"),
@@ -94,6 +111,7 @@ const env = {
 	// This local plugin does not need the host's optional registry bootstrap.
 	npm_config_offline: "true", npm_config_fetch_retries: "0",
 };
+if (pressureMode) delete env.OPENCODE_DISABLE_AUTOCOMPACT;
 let child;
 let logs = "";
 const deadline = AbortSignal.timeout(240_000);
@@ -129,14 +147,43 @@ try {
 	const { data: original } = await client.session.prompt({ ...scope, body: { noReply: true, model, parts: [{ type: "text", text: `Synthetic original-port is 4317. ${"Synthetic filler. ".repeat(1500)}` }] } });
 	const originalPart = original.parts.find((part) => part.type === "text");
 	assert(originalPart);
-	for (let i = 0; i < 2; i++) {
+	const summaryCount = async () => {
+		const { data } = await client.session.messages(scope);
+		return data.filter(({ info }) => info.role === "assistant" && info.summary === true && !info.error).length;
+	};
+	for (let i = 0; i < (pressureMode ? 3 : 2); i++) {
+		if (pressureMode) {
+			// Large actual source text travels through the official HTTP server and native storage.
+			await client.session.prompt({ ...scope, body: { noReply: true, model, parts: [{ type: "text", text: `Synthetic older evidence ${i}. ${"filler ".repeat(60_000)}` }] } });
+			nextUsage = pressure.opencode.nativeTriggerTokens - 1;
+			await client.session.prompt({ ...scope, body: { model, parts: [{ type: "text", text: `Synthetic recent-${i}. ${"recent ".repeat(9000)}` }] } });
+			assert.equal(await summaryCount(), i, "Native host compacted below the line");
+			nextUsage = pressure.opencode.nativeTriggerTokens;
+		}
 		await client.session.prompt({ ...scope, body: { model, parts: [{ type: "text", text: `Synthetic completed turn ${i}` }] } });
-		await client.session.summarize({ ...scope, body: model });
+		if (!pressureMode) await client.session.summarize({ ...scope, body: model });
+		assert.equal(await summaryCount(), i + 1, "Native threshold did not produce exactly one summary");
+		if (pressureMode) {
+			await client.session.prompt({ ...scope, body: { model, parts: [{ type: "text", text: "Small synthetic follow-up." }] } });
+			assert.equal(await summaryCount(), i + 1, "Small follow-up immediately recompacted");
+		}
 	}
 	const { data: before } = await client.session.messages(scope);
-	assert.equal(before.filter(({ info }) => info.role === "assistant" && info.summary === true && !info.error).length, 2);
+	assert.equal(await summaryCount(), pressureMode ? 3 : 2);
 	assert(before.some(({ parts }) => parts.some((part) => part.id === originalPart.id && part.text === originalPart.text)));
-	evidence.push("two native compactions preserve the original part");
+	evidence.push(pressureMode ? `three native automatic compactions at ${pressure.opencode.nativeTriggerTokens}, no compaction below the line or after small follow-ups` : "two native compactions preserve the original part");
+	if (pressureMode) {
+		failAfter = 1; // The main response crosses the line; the next native summary request fails.
+		nextUsage = pressure.opencode.nativeTriggerTokens;
+		await client.session.prompt({ ...scope, body: { model, parts: [{ type: "text", text: "Synthetic summary failure boundary." }] } });
+		const { data: failed } = await client.session.messages(scope);
+		assert(failed.some(({ info }) => info.role === "assistant" && info.summary && info.error), "Fixture did not fail a native summary");
+		assert.equal(await summaryCount(), 3, "Failed summary was marked successful");
+		assert(failed.some(({ parts }) => parts.some((part) => part.id === originalPart.id && part.text === originalPart.text)));
+		await client.session.summarize({ ...scope, body: model });
+		assert.equal(await summaryCount(), 4, "Explicit native recovery failed");
+		evidence.push("failed native summary preserves raw history; explicit native retry succeeds");
+	}
 	await stop();
 	client = await start();
 	async function invoke(request) {
@@ -165,7 +212,7 @@ try {
 	evidence.push("removing the plugin leaves original native history readable");
 	assert.equal(sha(binary), binaryHash);
 	assert.equal(sha(join(candidate, "dist/index.js")), bundleHash);
-	console.log(JSON.stringify({ host: "official npm OpenCode 1.19.4", platform: "linux-x64", providers: "loopback synthetic only", sourceHash: build.sourceHash, binaryHash, providerCalls: calls, passed: evidence }, null, 2));
+	console.log(JSON.stringify({ host: "official npm OpenCode 1.19.4", platform: "linux-x64", providers: "loopback synthetic only", pressureMode, sourceHash: build.sourceHash, binaryHash, providerCalls: calls, passed: evidence }, null, 2));
 } finally {
 	await stop();
 	provider.closeAllConnections();

@@ -17,6 +17,7 @@ import {
 	type SessionProjection,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { preparationStartTokens } from "../../../../../compaction-core/src/context-pressure.ts";
 import {
 	checkpointInterval as coreCheckpointInterval,
 	chooseCut as coreChooseCut,
@@ -162,12 +163,13 @@ export function checkpointInterval(branch: readonly SessionEntry[]): string {
 }
 
 /**
- * Context size at which optional preparation starts: a band below Pi's default threshold compaction point,
- * 12.5% of it and between 8,192 and 32,768 tokens. Pi's own compaction settings are not visible to extensions.
+ * A band below Pi's default threshold, lowered by an explicit Slice checkpoint budget when supplied.
+ * Pi's actual settings are not visible here: compactAt must be paired with the host's reserveTokens.
  */
-export function preparationStart(contextWindow: number): number {
-	const threshold = contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens;
-	return threshold - Math.min(32_768, Math.max(8_192, Math.floor(threshold * 0.125)));
+export function preparationStart(contextWindow: number, budgetThreshold?: number): number {
+	return preparationStartTokens(
+		Math.min(contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens, budgetThreshold ?? Infinity),
+	);
 }
 
 /** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
@@ -506,7 +508,12 @@ export class PreviewMemoryController {
 			const interval = checkpointInterval(ctx.sessionManager.getBranch());
 			if (!this.preparation.mayStart(sessionId, interval)) return;
 			const usage = ctx.getContextUsage();
-			if (!usage?.tokens || usage.tokens < preparationStart(usage.contextWindow)) return;
+			if (!usage?.tokens) return;
+			const threshold =
+				this.config.compactAt === undefined
+					? undefined
+					: memoryBudget({ ...ctx.model, contextWindow: usage.contextWindow }, this.config).threshold;
+			if (usage.tokens < preparationStart(usage.contextWindow, threshold)) return;
 			if (this.safeInactive(ctx) || this.configError || ctx.hasPendingMessages()) return;
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			if (this.store.inspect(ctx.sessionManager).state !== "ready" || this.stickyFailures.has(sessionId)) return;

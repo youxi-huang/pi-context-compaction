@@ -6,6 +6,14 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- An opt-in capacity-profile generator prints matching native compaction settings for Pi, OpenCode 1.19.4 and DSH 0.2.1-rc.3 from verified context, output and optional input limits. The 200k/32k example targets 150k with a 15k recent-text budget. Missing or inconsistent required metadata is refused; OpenCode without `limit.input` is explicitly reported as unable to honor the target. It does not edit settings, enable paid preparation, or change the retrieval-only adapters' scope.
+
+### Fixed
+
+- Optional Pi preparation now starts before an explicitly lowered `compactAt` budget instead of waiting for the default host band, which could lie after the intended compaction point. The default band, checkpoint format, once-per-interval call limit and failure blocking remain unchanged. Regressions cover three commits, retained current text, reopened evidence, a failed writer, a smaller model and a large request payload.
+
 ### Changed
 
 - The README's Get started covers all three hosts: Pi first, then the DSH and OpenCode steps, which had sat in their own section after the Pi update and recovery notes.

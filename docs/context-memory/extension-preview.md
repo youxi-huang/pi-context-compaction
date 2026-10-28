@@ -448,7 +448,11 @@ alongside the ordinary settings in `pi-context-memory.json` and restart Pi:
 
 The configured writer prepares once per checkpoint interval, after a completed
 turn, when the context enters the band just below Pi's default threshold
-compaction point: 12.5% of it, between 8,192 and 32,768 tokens. A run has a
+compaction point: 12.5% of it, between 8,192 and 32,768 tokens. With this source
+patch, an explicit `compactAt` lowers that preparation reference to the smaller
+of the default threshold and Slice's resolved budget. Pi still owns triggering;
+pair it with native settings using [capacity profiles](context-pressure.md).
+Without `compactAt`, the band is unchanged. A run has a
 120-second deadline, at most eight provider calls and no repair. One candidate
 is kept in memory and is lost on restart. Earlier experimental keys
 (`minSourceTokens`, `minIntervalMs`, `deadlineMs`, `maxCallsPerAttempt`,

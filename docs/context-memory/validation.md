@@ -2,29 +2,29 @@
 
 ## Capacity profile: official-host pressure simulations, 2026-10-28 UTC
 
-Candidate `stock-preview+src.07d0ac2420be3ccb`, based on `504899c`.
-All provider replies were synthetic. Pi/OpenCode used loopback HTTP; DSH used
-a scripted adapter inside the official agent loop. No live provider, credentials
-or interactive UI was used. Reproduction and installation commands are in
+Candidate `stock-preview+src.cacd9ac0956e0ff1`, built from `9455070`. Every
+provider reply was synthetic: Pi and OpenCode used loopback HTTP, DSH a scripted
+adapter inside its official agent loop. No live provider, credentials or
+interactive UI. Commands and installation are in
 [capacity profiles](context-pressure.md#native-pressure-simulations).
 
 | Command | Result |
 | --- | --- |
-| `node scripts/context-memory-preview-acceptance.mjs --package-dir <candidate> --stock-root <official> --output-dir <evidence>` on Pi 1.4.0, 1.3.0, 1.2.0 and 1.1.0 | Exit 0 on each; 33 reported checks each. The new pressure cases commit three automatic checkpoints, reuse one prepared writer per interval, preserve recent text, avoid immediate repeats, and recover originals after cold restart. Failed preparation plus a failed synchronous writer blocks across restart. |
-| `node scripts/context-memory-opencode-acceptance.mjs --stock-root <official> --package-dir <adapter> --pressure-mode declared` | Exit 0; actual 1.19.4 binary triggers at 150,000, with no compaction at 149,999. Three automatic cycles, failed summary, explicit recovery, cold restart, original retrieval and cursor continuation; 24 synthetic calls. |
-| Same OpenCode command with `--pressure-mode missing-input` | Exit 0; same cases, but the actual line is 168,000, not the requested 150,000; 24 calls. |
-| `node scripts/context-memory-dsh-acceptance.mjs --stock-root <official> --package-dir <adapter>` | Exit 0; official 0.2.1-rc.3 agent loop, meter, compaction service, tool registry and JSONL persistence. Three pressure cycles, one 320 kB tool response, cold-process retrieval, summary failure/recovery, smaller and missing capacities; 80 synthetic calls including reopen. |
-| `node scripts/context-memory-ops.mjs verify` | Exit 1 in this container: 57 resident lease tests report `CONTEXT_LOCK_IDENTITY`; clean `504899c` also fails those 57. The PID namespace does not expose the Node PID under `/proc`. No identity checks or frozen-runtime files were changed. Build, lint, type checks, 158 core tests (workspace and isolated), 16 adapter tests, CLI tests and all 13 preview test files pass. |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0. |
+| `node scripts/context-memory-ops.mjs preview` | Exit 0. Stock-Pi acceptance passed 39 checks on 1.4.0 and 33 on each of 1.3.0, 1.2.0 and 1.1.0. `pressure-prepared`, with the 150k line set only through a Pi per-model override, and `pressure-failed`, through the global `reserveTokens`, passed on every host with no Slice `compactAt`. The default-settings scenarios passed 157 of 157 under the strict profile. |
+| `node scripts/context-memory-adapters-check.mjs` | Exit 0. |
+| `node scripts/context-memory-opencode-acceptance.mjs --stock-root <official> --package-dir <adapter> --pressure-mode declared` | Exit 0 on 1.19.4: three automatic compactions at 150,000, none below the line or after a small follow-up, a failed summary with explicit retry, cold restart, original retrieval and cursor continuation; 24 synthetic calls. |
+| Same with `--pressure-mode missing-input` | Exit 0; the same cases at the real line of 168,000; 24 calls. |
+| Same without `--pressure-mode` | Exit 0; the original two-compaction run; 10 calls. |
+| `node scripts/context-memory-dsh-acceptance.mjs --stock-root <official> --package-dir <adapter>` | Exit 0 on 0.2.1-rc.3: three pressure cycles measured by the official meter, one 320 kB tool result, cold-process retrieval, a failed summary and its recovery, a smaller and a missing capacity; 80 synthetic calls including the reopen. |
 | `node scripts/security-regression-check.mjs` | Exit 0. |
 
-Pi/OpenCode boundary usage is scripted alongside large actual source text;
-DSH pressure comes from the official token meter over real synthetic messages.
-These prove host integration and state transitions, not a provider's advertised
-200k capacity, summary quality, optimal thresholds or pause-time improvement.
-DSH deliberately continues after a failed native pressure summary and skips
-pressure compaction without capacity metadata; retrieval-only Slice does not
-add request blocking there. Inspect PR CI for the complete normal-environment
-gate; the local failure above is not a passing `verify` result.
+The Pi and OpenCode fixtures script usage at the boundaries around large real
+text; DSH pressure comes from its own meter. They prove host integration and
+state transitions, not a provider's advertised 200k capacity, summary quality,
+the best thresholds or a shorter pause. DSH continues a turn after a failed
+native summary and skips pressure compaction without capacity metadata; the
+retrieval-only adapter adds no blocking there.
 
 ## v0.7.2: a second copy stands aside, 2026-10-26 UTC
 

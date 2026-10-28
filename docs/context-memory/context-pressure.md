@@ -1,10 +1,12 @@
-# Capacity profiles and earlier preparation
+# Capacity profiles
 
-For a verified 200,000-token context window and a 32,000-token output
-reservation, this opt-in profile targets native compaction at 150,000 tokens,
-retains a recent 15,000-token budget, and lets Pi's existing optional preparation
-start at 131,250. These are initial experiment parameters, not measured optima.
-The same calculation handles 128k and larger windows; there is no 200k branch.
+On a route with a 200,000-token window and a 32,000-token output cap, Pi's
+default trigger sits at 183,616 tokens and leaves room for only 16,384 tokens
+of reply. This opt-in profile moves each host's native trigger to 150,000 and
+keeps about 15,000 tokens of recent text. In Pi, optional Slice preparation
+follows the new line by itself and starts at 131,250. The same arithmetic covers
+128k and 1M windows; nothing is special-cased for 200k. The numbers are
+starting values, not measured optima.
 
 ## Generate a profile
 
@@ -12,116 +14,98 @@ From a source checkout on Node 22.19 or newer:
 
 ```sh
 node scripts/context-memory-pressure-profile.mjs \
-  --context 200000 --output 32000 --input 200000
+  --context 200000 --output 32000 --input 200000 --model <provider>/<id>
 ```
 
-Supply the provider's verified combined window, effective request output
-reservation (including reasoning where counted), and separate input limit if
-declared. Omit `--input` if unknown. A fallback displayed by a host is not
-capacity evidence. Invalid, contradictory or missing required limits are
-rejected. Plausible but incorrect metadata cannot be detected by this tool.
-It prints JSON fragments and never edits settings or calls a provider.
+Pass the provider's verified context window, its effective output reservation
+(reasoning included where it counts) and a separate input limit only if the
+provider declares one. A fallback value shown by a host is not evidence.
+Invalid or contradictory limits are refused; plausible but wrong metadata
+cannot be detected. The script prints JSON, writes nothing and calls no
+provider.
 
-With combined capacity C, output reservation O and optional input ceiling I:
+With context C, output O and optional input limit I:
 
-- Calculated input ceiling H = min(C − O, I if declared).
-- Target T = floor(min(0.75 × C, H − 8,192)).
-- Preparation starts at max(0, T − clamp(floor(T × 0.125), 8,192, 32,768)).
-- Recent-text budget = min(15,000, floor(T × 0.1)).
+- input ceiling H = min(C - O, I)
+- target T = floor(min(0.75 x C, H - 8,192))
+- recent budget = min(15,000, floor(T x 0.1))
 
-The preparation lead comes from the existing Pi experiment. The 75% target,
-8,192-token extra margin and recent budget are conservative starting choices.
-H is a calculation, **not an added request guard**. Tools, system prompts,
-token-estimator error and a single large result can cross a host's threshold
-between checks. Recent retention follows whole-turn/tool-pair boundaries and
-is not an exact count of the text eventually retained.
+H is arithmetic, not a request guard. A system prompt, tool schemas, estimator
+error or one large tool result can still cross a line between checks, and
+recent retention follows whole turns rather than an exact count.
 
-## Apply to the selected host
+## Apply it
 
-| Host | Fragment and scope | 200k / 32k example |
+| Host | Where it goes | 200k / 32k result |
 | --- | --- | --- |
-| Stock Pi 1.1.0–1.4.0 + Slice preview | Merge `pi.settings` into the chosen project or agent `settings.json`; merge `pi.slice` into that agent's `pi-context-memory.json`, then restart. | `reserveTokens: 50000`, host and Slice `keepRecentTokens: 15000`, Slice `compactAt: 150000`. |
-| OpenCode 1.19.4 | Merge `opencode.config` into the dedicated project's `opencode.json`; inspect `opencode.status` first. The existing Slice tool still only retrieves evidence. | With declared `limit.input: 200000`: `reserved: 50000`, `preserve_recent_tokens: 15000`, `prune: false`. |
-| DSH 0.2.1-rc.3 | Apply `dsh.config` to the existing `@deepseek-ai/dsh-compaction-basic` entry. Remove an explicit `retainRatio` when selecting `retainTokens`. Keep the Slice history plugin separately. | `thresholdRatio: 0.75`, `headroomTokens: 18000`, `retainTokens: 15000`, summary `maxTokens: 8192`. |
+| Pi 1.1.0 to 1.4.0 with the Slice preview | `pi.settings` into Pi's `settings.json`, `pi.slice` into `pi-context-memory.json`, then restart | `reserveTokens: 50000`; `keepRecentTokens: 15000` in both files |
+| OpenCode 1.19.4 | `opencode.config` into the project's `opencode.json`, after checking `opencode.status` | With `limit.input: 200000`: `reserved: 50000`, `preserve_recent_tokens: 15000`, `prune: false` |
+| DSH 0.2.1-rc.3 | `dsh.config` into the `@deepseek-ai/dsh-compaction-basic` entry, replacing any `retainRatio` | `thresholdRatio: 0.75`, `headroomTokens: 18000`, `retainTokens: 15000`, `maxTokens: 8192` |
 
-Pi's `compactAt` still does not schedule compaction. Both Pi and Slice settings
-are needed: the host owns the trigger, while Slice owns its note and retention
-budgets. The patch lowers the preparation band only when `compactAt` is
-explicitly supplied; it leaves the default band and default retention unchanged.
-If preparation is wanted, also explicitly enable the existing experiment:
+**Pi.** With `--model`, the fragment goes under
+`compaction.modelOverrides["<provider>/<id>"]`: other models keep Pi's defaults,
+and switching models switches lines. Without it the values apply to every model.
+Pi owns the trigger. The preview reads Pi's effective `reserveTokens` through
+the public `getSettings()` and starts optional preparation 12.5% below that
+line, so no Slice threshold has to be kept in step. Preparation stays off until
+`previewPreparation.enabled` is set, as the
+[preview guide](extension-preview.md#optional-preparation-experiments)
+describes. A prepared note still passes the source, quotation, coverage and
+disk checks before it commits; the journal still allows one paid attempt per
+checkpoint interval; a failed synchronous writer still blocks.
 
-```json
-{ "previewPreparation": { "enabled": true } }
-```
+**OpenCode.** Without `limit.input`, 1.19.4 ignores `reserved` and compacts at
+C - O, 168,000 in this example. The profile then reports `needs-input-limit`,
+omits `reserved` and prints the real line. Do not invent an input limit to
+reach the target. V2 fields are not emitted.
 
-Preparation pays for a writer call earlier. A ready candidate still passes the
-source, quotation, coverage and disk-confirmation checks. A stale or unusable
-candidate uses the existing synchronous path. The journal already limits paid
-preparation to one attempt per checkpoint interval, including across restart;
-it does not suppress manual compaction or safety checks. No cooldown is added
-to a host's overflow handling. A failed synchronous Slice writer still blocks.
+**DSH.** Its default 65,536-token headroom would compact at 102,464 here, so
+the profile moves DSH later while it moves Pi and OpenCode earlier. The separate
+8,192-token summary cap stops DSH from spending the whole headroom on summary
+output; reasoning-heavy models may need more. DSH continues a turn after a
+failed summary and skips pressure compaction without capacity metadata. Both
+are native behavior, and Slice adds no blocking on this host.
 
-Without `limit.input`, OpenCode 1.19.4 ignores `reserved`: its calculated line
-in this example remains 168,000. The output says `needs-input-limit`, omits an
-ineffective reservation, and reports that actual line. Do not manufacture model
-metadata to force a trigger. V2 fields are deliberately not emitted.
+Fixed token settings do not follow a model switch on OpenCode or DSH, or on Pi
+without `--model`. Recompute when the route or its output cap changes.
 
-DSH's default 65,536-token headroom would produce 102,464 in this example.
-The profile therefore moves DSH's line **later**, while moving default Pi and
-OpenCode earlier. Its separate summary cap prevents DSH from using the entire
-headroom as summary output. An 8,192 cap may still be insufficient for some
-reasoning models; measure truncation and adjust it for that route. Native DSH
-failure behavior remains its own; this is not a Slice checkpoint writer.
+## Sources
 
-Use a dedicated model/project profile. Recompute and reapply it when switching
-route, capacity or effective output cap: native fixed token settings do not
-automatically follow model switches. Pi preparation does recompute its band
-from the current context and Slice budget, and never postpones the default band.
+Reviewed on 2026-10-27:
 
-## Sources and scope of borrowing
-
-Reviewed for this patch on 2026-10-27:
-
-| Project/source | Useful idea and application |
+| Source | What Slice took |
 | --- | --- |
-| [Pi Context Plus](https://github.com/processmission/pi-context-plus) | Recompute model-relative pressure and use settled boundaries. Slice keeps host triggering and only adjusts its existing preparation boundary. |
-| [Oh My Pi compaction](https://github.com/can1357/oh-my-pi/blob/main/docs/compaction.md) | Prepare before the trigger and keep appended originals. Slice already has this mechanism; the patch aligns its lead with an explicitly lowered budget. |
-| [Mastra observational memory](https://github.com/mastra-ai/mastra/blob/main/docs/src/content/en/docs/memory/observational-memory.mdx) | Separate background work from activation, with a synchronous path when preparation cannot keep up. Incremental segments remain the shared 0.8.0 work, not part of this patch. |
-| [DSH pinned policy](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/compaction/compaction-basic/src/config.ts) | Resolve output reservation and headroom separately, keep balanced recent history. The generated native fragment follows that policy. |
-| [OpenCode pinned overflow implementation](https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/session/overflow.ts) | Its input-limit and context-only branches differ. The generator reports the missing-input case rather than promising an ineffective threshold. |
+| [Pi Context Plus](https://github.com/processmission/pi-context-plus) | Recompute pressure per model and act on settled boundaries. Triggering stays with the host. |
+| [Oh My Pi compaction](https://github.com/can1357/oh-my-pi/blob/main/docs/compaction.md) | Prepare before the trigger. Slice already did; preparation now tracks the host's actual line. |
+| [Mastra observational memory](https://github.com/mastra-ai/mastra/blob/main/docs/src/content/en/docs/memory/observational-memory.mdx) | Background work separate from activation, with a synchronous path when preparation falls behind. Incremental segments remain 0.8.0 work. |
+| [DSH pinned policy](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.1-rc.3/packages/compaction/compaction-basic/src/config.ts) | Output reservation and headroom resolved separately, recent history kept. |
+| [OpenCode pinned overflow](https://github.com/anomalyco/opencode/blob/v1.19.4/packages/opencode/src/session/overflow.ts) | Input-limit and context-only branches differ, hence the missing-input report. |
 
-No new scheduler, history database, checkpoint schema, writer fallback or
-OpenCode/DSH checkpoint persistence is introduced. Their prerequisites remain
-in [host-adapters.md](host-adapters.md). The capacity calculator does not replace
-the frozen resident runtime's budget policy.
+No scheduler, history database, checkpoint schema, writer fallback or
+OpenCode/DSH checkpoint persistence is added; their gates stay in
+[host-adapters.md](host-adapters.md). The frozen resident runtime keeps its own
+budget policy.
 
 ## Validation
 
-The core tests cover 128k, 200k, 262,144 and 1M windows, smaller input limits,
-large output reservations, invalid metadata and bounded retention. CLI tests
-check native formula mappings and the OpenCode limitation. Pi regressions
-exercise early preparation, three checkpoint intervals, retained current text,
-reopening original evidence, failed summaries, smaller-model recalculation and
-an oversized request payload. Token usage and writer replies in those tests
-are scripted; they are not a live 200k provider stress test.
+Unit tests cover the formula from 128k to 1M, smaller input limits, invalid
+metadata and Pi's override resolution. The official Pi acceptance adds
+`pressure-prepared`, through a per-model override, and `pressure-failed`,
+through the global setting: three native checkpoints that reuse the prepared
+note with no writer call at the boundary, recent text kept, no repeat after
+small growth, and a failed preparation followed by a failed synchronous writer
+that stays blocked across a cold restart. Results are in the
+[validation record](validation.md).
 
-Run `node scripts/context-memory-ops.mjs verify`, then build and accept the
-preview on the official Pi versions listed in [extension-preview.md](extension-preview.md).
-The stock acceptance now includes `pressure-prepared` and `pressure-failed`:
-three native automatic checkpoints, preparation reuse without a boundary writer
-call, no immediate repeat after small growth, recent raw text, failed preparation
-followed by a failed synchronous writer, and cold-process recovery or blocking.
-
-Before recommending these values broadly, compare real-provider pause P50/P95,
-overflows, repeated compactions, recovery accuracy, summary truncation and total
-writer/retrieval tokens with native defaults. Long-history retrieval still
-reads the original host log on each query; measure host I/O as well as the
-projection before adding an optimization.
+Every fixture scripts usage and writer replies. Before recommending these
+values widely, compare them with native defaults on real providers: pause P50
+and P95, overflows, repeated compactions, recovery accuracy, summary truncation
+and total writer and retrieval tokens.
 
 ### Native pressure simulations
 
-Build the retrieval adapters with `node scripts/context-memory-adapters-check.mjs`.
-For the official OpenCode installation described in [host-adapters.md](host-adapters.md):
+Build the adapters with `node scripts/context-memory-adapters-check.mjs`. For
+the official OpenCode installation in [host-adapters.md](host-adapters.md):
 
 ```sh
 node scripts/context-memory-opencode-acceptance.mjs \
@@ -132,12 +116,12 @@ node scripts/context-memory-opencode-acceptance.mjs \
   --pressure-mode missing-input
 ```
 
-Both modes run three automatic cycles, then a failed summary and explicit
-recovery, followed by process restart and original-evidence retrieval. The
-provider reports controlled usage just below/at the line; large synthetic
-source text is sent through the actual binary and native database.
+Each mode runs three automatic cycles, a failed summary with an explicit retry,
+a process restart and original-evidence retrieval. The provider reports usage
+just below and at the line while large synthetic text passes through the real
+binary and database.
 
-For DSH, choose an isolated npm installation outside the source checkout:
+For DSH, install the pinned packages outside the source checkout:
 
 ```sh
 npm install --prefix "$DSH_STOCK" --save-exact --ignore-scripts --no-audit --no-fund \
@@ -150,11 +134,9 @@ node scripts/context-memory-dsh-acceptance.mjs \
 ```
 
 This mounts the official agent loop, compaction service, token meter, JSONL
-backend and built Slice plugin, with a scripted provider adapter and no network.
-It uses native token estimates of large source text, including a single 320 kB
-tool result, three pressure cycles, cold-process reopening, writer failure and
-recovery, smaller capacity and missing capacity metadata. DSH continues after
-a failed pressure summary and skips pressure compaction when capacity is absent;
-those are verified native limitations, not Slice failure protection. The fixture
-checks registry provenance and unchanged service bytes, bounds calls/time and
-deletes synthetic sessions. It does not exercise the terminal UI or a live model.
+backend and built Slice plugin with a scripted provider and no network. The
+official meter measures real synthetic text, including one 320 kB tool result,
+across three cycles, a cold reopen, a failed summary, a smaller window and
+missing capacity metadata. The fixture checks registry provenance and unchanged
+service bytes, bounds calls and time, and deletes its sessions. It does not
+exercise the terminal UI or a live model.

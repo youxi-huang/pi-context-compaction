@@ -110,7 +110,6 @@ async function prompt(text) {
 	handle.agent.followup(createUserMessage({ content: [{ type: "text", text }], source: { kind: "user" } }));
 	await handle.agent.whenIdle();
 }
-const summaries = () => checkpoints;
 const pressure = () => ctx.tokenMeter.measure(handle.agent.session).totalTokens;
 async function run() {
 	if (values["resume-root"]) {
@@ -130,16 +129,16 @@ async function run() {
 		// Drive full native turns with >500 kB of real text per cycle; use the official meter, not fake usage.
 		while (pressure() < 135_000) {
 			await prompt(`Synthetic old cycle ${cycle}. ${"filler ".repeat(10_000)}`);
-			assert.equal(summaries().length, cycle, "Unexpected early native compaction");
+			assert.equal(checkpoints.length, cycle, "Unexpected early native compaction");
 		}
 		await prompt(`Synthetic recent-${cycle}. ${"recent ".repeat(9000)}`);
-		assert(pressure() >= profile.plan.triggerTokens, "Fixture did not reach native pressure");
+		assert(pressure() >= profile.targetTokens, "Fixture did not reach native pressure");
 		await prompt(`Finish synthetic recent-${cycle}.`);
-		assert.equal(summaries().length, cycle + 1, "Native pre-step did not compact exactly once");
-		assert(pressure() < profile.plan.triggerTokens);
+		assert.equal(checkpoints.length, cycle + 1, "Native pre-step did not compact exactly once");
+		assert(pressure() < profile.targetTokens);
 		assert(JSON.stringify(handle.agent.session.deriveMessages()).includes(`recent-${cycle}`), "Recent raw text was lost");
 		await prompt("Small synthetic follow-up.");
-		assert.equal(summaries().length, cycle + 1, "Small follow-up immediately recompacted");
+		assert.equal(checkpoints.length, cycle + 1, "Small follow-up immediately recompacted");
 	}
 	assert(calls.filter((call) => call.purpose === "compaction").every((call) => call.maxTokens === 8192));
 	evidence.push("three native pre-step compactions with official token measurement, recent retention and no immediate recompaction");
@@ -152,36 +151,36 @@ async function run() {
 	while (pressure() < 100_000) await prompt(`Synthetic pre-burst. ${"filler ".repeat(10_000)}`);
 	burst = true;
 	await prompt("Produce one large synthetic tool result.");
-	assert.equal(summaries().length, 4, "Large tool output did not trigger a native compaction between steps");
-	assert(pressure() < profile.plan.triggerTokens);
+	assert.equal(checkpoints.length, 4, "Large tool output did not trigger a native compaction between steps");
+	assert(pressure() < profile.targetTokens);
 	evidence.push("one 320 kB tool result triggers native compaction before the next model step");
 	while (pressure() < 151_000) await prompt(`Synthetic failure source. ${"filler ".repeat(10_000)}`);
 	failSummary = true;
-	const before = summaries().length;
+	const before = checkpoints.length;
 	const beforeCalls = calls.length;
 	await prompt("Continue after synthetic summary failure.");
-	assert.equal(summaries().length, before, "Failed native summary wrote a checkpoint");
+	assert.equal(checkpoints.length, before, "Failed native summary wrote a checkpoint");
 	assert(calls.slice(beforeCalls).some((call) => call.purpose === "compaction"));
 	assert(calls.slice(beforeCalls).some((call) => call.purpose !== "compaction"), "Expected native DSH failure policy to continue the turn");
 	evidence.push("native DSH summary failure preserves history but continues the turn; Slice does not add fail-closed protection here");
 	failSummary = false;
 	await prompt("Retry native compaction.");
-	assert.equal(summaries().length, before + 1);
+	assert.equal(checkpoints.length, before + 1);
 	while (pressure() < 100_000) await prompt(`Synthetic before model switch. ${"filler ".repeat(10_000)}`);
-	const beforeSwitch = summaries().length;
+	const beforeSwitch = checkpoints.length;
 	contextWindow = 128_000;
 	await prompt("Synthetic smaller-model route.");
-	assert.equal(summaries().length, beforeSwitch + 1, "Native host did not recompute pressure for the smaller window");
+	assert.equal(checkpoints.length, beforeSwitch + 1, "Native host did not recompute pressure for the smaller window");
 	assert(pressure() < 128_000 - 32_000);
 	evidence.push("native compaction recovers after writer failure; smaller capacity metadata resolves on the next route");
 	contextWindow = undefined;
-	const beforeUnknown = summaries().length;
+	const beforeUnknown = checkpoints.length;
 	while (pressure() < 151_000) await prompt(`Synthetic unknown-capacity source. ${"filler ".repeat(10_000)}`);
 	await prompt("Synthetic missing capacity metadata.");
-	assert.equal(summaries().length, beforeUnknown, "Native host invented a capacity for pressure compaction");
+	assert.equal(checkpoints.length, beforeUnknown, "Native host invented a capacity for pressure compaction");
 	contextWindow = 200_000;
 	await prompt("Synthetic restored capacity metadata.");
-	assert.equal(summaries().length, beforeUnknown + 1);
+	assert.equal(checkpoints.length, beforeUnknown + 1);
 	evidence.push("missing native capacity skips pressure compaction; restoring metadata resumes it");
 	assert.equal(sha(join(candidate, "dist/index.js")), bundleHash);
 	for (const [file, hash] of hashes) assert.equal(sha(file), hash, "Official service bytes changed");

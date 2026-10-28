@@ -121,7 +121,8 @@ async function runtimeAcceptance() {
 	const warmingCase = workerCase === "cache-warming";
 	const automaticCase = workerCase === "automatic-compaction";
 	const pressureCase = workerCase.startsWith("pressure-");
-	const pressure = pressureProfile({ contextWindow: 200_000, maxOutputTokens: 32_000 });
+	// No compactAt: preparation must find Pi's lowered line in its own settings, through a per-model override in one case.
+	const pressure = pressureProfile({ contextWindow: 200_000, maxOutputTokens: 32_000, ...(workerCase === "pressure-prepared" ? { model: "synthetic-preview/synthetic-preview" } : {}) });
 	// A second copy at another path, as installing a second address adds one; both load and both register.
 	const duplicateCase = workerCase === "duplicate-copies";
 	const secondCopy = join(caseDir, "second-copy");
@@ -238,7 +239,7 @@ async function runtimeAcceptance() {
 				}
 				// Reload through the public SDK so the new durable source is also the agent's active projection.
 				await session.reload();
-				pressureUsage = pressure.plan.prepareTokens;
+				pressureUsage = 131_250; // The band below Pi's 150,000 line, not the 160,664 default.
 				await session.prompt(`Synthetic recent-cycle-${cycle}. ${"recent ".repeat(9000)}`);
 				let status;
 				for (let attempt = 0; attempt < 150; attempt++) {
@@ -250,7 +251,7 @@ async function runtimeAcceptance() {
 				assert.equal(checkpoints().length, cycle, "Host compacted before the configured line");
 				const paid = requests.filter((value) => value.writer).length;
 				assert.equal(paid, cycle + 1, "More than one prepared writer call per interval");
-				pressureUsage = pressure.plan.triggerTokens + 1;
+				pressureUsage = pressure.targetTokens + 1;
 				await session.prompt(`Finish synthetic recent-cycle-${cycle}.`);
 				if (workerCase === "pressure-failed") {
 					assert(existsSync(marker), "Failed synchronous writer did not block after failed preparation");

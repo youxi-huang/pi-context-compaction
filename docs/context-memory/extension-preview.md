@@ -447,17 +447,17 @@ alongside the ordinary settings in `pi-context-memory.json` and restart Pi:
 ```
 
 The configured writer prepares once per checkpoint interval, after a completed
-turn, when the context enters the band just below Pi's default threshold
-compaction point: 12.5% of it, between 8,192 and 32,768 tokens. With this source
-patch, an explicit `compactAt` lowers that preparation reference to the smaller
-of the default threshold and Slice's resolved budget. Pi still owns triggering;
-pair it with native settings using [capacity profiles](context-pressure.md).
-Without `compactAt`, the band is unchanged. A run has a
-120-second deadline, at most eight provider calls and no repair. One candidate
-is kept in memory and is lost on restart. Earlier experimental keys
-(`minSourceTokens`, `minIntervalMs`, `deadlineMs`, `maxCallsPerAttempt`,
-`ledger`) are ignored; an invalid value disables preparation without affecting
-requests or the formal compaction failure contract.
+turn, when the context enters the band just below Pi's threshold compaction
+point: 12.5% of it, between 8,192 and 32,768 tokens. The point is the window
+minus Pi's effective `reserveTokens` for the current model, read from Pi's
+settings with a `compaction.modelOverrides` entry first, so a lowered trigger
+such as a [capacity profile](context-pressure.md) moves preparation with it.
+Pi's defaults leave the band where it was. A run has a 120-second deadline, at
+most eight provider calls and no repair. One candidate is kept in memory and is
+lost on restart. Earlier experimental keys (`minSourceTokens`, `minIntervalMs`,
+`deadlineMs`, `maxCallsPerAttempt`, `ledger`) are ignored; an invalid value
+disables preparation without affecting requests or the formal compaction failure
+contract.
 
 At compaction, a complete, current candidate is committed without a writer
 call. When turns were added after it, the candidate is still committed without

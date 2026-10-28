@@ -11,10 +11,10 @@ The scope and writing prerequisites are in
 at its explicit DSH persistence gate; it contains no dormant writer or second
 transaction engine. OpenCode V2 is not included.
 
-For an opt-in native compaction profile calculated from verified model limits,
-including the 200k example and OpenCode's missing-input-limit caveat, see
-[capacity profiles](context-pressure.md). This does not change either adapter's
-retrieval-only scope.
+Native compaction settings for a given route, such as 200k with a 32k output
+cap, and the three-cycle pressure fixtures for both hosts are in
+[capacity profiles](context-pressure.md). They leave both adapters
+retrieval-only.
 
 ## Build and load
 
@@ -123,10 +123,6 @@ sessions. The run has a 240-second deadline and a 50-call synthetic-provider
 ceiling; it inherits no provider credentials. Interactive UI, real providers,
 other OpenCode versions and other operating systems remain untested. This
 optional binary fixture is separate from the ordinary `verify` gate.
-
-For automatic 200k pressure, failed summaries, three-cycle recovery and the
-official DSH agent-loop fixture, see the commands and scope in
-[capacity profiles](context-pressure.md#native-pressure-simulations).
 
 ## Why DSH writing is deferred
 

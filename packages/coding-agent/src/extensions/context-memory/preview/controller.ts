@@ -4,6 +4,7 @@ import { getInitialSystemMessage, type Tool } from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection,
 	type CompactionEntry,
+	type CompactionSettings,
 	convertToLlm,
 	DEFAULT_COMPACTION_SETTINGS,
 	type ExtensionContext,
@@ -17,7 +18,6 @@ import {
 	type SessionProjection,
 	VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { preparationStartTokens } from "../../../../../compaction-core/src/context-pressure.ts";
 import {
 	checkpointInterval as coreCheckpointInterval,
 	chooseCut as coreChooseCut,
@@ -163,13 +163,29 @@ export function checkpointInterval(branch: readonly SessionEntry[]): string {
 }
 
 /**
- * A band below Pi's default threshold, lowered by an explicit Slice checkpoint budget when supplied.
- * Pi's actual settings are not visible here: compactAt must be paired with the host's reserveTokens.
+ * Context size at which optional preparation starts: a band below Pi's threshold compaction point, 12.5% of it
+ * and between 8,192 and 32,768 tokens. Pi's threshold is the window minus its effective reserveTokens.
  */
-export function preparationStart(contextWindow: number, budgetThreshold?: number): number {
-	return preparationStartTokens(
-		Math.min(contextWindow - DEFAULT_COMPACTION_SETTINGS.reserveTokens, budgetThreshold ?? Infinity),
-	);
+export function preparationStart(
+	contextWindow: number,
+	reserveTokens: number = DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+): number {
+	const threshold = contextWindow - reserveTokens;
+	return threshold - Math.min(32_768, Math.max(8_192, Math.floor(threshold * 0.125)));
+}
+
+/** Pi's own resolution of reserveTokens for a model: its per-model override, then the global value, then the default. */
+export function piReserveTokens(
+	settings: { compaction?: CompactionSettings } | undefined,
+	model: { provider: string; id: string },
+): number {
+	const compaction = settings?.compaction;
+	const value =
+		compaction?.modelOverrides?.[`${model.provider}/${model.id}`]?.reserveTokens ??
+		compaction?.reserveTokens ??
+		DEFAULT_COMPACTION_SETTINGS.reserveTokens;
+	if (!Number.isSafeInteger(value) || value < 0) throw new Error("CONTEXT_CONFIG: invalid Pi reserveTokens");
+	return value;
 }
 
 /** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
@@ -334,6 +350,8 @@ export interface PreviewControllerOptions {
 	reduction?: PreviewSwitch;
 	/** WP3: rendered-note candidates, projecting the stored summary for the model only; off by default. */
 	rendering?: RenderingSwitch;
+	/** Pi's effective settings, read so preparation follows Pi's actual threshold; Pi's defaults without it. */
+	hostSettings?: () => { compaction?: CompactionSettings } | undefined;
 }
 
 /** All host effects pass through public extension contexts and the independent failure marker. */
@@ -365,6 +383,7 @@ export class PreviewMemoryController {
 	>();
 	private readonly reduction: PreviewSwitch;
 	private readonly rendering: RenderingSwitch;
+	private readonly hostSettings: () => { compaction?: CompactionSettings } | undefined;
 	/** In-memory, per session: full read-backs of entries the reduced view replaces. Counts only. */
 	private readonly reducedReadBacks = new Map<string, number>();
 	private readonly lastCompaction = new Map<
@@ -390,6 +409,7 @@ export class PreviewMemoryController {
 		this.excerpts = options.excerpts ?? { enabled: false };
 		this.reduction = options.reduction ?? { enabled: false };
 		this.rendering = options.rendering ?? RENDERING_OFF;
+		this.hostSettings = options.hostSettings ?? (() => undefined);
 		this.reduced =
 			options.reduced ??
 			((ctx) => {
@@ -509,11 +529,8 @@ export class PreviewMemoryController {
 			if (!this.preparation.mayStart(sessionId, interval)) return;
 			const usage = ctx.getContextUsage();
 			if (!usage?.tokens) return;
-			const threshold =
-				this.config.compactAt === undefined
-					? undefined
-					: memoryBudget({ ...ctx.model, contextWindow: usage.contextWindow }, this.config).threshold;
-			if (usage.tokens < preparationStart(usage.contextWindow, threshold)) return;
+			if (usage.tokens < preparationStart(usage.contextWindow, piReserveTokens(this.hostSettings(), ctx.model)))
+				return;
 			if (this.safeInactive(ctx) || this.configError || ctx.hasPendingMessages()) return;
 			assertPreviewSession(ctx.sessionManager, this.hostVersion);
 			if (this.store.inspect(ctx.sessionManager).state !== "ready" || this.stickyFailures.has(sessionId)) return;

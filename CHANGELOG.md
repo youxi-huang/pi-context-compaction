@@ -6,6 +6,14 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ## [Unreleased]
 
+### Added
+
+- `scripts/context-memory-pressure-profile.mjs` prints native compaction settings for Pi, OpenCode 1.19.4 and DSH 0.2.1-rc.3 from verified context, output and optional input limits. A 200k route with a 32k output cap gets a 150k trigger and 15k of recent text; `--model` scopes Pi's values to that route. Missing or contradictory limits are refused, and OpenCode without `limit.input` is reported as keeping its 168k line. The script writes nothing and changes no adapter's scope.
+
+### Fixed
+
+- Optional Pi preparation now starts below Pi's actual trigger, read from its effective `reserveTokens` with any per-model override first. A trigger lowered to 150k used to leave preparation waiting at 160,664, after compaction had already run. Pi's defaults keep the old band; the checkpoint format, the once-per-interval call limit and failure blocking are unchanged.
+
 ### Changed
 
 - The README's Get started covers all three hosts: Pi first, then the DSH and OpenCode steps, which had sat in their own section after the Pi update and recovery notes.

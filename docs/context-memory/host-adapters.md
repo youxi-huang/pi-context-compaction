@@ -11,6 +11,11 @@ The scope and writing prerequisites are in
 at its explicit DSH persistence gate; it contains no dormant writer or second
 transaction engine. OpenCode V2 is not included.
 
+Native compaction settings for a given route, such as 200k with a 32k output
+cap, and the three-cycle pressure fixtures for both hosts are in
+[capacity profiles](context-pressure.md). They leave both adapters
+retrieval-only.
+
 ## Build and load
 
 From a source checkout, run:
@@ -114,7 +119,7 @@ starts an unmodified official binary with an isolated profile and a loopback
 synthetic provider, and exercises two native compactions, process restart,
 original-part retrieval, cursor continuation after appended turns, and plugin
 removal. It checks the binary and adapter bytes afterward and deletes synthetic
-sessions. The run has a 240-second deadline and a 30-call synthetic-provider
+sessions. The run has a 240-second deadline and a 50-call synthetic-provider
 ceiling; it inherits no provider credentials. Interactive UI, real providers,
 other OpenCode versions and other operating systems remain untested. This
 optional binary fixture is separate from the ordinary `verify` gate.

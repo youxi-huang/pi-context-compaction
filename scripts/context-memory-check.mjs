@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const checks = [
+	["scripts/context-memory-pressure-profile.test.mjs", []],
 	["node_modules/@biomejs/biome/bin/biome", ["check", "--error-on-warnings", "."]],
 	["scripts/check-pinned-deps.mjs", []],
 	["scripts/check-runtime-deps.mjs", []],

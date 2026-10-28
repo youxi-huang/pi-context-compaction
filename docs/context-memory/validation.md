@@ -1,5 +1,31 @@
 # Validation record
 
+## Capacity profile: official-host pressure simulations, 2026-10-28 UTC
+
+Candidate `stock-preview+src.cacd9ac0956e0ff1`, built from `9455070`. Every
+provider reply was synthetic: Pi and OpenCode used loopback HTTP, DSH a scripted
+adapter inside its official agent loop. No live provider, credentials or
+interactive UI. Commands and installation are in
+[capacity profiles](context-pressure.md#native-pressure-simulations).
+
+| Command | Result |
+| --- | --- |
+| `node scripts/context-memory-ops.mjs verify` | Exit 0. |
+| `node scripts/context-memory-ops.mjs preview` | Exit 0. Stock-Pi acceptance passed 39 checks on 1.4.0 and 33 on each of 1.3.0, 1.2.0 and 1.1.0. `pressure-prepared`, with the 150k line set only through a Pi per-model override, and `pressure-failed`, through the global `reserveTokens`, passed on every host with no Slice `compactAt`. The default-settings scenarios passed 157 of 157 under the strict profile. |
+| `node scripts/context-memory-adapters-check.mjs` | Exit 0. |
+| `node scripts/context-memory-opencode-acceptance.mjs --stock-root <official> --package-dir <adapter> --pressure-mode declared` | Exit 0 on 1.19.4: three automatic compactions at 150,000, none below the line or after a small follow-up, a failed summary with explicit retry, cold restart, original retrieval and cursor continuation; 24 synthetic calls. |
+| Same with `--pressure-mode missing-input` | Exit 0; the same cases at the real line of 168,000; 24 calls. |
+| Same without `--pressure-mode` | Exit 0; the original two-compaction run; 10 calls. |
+| `node scripts/context-memory-dsh-acceptance.mjs --stock-root <official> --package-dir <adapter>` | Exit 0 on 0.2.1-rc.3: three pressure cycles measured by the official meter, one 320 kB tool result, cold-process retrieval, a failed summary and its recovery, a smaller and a missing capacity; 80 synthetic calls including the reopen. |
+| `node scripts/security-regression-check.mjs` | Exit 0. |
+
+The Pi and OpenCode fixtures script usage at the boundaries around large real
+text; DSH pressure comes from its own meter. They prove host integration and
+state transitions, not a provider's advertised 200k capacity, summary quality,
+the best thresholds or a shorter pause. DSH continues a turn after a failed
+native summary and skips pressure compaction without capacity metadata; the
+retrieval-only adapter adds no blocking there.
+
 ## v0.7.2: a second copy stands aside, 2026-10-26 UTC
 
 Official Pi installations, loopback synthetic providers, no real model. The

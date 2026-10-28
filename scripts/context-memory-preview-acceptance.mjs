@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inspectOfficialPi } from "./context-memory-preview-stock-install.mjs";
+import { pressureProfile } from "./context-memory-pressure-profile.mjs";
 
 // Uses only clean official host code and a loopback mock provider. Never contacts a model service.
 const script = fileURLToPath(import.meta.url);
@@ -119,6 +120,9 @@ async function runtimeAcceptance() {
 	const fixedWriterUnavailable = workerCase === "writer-unavailable";
 	const warmingCase = workerCase === "cache-warming";
 	const automaticCase = workerCase === "automatic-compaction";
+	const pressureCase = workerCase.startsWith("pressure-");
+	// No compactAt: preparation must find Pi's lowered line in its own settings, through a per-model override in one case.
+	const pressure = pressureProfile({ contextWindow: 200_000, maxOutputTokens: 32_000, ...(workerCase === "pressure-prepared" ? { model: "synthetic-preview/synthetic-preview" } : {}) });
 	// A second copy at another path, as installing a second address adds one; both load and both register.
 	const duplicateCase = workerCase === "duplicate-copies";
 	const secondCopy = join(caseDir, "second-copy");
@@ -127,6 +131,10 @@ async function runtimeAcceptance() {
 		if (workerCase === "config-invalid") writeFileSync(join(agentDir, "pi-context-memory.json"), "{invalid config");
 		if (duplicateCase) cpSync(packageDir, secondCopy, { recursive: true });
 		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: duplicateCase ? [installedPackage, secondCopy] : [installedPackage], compaction: { enabled: automaticCase, keepRecentTokens: 0, reserveTokens: 16_384 }, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: warmingCase ? "idle" : "off", defaultTools: [] }));
+		if (pressureCase) {
+			writeFileSync(join(agentDir, "pi-context-memory.json"), JSON.stringify({ enabled: true, writerModel: "session", eventLog: false, noteRepair: false, ...pressure.pi.slice, previewPreparation: { enabled: true } }));
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ packages: [installedPackage], ...pressure.pi.settings, retry: { enabled: false, provider: { maxRetries: 0 } }, cacheWarming: "off", defaultTools: [] }));
+		}
 	}
 	const requests = [];
 	const diagnostics = [];
@@ -139,6 +147,7 @@ async function runtimeAcceptance() {
 	let writerMode = ["bad-quote", "bad-source", "bad-supersedes"].includes(workerCase) ? workerCase : ["cache-warming", "marker-corrupt"].includes(workerCase) ? "bad-source" : "good";
 	let mainMode = ["success", "repeat-compaction", "reopen-success", "duplicate-copies"].includes(workerCase) ? "history" : "ack";
 	let onWriter;
+	let pressureUsage = 100;
 	const server = createHttpServer(async (request, response) => {
 		let raw = "";
 		for await (const chunk of request) raw += chunk;
@@ -148,19 +157,21 @@ async function runtimeAcceptance() {
 		// The session writer ends its request with an explicit handover instruction.
 		const writer = JSON.stringify(payload.messages?.at(-1) ?? "").includes("Internal context-compaction request, not a new user task or ruling.");
 		requests.push({ writer, model: payload.model });
+		assert(requests.length <= 40, "Synthetic provider call budget exceeded");
 		if (writer) {
 			await onWriter?.();
-			const text = workerCase === "malformed-note" ? "This looks plausible but is not JSON." : JSON.stringify(syntheticNote(sourceId, writerMode, unreadableId));
+			const text = ["malformed-note", "pressure-failed"].includes(workerCase) ? "This looks plausible but is not JSON." : JSON.stringify(syntheticNote(sourceId, writerMode, unreadableId));
 			responseEvent(response, payload.model, text);
 		} else if (mainMode === "history" && payload.messages.at(-1)?.role !== "tool") {
 			responseEvent(response, payload.model, "", { operation: "read", entryId: sourceId });
 		} else {
-			responseEvent(response, payload.model, "The synthetic port is 4317. Deployment remains unauthorized.", undefined, automaticCase ? 200_000 : 100);
+			responseEvent(response, payload.model, "The synthetic port is 4317. Deployment remains unauthorized.", undefined, pressureCase ? pressureUsage - 30 : automaticCase ? 200_000 : 100);
 		}
 	});
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const model = { id: "synthetic-preview", name: "Synthetic preview", provider: "synthetic-preview", api: "openai-completions", baseUrl: `http://127.0.0.1:${server.address().port}/v1`, reasoning: false, input: ["text"], contextWindow: 128_000, maxTokens: 8192, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { supportsDeveloperRole: false, supportsUsageInStreaming: true } };
+	if (pressureCase) { model.contextWindow = 200_000; model.maxTokens = 32_000; }
 	if (warmingCase) { model.promptCache = { short: 11, long: 11 }; model.cost.input = 100_000; }
 	try {
 		const runtime = await stock.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, allowModelNetwork: false });
@@ -218,7 +229,53 @@ async function runtimeAcceptance() {
 				assert.equal(requests.length, count, "Custom-triggered run bypassed the compaction failure guard");
 			}
 		}
-		if (automaticCase) {
+		if (pressureCase) {
+			const checkpoints = () => manager.getBranch().filter((entry) => entry.type === "compaction");
+			for (let cycle = 0; cycle < (workerCase === "pressure-failed" ? 1 : 3); cycle++) {
+				// Real large source text and complete turns, plus scripted provider usage at the exact boundaries.
+				for (let turn = 0; turn < 7; turn++) {
+					manager.appendMessage({ role: "user", content: `Synthetic cycle ${cycle}, old turn ${turn}. ${"filler ".repeat(8000)}`, timestamp: 1 });
+					manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "Synthetic completed turn." }], api: model.api, provider: model.provider, model: model.id, stopReason: "stop", timestamp: 2, usage: { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+				}
+				// Reload through the public SDK so the new durable source is also the agent's active projection.
+				await session.reload();
+				pressureUsage = 131_250; // The band below Pi's 150,000 line, not the 160,664 default.
+				await session.prompt(`Synthetic recent-cycle-${cycle}. ${"recent ".repeat(9000)}`);
+				let status;
+				for (let attempt = 0; attempt < 150; attempt++) {
+					status = JSON.parse(await commandOutput("/compaction-status"));
+					if (["ready", "failed"].includes(status.preparation?.state)) break;
+					await new Promise((done) => setTimeout(done, 20));
+				}
+				assert.equal(status.preparation?.state, workerCase === "pressure-failed" ? "failed" : "ready", "Preparation did not finish in the lowered band");
+				assert.equal(checkpoints().length, cycle, "Host compacted before the configured line");
+				const paid = requests.filter((value) => value.writer).length;
+				assert.equal(paid, cycle + 1, "More than one prepared writer call per interval");
+				pressureUsage = pressure.targetTokens + 1;
+				await session.prompt(`Finish synthetic recent-cycle-${cycle}.`);
+				if (workerCase === "pressure-failed") {
+					assert(existsSync(marker), "Failed synchronous writer did not block after failed preparation");
+					assert.equal(checkpoints().length, 0);
+					assert.equal(requests.filter((value) => value.writer).length, paid + 1);
+					await assertBlocked();
+					await session.reload();
+					await assertBlocked();
+				} else {
+					assert.equal(checkpoints().length, cycle + 1, "Native threshold did not commit a Slice checkpoint");
+					assert.equal(requests.filter((value) => value.writer).length, paid, "Prepared boundary made a synchronous writer request");
+					assert(!existsSync(marker));
+					assert(JSON.stringify(manager.buildSessionProjection().messages).includes(`recent-cycle-${cycle}`), "Recent text was lost");
+					pressureUsage = 100;
+					await session.prompt("A small synthetic follow-up.");
+					assert.equal(checkpoints().length, cycle + 1, "Small follow-up immediately recompacted");
+				}
+			}
+			if (workerCase !== "pressure-failed") {
+				mainMode = "history";
+				await session.prompt("Recover the original synthetic instruction.");
+				assert(toolResults.some((result) => JSON.stringify(result).includes("Do not deploy this synthetic service.")));
+			}
+		} else if (automaticCase) {
 			await session.prompt("Continue the synthetic local service check.");
 			assert(existsSync(marker), "Native threshold compaction did not retain an explicit unsupported-boundary marker");
 			assert.equal(requests.length, 1, "Native automatic compaction fell back to an additional summary or writer HTTP request");
@@ -503,7 +560,7 @@ async function parentAcceptance() {
 			assertExistingSettingsPreserved();
 			return { ref: "preview-compatible-initial", commit };
 		});
-		const runtimeCases = ["doctor-read-only", "success", "duplicate-copies", "repeat-compaction", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction"];
+		const runtimeCases = ["doctor-read-only", "success", "duplicate-copies", "repeat-compaction", "bad-quote", "bad-source", "bad-supersedes", "malformed-note", "writer-unavailable", "config-invalid", "marker-corrupt", "memory-change", "disk-change", "checkpoint-write-failed", "stage-marker-io", "first-marker-io", "cancelled", "unobserved-commit", "cache-warming", "automatic-compaction", "pressure-prepared", "pressure-failed"];
 		const results = new Map();
 		for (const name of runtimeCases) {
 			const value = await check(`official host runtime: ${name}`, async () => {
@@ -512,7 +569,7 @@ async function parentAcceptance() {
 			});
 			if (value) results.set(name, value);
 		}
-		for (const [name, fixture] of [["reopen-success", results.get("success")], ["reopen-blocked", results.get("bad-source")], ["recover-unobserved", results.get("unobserved-commit")]]) {
+		for (const [name, fixture] of [["reopen-success", results.get("success")], ["reopen-success", results.get("pressure-prepared")], ["reopen-blocked", results.get("bad-source")], ["reopen-blocked", results.get("pressure-failed")], ["recover-unobserved", results.get("unobserved-commit")]]) {
 			await check(`fresh process ${name}`, async () => {
 				assert(fixture, "Required runtime fixture did not pass");
 				await command(process.execPath, [script, "--package-dir", candidate, "--stock-root", stockRoot, "--output-dir", workDir, "--installed-package-dir", downloaded, "--runtime-case", name, "--reuse-agent-dir", fixture.agentDir, "--session-file", fixture.sessionFile], { env: environment(fixture.agentDir) });

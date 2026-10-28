@@ -54,7 +54,9 @@ import {
 	assertPreviewSession,
 	chooseCut,
 	PreviewMemoryController,
+	piReserveTokens,
 	prefixCut,
+	preparationStart,
 	unsupportedReason,
 } from "../src/extensions/context-memory/preview/controller.ts";
 import { recordCopy } from "../src/extensions/context-memory/preview/copies.ts";
@@ -403,6 +405,36 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		await prepare();
 		expect(requests).toHaveLength(1);
 		expect(controller.status(ctx).calls).toMatchObject({ preparationCalls: 1, unsettled: 0 });
+	});
+	it("follows Pi's effective reserveTokens, so a lowered trigger never leaves preparation behind it", async () => {
+		// A 200k/32k profile compacts above 150,000: preparation moves from 160,664 to 131,250.
+		expect(preparationStart(200_000)).toBe(160_664);
+		expect(preparationStart(200_000, 50_000)).toBe(131_250);
+		const settings = {
+			compaction: {
+				reserveTokens: 20_000,
+				modelOverrides: { "preview-test/preview-test": { reserveTokens: 40_000 } },
+			},
+		};
+		expect(piReserveTokens(settings, model)).toBe(40_000);
+		expect(piReserveTokens(settings, { provider: "other", id: "model" })).toBe(20_000);
+		expect(piReserveTokens(undefined, model)).toBe(16_384);
+		expect(() => piReserveTokens({ compaction: { reserveTokens: -1 } }, model)).toThrow("CONTEXT_CONFIG");
+		controller = new PreviewMemoryController({
+			config: { ...DEFAULT_MEMORY_CONFIG, writerModel: "preview-test/preview-test", noteRepair: false },
+			failureStore: store,
+			preparation,
+			journal,
+			hostSettings: () => settings,
+		});
+		controller.sessionStart(ctx);
+		// 128,000 - 40,000 = 88,000, less 11,000.
+		contextTokens = 76_999;
+		await prepare();
+		expect(requests).toHaveLength(0);
+		contextTokens = 77_000;
+		await prepare();
+		expect(requests).toHaveLength(1);
 	});
 	it("lets requests through up to Pi's threshold on text near 4 bytes per token, and stops real overflow", () => {
 		// Pi compacts above window - 16,384 by its own estimate; the guards must not fire below that point.

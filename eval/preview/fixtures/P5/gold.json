@@ -82,8 +82,12 @@
 			"kind": "fact",
 			"prompt": "Which shard had the checksum mismatch?",
 			"expected": {
-				"type": "number",
-				"value": 17
+				"type": "text",
+				"accept": [
+					"17",
+					"shard 17",
+					"shard-17"
+				]
 			},
 			"evidence": [
 				"p5-00020"

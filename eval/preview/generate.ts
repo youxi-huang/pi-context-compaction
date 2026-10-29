@@ -1428,7 +1428,7 @@ function longRoute() {
 				batch(800, batch1),
 				{ kind: "previous", prompt: "What was the replication batch size before the user first changed it, in rows?", expected: number(500), evidence: [rules] },
 				errorCode,
-				{ kind: "fact", prompt: "Which shard had the checksum mismatch?", expected: number(17), evidence: [dryRun.results[0]] },
+				{ kind: "fact", prompt: "Which shard had the checksum mismatch?", expected: text("17", "shard 17", "shard-17"), evidence: [dryRun.results[0]] },
 				snapshotRule,
 				tls,
 				authority,

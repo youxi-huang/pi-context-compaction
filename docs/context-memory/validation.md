@@ -30,11 +30,12 @@ answers whose evidence the committed note cites.
 
 Probes passed 25 of 30 on the 200k route and 15 of 19 on the 272k route, with
 nothing fabricated and no wrong value. One answer, `shard 17`, was right but
-scored incorrect against the number 17. The other eight stopped at the bench's
-six-round limit while still calling `context_history`: Luna at `max` kept
-checking values the note already held, among them the current batch size, and
-did not settle the authority probe or the questions with no answer in the
-session. The runs made 182 retrieval calls for 49 questions. 221 requests,
+scored incorrect against the number 17; the gold now accepts `17`, `shard 17`
+and `shard-17`, and rescored offline the 200k route passes 26 of 30. The other
+eight stopped at the bench's six-round limit while still calling
+`context_history`: Luna at `max` kept checking values the note already held,
+among them the current batch size, and did not settle the authority probe or
+the questions with no answer in the session. The runs made 182 retrieval calls for 49 questions. 221 requests,
 $0.34.
 
 **The writer read no cache.** It read none of about 459,000 input tokens on the

@@ -16,6 +16,8 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Changed
 
+- The preview bench measures `openai/gpt-6-luna` on OpenAI's official API with `--provider openai`, which replaces `--provider codex` and the ChatGPT subscription. `summary.json` records the provider as `openai` and the endpoint as `api.openai.com`, writer rows add `openaiResponses`, and a unit stops before its first request if the catalog serves Luna from another host. Usage and cache reads are OpenAI's own, so the cache share of these runs compares with other providers' runs. `--provider relay` stays for third-party relays.
+- `docs/context-memory/openai-api.md` replaces the Codex subscription guide. It sets up the key as a network secret, verifies Pi, OpenCode 1.19.4 and DSH 0.2.1-rc.3 with one request each, and records where each host puts GPT-6 Luna's window: 272,000 tokens in Pi and DSH, the line where OpenAI's long-context price begins, and 1,050,000 in OpenCode.
 - The README's Get started covers all three hosts: Pi first, then the DSH and OpenCode steps, which had sat in their own section after the Pi update and recovery notes.
 
 ### Maintenance

@@ -128,3 +128,27 @@ test("without --session-settings no unit gets a settings file, so units run on t
 	});
 	assert.deepEqual(readExcerptSettings(agentDir), { enabled: false });
 });
+
+test("--provider openai is a provider run on the official API: limits required, no repair mode, codex gone", (t) => {
+	const directory = scratch(t);
+	const output = join(directory, "output");
+	const bench = (...flags) =>
+		spawnSync(
+			process.execPath,
+			[script, "--package-dir", join(directory, "no-package"), "--stock-root", join(directory, "no-pi"), "--output-dir", output, ...flags],
+			{ encoding: "utf8", env: { ...process.env, PI_OFFLINE: "1" } },
+		);
+	// Each is refused before the package, the host or the run directory is read, so no request can follow.
+	for (const [flags, message] of [
+		[["--mode", "smoke", "--provider", "openai"], /Missing --max-requests/],
+		[["--mode", "smoke", "--provider", "openai", "--max-requests", "1", "--max-minutes", "1", "--max-cost-usd", "0"], /--max-costUsd must be positive for a provider run/],
+		[["--mode", "repair", "--provider", "openai", "--max-requests", "1", "--max-minutes", "1", "--max-cost-usd", "0.01"], /--provider openai does not serve --mode repair/],
+		[["--mode", "smoke", "--provider", "codex"], /--provider must be loopback, deepseek, deepseek-local, openai or relay/],
+	]) {
+		const result = bench(...flags);
+		assert.notEqual(result.status, 0, flags.join(" "));
+		assert.match(result.stderr, message, flags.join(" "));
+		assert.doesNotMatch(result.stderr, /preview-build\.json|ENOENT/, flags.join(" "));
+		assert.equal(existsSync(output), false, flags.join(" "));
+	}
+});

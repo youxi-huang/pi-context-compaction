@@ -8,6 +8,13 @@ two mutations, three tool rounds and at most four task requests. Historical
 scripted tests continue to exercise measurement 1. The numeric scoring view is
 explicit and does not rewrite fixture files or prompts.
 
+The ChatGPT Codex subscription this harness calls was retired on 2026-10-29, so
+its live mode can no longer run. Its offline tests stay: they still exercise the
+resident runtime's provider serializer and SDK compactor, and
+`context-memory-ops.mjs eval` runs `minimal.test.ts` as the reduced evaluation.
+A live evaluation of the resident runtime on OpenAI's API would need a transport
+of its own ([openai-api.md](../../docs/context-memory/openai-api.md)).
+
 `contract.ts` is the executable budget table. Eighteen paired runs reserve
 1,608 calls, 36,600,000 input tokens/proxy allowance, 4,048,512 output tokens and
 840 minutes. Option-C judges add at most 84 calls, 2,688,000 input allowance,

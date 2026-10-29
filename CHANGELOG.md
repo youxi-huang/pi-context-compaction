@@ -25,6 +25,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Maintenance
 
+- With the maintainer's approval in this release cycle, the resident build fingerprint changed to `1.1.0-context-memory.0.3.0+src.c1ed81ca7698d24e` for the resident fix above, and the frozen evaluator was pinned to that source, `b5b1053`; fixture and scorer locks are unchanged. Earlier records keep their own pin. The resident release version stays v0.3.0.
 - CI now builds the tree and runs both acceptance checks on Node 24 and 26 as well, for every pull request and push to main that changes more than Markdown. Node 22 still runs the full pipeline and remains the only Node a release is verified on. The newer majors run in a workflow of their own, because publication requires the whole Node 22 workflow run on main to succeed, so neither can block or approve a release. The supported range, `>=22.19.0`, the dependencies and the build fingerprints are unchanged.
 
 ## [v0.7.2] — 2026-10-26

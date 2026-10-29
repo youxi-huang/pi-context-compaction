@@ -122,20 +122,22 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
   --concurrency 6 --max-requests 50 --max-minutes 20 --max-cost-usd 0.5
 ```
 
-`--provider codex` measures `openai-codex/gpt-6-luna` on the ChatGPT subscription, in `smoke`, `writer` and `probes`
-modes; `repair` answers the writer's first call in Chat Completions, which Codex does not speak. It needs the network
-secret and the placeholder that [codex-subscription.md](../../docs/context-memory/codex-subscription.md) sets up, reads
-only the account ID from that placeholder, and gives each unit its own placeholder and the SSE transport. The same three
-limits apply. Writer rows add `codexResponses`: for every response, its output items, and for each message its phase
-and the shape of its JSON or its length when it does not parse, never its text. The shape names each key's kind and length, and for each section the keys and kinds of its items with their counts, marking empty strings, strings over 1,000 or 4,000 characters and repeated IDs, the cases the note schema refuses. Its costs are API-equivalent catalog estimates: the subscription charges none per request, but every
-request draws on its usage allowance.
+`--provider openai` measures Pi's catalog model `openai/gpt-6-luna` at its own address, OpenAI's official API, in
+`smoke`, `writer` and `probes` modes; `repair` answers the writer's first call in Chat Completions, and Pi's catalog
+sends Luna through the Responses API. It needs the network secret that
+[openai-api.md](../../docs/context-memory/openai-api.md) sets up, gives each unit the placeholder `OPENAI_API_KEY`, and
+stops a unit before its first request when the catalog serves Luna from any host but `api.openai.com`. The same three
+limits apply, and `summary.json` names `api.openai.com` under `endpoint`. Writer rows add `openaiResponses`: for every response, its output items, and for each message its phase and the shape of its JSON or
+its length when it does not parse, never its text. The shape names each key's kind and length, and for each section the keys and kinds of its items with their counts, marking empty strings, strings over 1,000 or 4,000 characters and repeated IDs, the cases the note schema refuses. Usage and cache reads are
+OpenAI's own counts, so cache share compares with other runs; costs are Pi's catalog estimates over them, not invoices.
+Luna's window in Pi's catalog stops at 272,000 tokens, where OpenAI's long-context price begins.
 
 `--provider relay --base-url https://.../v1` measures Pi's catalog model `openai/gpt-6-luna` through an
 OpenAI-compatible relay, in `smoke`, `writer` and `probes` modes. Pi keeps the model's compatibility settings and level
 map and speaks the Responses API, so the session writer's `prompt_cache_key` reaches the relay; only the address
 moves. The environment's network proxy supplies the relay's key, and Pi receives a placeholder. The same three limits
 apply, `summary.json` names the relay's host under `endpoint`, and writer rows add `relayResponses`, shaped as
-`codexResponses`. A relay may add its own instructions and reports
+`openaiResponses`. A relay may add its own instructions and reports
 usage of its own: compare refusals, notes and probe scores with other runs, but not its cache share or cost, which
 are catalog estimates over the relay's counts.
 

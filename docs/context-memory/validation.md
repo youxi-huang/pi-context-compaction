@@ -623,7 +623,7 @@ ran the preview bench on official Pi 1.3.0 with `openai-codex/gpt-6-luna` on the
 maintainer's ChatGPT subscription, at thinking level `high` to match the DeepSeek
 records, with `stock-preview+src.4659d3858aeb94b3`, whose preview source is that of
 `13e3370`. The access token stayed in the environment's network proxy and Pi held a
-placeholder ([codex-subscription.md](codex-subscription.md)). Settings matched the
+placeholder (the Codex subscription setup, retired on 2026-10-29). Settings matched the
 DeepSeek writer benches: eight cuts, eight attempts each, `--cache warm`, with four
 units at a time. The maintainer delegated the limits: 150 requests and 45 minutes
 for the writer bench, 400 requests and 90 minutes for the probes. In daily use the

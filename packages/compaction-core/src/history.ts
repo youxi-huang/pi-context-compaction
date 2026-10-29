@@ -1,8 +1,10 @@
 // Retyped copy of the resident history.ts's retrieval half (v0.7.0 plan, WP1): `queryHistory` with
 // the snapshot and page types, the host's `SessionEntry` type import replaced by the specification's
-// structural record types in records.ts. Logic, bounds and thrown messages are unchanged (rule K2).
+// structural record types in records.ts. Bounds and thrown messages are unchanged (rule K2); since
+// ranking version 3 a search skips the retrieval tool's own results and centers each excerpt where
+// the most query terms meet, which the frozen resident copy does not (rule K9 keeps its bytes).
 // `freezeHistory` and the parent-grant machinery read the host's session manager and stay host-side;
-// grants are resident-only. The resident copy keeps its bytes (rule K9).
+// grants are resident-only.
 import { createHash } from "node:crypto";
 import { type Static, Type } from "typebox";
 import { Check } from "typebox/value";
@@ -70,12 +72,56 @@ function roleWeight(role: string): number {
 	return role === "user" ? 3 : role === "assistant" ? 2 : role === "toolResult" || role === "bashExecution" ? 0 : 1;
 }
 
+/** The retrieval tool's name on every host; its results copy other records. */
+export const HISTORY_TOOL = "context_history";
+
+const isRetrievalOutput = (entry: SessionRecord) =>
+	entry.type === "message" && entry.message.role === "toolResult" && entry.message.toolName === HISTORY_TOOL;
+
+/** Occurrences counted per term when placing an excerpt; a long log can repeat a short term thousands of times. */
+const HIT_LIMIT = 4096;
+/** Terms count as meeting when they fall within this many characters of the window's first hit. */
+const HIT_WINDOW = 400;
+
+/**
+ * Where a search excerpt starts: 120 characters before the earliest window that holds the most distinct
+ * terms. A single-term query keeps its first hit; a multi-term query finds the line where its terms
+ * meet, not the first place one of them appears in a long log.
+ */
+export function excerptStart(normalized: string, terms: readonly string[]): number {
+	const hits: { at: number; term: number }[] = [];
+	for (const [term, word] of terms.entries())
+		for (
+			let at = normalized.indexOf(word), count = 0;
+			at >= 0 && count < HIT_LIMIT;
+			at = normalized.indexOf(word, at + 1), count++
+		)
+			hits.push({ at, term });
+	if (!hits.length) return 0;
+	hits.sort((a, b) => a.at - b.at || a.term - b.term);
+	const inWindow = new Map<number, number>();
+	let best = hits[0].at;
+	let most = 0;
+	for (let first = 0, next = 0; first < hits.length; first++) {
+		for (; next < hits.length && hits[next].at - hits[first].at <= HIT_WINDOW; next++)
+			inWindow.set(hits[next].term, (inWindow.get(hits[next].term) ?? 0) + 1);
+		if (inWindow.size > most) {
+			most = inWindow.size;
+			best = hits[first].at;
+		}
+		const left = (inWindow.get(hits[first].term) ?? 1) - 1;
+		if (left) inWindow.set(hits[first].term, left);
+		else inWindow.delete(hits[first].term);
+	}
+	return Math.max(0, best - 120);
+}
+
 /** Branch-scoped literal search and paginated reads. Cursors are bound to the snapshot and query. */
 export function queryHistory(snapshot: HistorySnapshot, request: unknown, budgetTokens = 4000): HistoryPage {
 	if (!Check(historyQuerySchema, request)) throw new Error("HISTORY_QUERY_INVALID");
 	const signature = createHash("sha256")
 		// The ranking version is part of the signature: a cursor indexes the sorted candidate list.
-		.update(JSON.stringify([request.operation, request.query, request.entryId, "rank-v2"]))
+		.update(JSON.stringify([request.operation, request.query, request.entryId, "rank-v3"]))
 		.digest("hex");
 	let index = 0;
 	let offset = 0;
@@ -126,6 +172,8 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 			if (!text) return [];
 			if (request.operation === "read")
 				return entry.id === request.entryId ? [{ entry, text, score: 1, weight: 0, position }] : [];
+			// Earlier results would answer later searches with copies of themselves; a read by ID still works.
+			if (isRetrievalOutput(entry)) return [];
 			const normalized = text.toLocaleLowerCase();
 			const score = terms.reduce(
 				(total, term) => total + (entry.id === term ? 10 : normalized.includes(term) ? 1 : 0),
@@ -147,10 +195,7 @@ export function queryHistory(snapshot: HistorySnapshot, request: unknown, budget
 		const { entry, text, position } = candidates[index];
 		// Search returns short hit-centered excerpts. Read returns the complete source across pages.
 		let start = offset;
-		if (request.operation === "search") {
-			const hits = terms.map((term) => text.toLocaleLowerCase().indexOf(term)).filter((hit) => hit >= 0);
-			start = Math.max(0, (hits.length ? Math.min(...hits) : 0) - 120);
-		}
+		if (request.operation === "search") start = excerptStart(text.toLocaleLowerCase(), terms);
 		const charLimit = request.operation === "search" ? 1400 : remaining * 2;
 		let excerpt = text.slice(start, start + charLimit);
 		while (textTokens(JSON.stringify(excerpt)) + 100 > remaining && excerpt.length)

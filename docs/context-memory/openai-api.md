@@ -98,8 +98,65 @@ from the model's full window ([capacity profiles](context-pressure.md)).
 ## Prompt cache
 
 Pi's OpenAI provider sends the session's ID as `prompt_cache_key`, and the
-preview's session writer sends the same ID, so a compaction reads the prefix
-the session has already cached. Luna declares the explicit cache mode: by
-default Pi asks for nothing more, and with `PI_CACHE_RETENTION=long` it asks for
-a 30-minute lifetime. Catalog prices are estimates, not invoices; usage and
-cache reads come from OpenAI's own counts.
+preview's session writer sends the same ID. Luna's cache runs in OpenAI's
+implicit mode with a 30-minute lifetime: a request that names no lifetime gets
+`ttl: "30m"` from the server, and `PI_CACHE_RETENTION=long` asks for the same
+30 minutes explicitly. Pi never asks for the 12-hour lifetime, which is priced
+apart. Checked on 2026-10-29 from the `prompt_cache_options` OpenAI echoes.
+
+The implicit cache serves a request only when it continues an earlier request:
+the same items, then more. Two requests that share a long opening and differ
+after it do not share a cache; on 2026-10-29 the second of two such requests
+wrote all 5,101 shared tokens again. A compaction reads the session's cache
+because the writer's request is the session's last request with the closing
+instruction added, and only when the system prompt sits where the session's
+own requests put it. Pi 1.4.0 records the system prompt in the transcript; in
+a session begun before 1.4.0 its first record sits mid-history and Pi sends no
+leading prompt. A writer that added one at the head read nothing: on a 150,000
+token session the writer read 0 tokens before the fix and 150,145 after it,
+at a quarter of the cost.
+
+The preview bench measures this with `--cache session`, which runs each cut's
+warm-up turn on the session itself, so that the writer continues it as a
+session's last turn. `--cache warm` warms a copy and suits providers that
+match any shared prefix, such as DeepSeek; with Luna it reads nothing.
+
+Neither OpenCode's nor DSH's own compaction reads the session's cache.
+OpenCode sends the conversation as one rewritten text and DSH replays it with
+the system prompt first, so on 2026-10-29 each of their summary requests wrote
+its 126,000 to 195,000 tokens to the cache again.
+
+Catalog prices are estimates, not invoices; usage and cache reads come from
+OpenAI's own counts.
+
+## Host runs
+
+`scripts/context-memory-host-run.mjs` takes the official OpenCode 1.19.4 or
+DSH 0.2.1-rc.3 through fixture P5 with the Slice retrieval plugin and the
+capacity profile of a 200k or 272k route. The user pastes every command's
+output and the host's own model replies, so native compaction runs at the
+profile's line: 150,000 or 204,000 tokens. After two compactions the run asks
+P5's questions in one message, then four exact log timestamps from early
+outputs, which native summaries rarely keep: those come back through
+`context_history` or stay unknown. A message that would bring a request to
+262,000 tokens is not sent; when a compaction is due first, a short `Status?`
+lets it run.
+
+```sh
+npm install --prefix "$OPENCODE_STOCK" --save-exact --ignore-scripts --no-audit --no-fund opencode-ai@1.19.4
+npm install --prefix "$DSH_STOCK" --save-exact --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
+node scripts/context-memory-adapters-check.mjs
+node --experimental-strip-types scripts/context-memory-host-run.mjs \
+  --host opencode --route 200k --provider loopback \
+  --host-root "$OPENCODE_STOCK" --package-dir .artifacts/host-adapters/opencode \
+  --output-dir "$OUT"
+```
+
+`--provider loopback` answers from a local stand-in for the Responses API and
+spends nothing; it checks the wiring, not the model. `--provider openai` needs
+`--max-requests`, `--max-minutes` and `--max-cost-usd`, approved by the
+maintainer before the first request; the request limit also holds inside a
+turn. The script gives each run its own `HOME` and XDG directories or
+`DSH_HOME` under the output directory. `report.json` holds each model call's
+usage, the compactions with their pauses, the retrieval calls and both scores;
+`turns.jsonl` holds the replies.

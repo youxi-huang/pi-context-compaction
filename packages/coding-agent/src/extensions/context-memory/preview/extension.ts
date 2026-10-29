@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { HistorySnapshot as CoreHistorySnapshot } from "../../../../../compaction-core/src/history.ts";
+import {
+	type HistorySnapshot as CoreHistorySnapshot,
+	queryHistory,
+} from "../../../../../compaction-core/src/history.ts";
 import {
 	listHistory,
 	previewHistorySchema,
@@ -14,7 +17,7 @@ import {
 	workNoteSchema,
 } from "../../../../../compaction-core/src/work-notes.ts";
 import { readMemoryConfig, SESSION_WRITER } from "../config.ts";
-import { freezeHistory, type HistorySnapshot, queryHistory } from "../history.ts";
+import { freezeHistory, type HistorySnapshot } from "../history.ts";
 import { CONTEXT_NOTE_TYPE } from "../identity.ts";
 import { CallJournal } from "./call-journal.ts";
 import { PreviewMemoryController, previewErrorCode, reportPreviewError, unsupportedReason } from "./controller.ts";
@@ -322,7 +325,8 @@ export default function contextMemoryPreview(pi: ExtensionAPI): void {
 				return { content: [{ type: "text", text: JSON.stringify(low) }], details: low };
 			}
 			// A full read is returned exactly as before; search hits gain their price and mark.
-			const page = queryHistory(snapshot, query);
+			// The core's search, which centers excerpts where the terms meet; the frozen resident copy does not.
+			const page = queryHistory(asSnapshot(snapshot), query);
 			// A full read of an entry the reduced view replaces is a counted page-back; counts only.
 			if (query.operation === "read" && query.entryId) controller.recordHistoryRead(ctx, query.entryId);
 			const result = query.operation === "search" ? priceSearch(page, asSnapshot(snapshot), inContext) : page;

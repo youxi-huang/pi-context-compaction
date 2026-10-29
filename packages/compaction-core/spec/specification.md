@@ -546,9 +546,14 @@ from the snapshot's records, so a hit never widens branch or grant access.
 - `search` requires at least one literal term (`HISTORY_QUERY_REQUIRED`
   otherwise); terms are lowercased identifier-like tokens plus two-character
   Chinese bigrams, at most 64. Ranking is deterministic: more matched terms
-  first, then conversation turns before tool output, then newest first. Each
-  hit is a hit-centered excerpt (up to 1,400 characters, 120 characters of
-  lead) with the record's ID, parent ID, role and branch position.
+  first, then conversation turns before tool output, then newest first.
+  Results of the retrieval tool itself, `toolResult` records whose
+  `toolName` is `context_history`, are not searched: they copy other records;
+  a read by ID still returns them. Each hit is an excerpt of up to 1,400
+  characters that opens 120 characters before the earliest 400-character
+  window holding the most distinct terms, so a single term keeps its first
+  occurrence and a multi-term query lands where its terms meet. The ranking
+  version is 3.
 - `read` requires a record ID (`HISTORY_ENTRY_REQUIRED`); a record outside
   the snapshot or without readable text refuses with
   `HISTORY_SCOPE_DENIED`. Reads page the full normalized text from its

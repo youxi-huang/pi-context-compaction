@@ -9,7 +9,7 @@ import { type HostNeutralRecord, parseRecords, RECORDS_FORMAT, type RecordsFile,
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 const read = (path: string) => readFileSync(join(root, path), "utf8");
-const FIXTURES = ["P1", "P2", "P3", "P4"];
+const FIXTURES = ["P1", "P2", "P3", "P4", "P5"];
 /** The Pi message fields the record model does not name. */
 const PI_ONLY = ["api", "provider", "model", "usage", "timestamp"];
 
@@ -24,7 +24,11 @@ describe("host-neutral fixture records and the Pi converter", () => {
 		const { matched, different } = converterIdentity(reader());
 		expect(different).toEqual([]);
 		expect(matched).toEqual(FIXTURES);
-		const pins = { ...JSON.parse(read("manifest.json")).files, ...JSON.parse(read("manifest-0.6.json")).files };
+		const pins = {
+			...JSON.parse(read("manifest.json")).files,
+			...JSON.parse(read("manifest-0.6.json")).files,
+			...JSON.parse(read("manifest-long.json")).files,
+		};
 		for (const id of FIXTURES) {
 			const converted = toPiSession(parseRecords(read(`${id}/records.jsonl`)));
 			expect(converted, id).toBe(read(`${id}/session.jsonl`));
@@ -64,7 +68,7 @@ describe("host-neutral fixture records and the Pi converter", () => {
 		const edited = original.replace("Correct the low-stock threshold to 15", "Correct the low-stock threshold to 16");
 		expect(edited).not.toBe(original);
 		const changed = converterIdentity(reader({ "P2/records.jsonl": edited }));
-		expect(changed.matched).toEqual(["P1", "P3", "P4"]);
+		expect(changed.matched).toEqual(["P1", "P3", "P4", "P5"]);
 		expect(changed.different).toHaveLength(1);
 		expect(changed.different[0]).toMatch(/^P2: converted [0-9a-f]{64}, manifest\.json pins [0-9a-f]{64}$/);
 		// Dropping the native payload changes Pi's message timestamps, so it fails too.

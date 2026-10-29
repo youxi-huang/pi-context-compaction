@@ -46,6 +46,41 @@ describe("DSH native history codec", () => {
 		);
 		expect(() => dshHistorySnapshot(id, [{ ...native[0], seq: SessionSeq(1) }])).toThrow("HISTORY_SOURCE_INVALID");
 	});
+	it("names each tool result after its call, so a search skips earlier retrieval output", () => {
+		const session = Session.create(id);
+		const call = (callId: string, name: string) =>
+			session.append("tool/call", { turn: 1, step: 1, callId, name, arguments: "{}" } as never);
+		const result = (callId: string, text: string) =>
+			session.append(
+				"tool/result",
+				{
+					turn: 1,
+					step: 1,
+					message: {
+						role: "tool",
+						source: { kind: "tool", callId },
+						toolCallId: callId,
+						content: [{ type: "text", text }],
+					},
+				} as never,
+				{ surfaceOp: "append" },
+			);
+		const native = [
+			session.append("user/message", user("The rollback to eu-west takes 18 minutes."), { surfaceOp: "append" }),
+			call("call-1", "context_history"),
+			result("call-1", '{"entries":[{"text":"The rollback to eu-west takes 18 minutes."}]}'),
+			call("call-2", "grep"),
+			result("call-2", "notes.md: rollback takes 18 minutes"),
+		];
+		const snapshot = dshHistorySnapshot(id, native);
+		const named = snapshot.entries.flatMap((entry) =>
+			entry.type === "message" && entry.message.role === "toolResult" ? [entry.message.toolName] : [],
+		);
+		expect(named).toEqual(["context_history", "grep"]);
+		const page = queryHistory(snapshot, { operation: "search", query: "rollback minutes" });
+		expect(page.entries.map((entry) => entry.entryId)).toEqual(["0", "4"]);
+		expect(queryHistory(snapshot, { operation: "read", entryId: "2" }).entries[0].text).toContain("18 minutes");
+	});
 	it("keeps media and unknown events opaque and detects their changed native payload", () => {
 		const session = Session.create(id);
 		const native = [

@@ -769,6 +769,28 @@ describe("excerpts in the preview", () => {
 			);
 			const list = (await run({ operation: "list", kind: "state" })).details as { items: { readTokens: number }[] };
 			expect(list.items[0].readTokens).toBeGreaterThan(0);
+			// The tool's own earlier result copies the records above; a later search does not return it.
+			session.reply("a3", "", [
+				{ type: "toolCall", id: "h1", name: "context_history", arguments: { operation: "search", query: "x" } },
+			]);
+			session.append({
+				type: "message",
+				id: "h1-result",
+				parentId: "a3",
+				timestamp,
+				message: {
+					role: "toolResult",
+					toolCallId: "h1",
+					toolName: "context_history",
+					content: [{ type: "text", text: JSON.stringify(search) }],
+					isError: false,
+					timestamp: 1,
+				},
+			});
+			const again = (await run({ operation: "search", query: "ENABLE_FAST_PATH" })).details as {
+				entries: { entryId: string }[];
+			};
+			expect(again.entries.map((hit) => hit.entryId)).toEqual(["u2", "u1"]);
 		} finally {
 			if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 			else process.env.PI_CODING_AGENT_DIR = previous;

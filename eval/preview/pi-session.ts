@@ -94,7 +94,7 @@ export function toPiSession(file: RecordsFile): string {
 	return `${[header, ...file.records.map(piEntry)].map((line) => JSON.stringify(line)).join("\n")}\n`;
 }
 
-export const PREVIEW_MANIFESTS = ["manifest.json", "manifest-0.6.json"] as const;
+export const PREVIEW_MANIFESTS = ["manifest.json", "manifest-0.6.json", "manifest-long.json"] as const;
 
 export interface IdentityResult {
 	/** Fixture IDs whose converted session matched its pin. */

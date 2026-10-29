@@ -7,10 +7,13 @@ import type { RecordContentBlock, SessionRecord } from "../../compaction-core/sr
 /** Append-log order, never surface order or a numeric shadowedRange expansion. */
 export function dshHistorySnapshot(sessionId: string, events: readonly SessionEvent[]): HistorySnapshot {
 	const entries: SessionRecord[] = [];
+	// Tool results name their call only; the call event names the tool, so a search can tell retrieval output apart.
+	const toolNames = new Map<string, string>();
 	for (const [index, input] of events.entries()) {
 		if (input.seq !== index) throw new Error("HISTORY_SOURCE_INVALID: expected the complete contiguous DSH log");
 		// Stable key order also makes the core's existing cursor hash deterministic.
 		const event = JSON.parse(canonicalize(input)) as SessionEvent;
+		if (event.type === "tool/call") toolNames.set(event.data.callId, event.data.name);
 		const base = {
 			id: String(event.seq),
 			parentId: entries.at(-1)?.id ?? null,
@@ -49,7 +52,13 @@ export function dshHistorySnapshot(sessionId: string, events: readonly SessionEv
 			message: {
 				role,
 				content,
-				...(message.role === "tool" ? { toolCallId: message.toolCallId, isError: message.isError ?? false } : {}),
+				...(message.role === "tool"
+					? {
+							toolCallId: message.toolCallId,
+							...(toolNames.has(message.toolCallId) ? { toolName: toolNames.get(message.toolCallId) } : {}),
+							isError: message.isError ?? false,
+						}
+					: {}),
 			},
 		});
 	}

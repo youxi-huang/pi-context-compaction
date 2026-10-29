@@ -59,7 +59,7 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | --- | --- |
 | [operations.md](docs/context-memory/operations.md) | Before routine maintenance: red CI, dependency and security updates, CodeQL alerts, upstream ports. |
 | [handoff-protocol.md](docs/context-memory/handoff-protocol.md) | A task names a branch that carries `HANDOFF.md`, or the user asks for a handoff. |
-| [openai-api.md](docs/context-memory/openai-api.md) | Pi, OpenCode or DSH needs OpenAI's API in a cloud session, an OpenAI request returns 401, or a run must stay below GPT-6 Luna's 272k-token price line. |
+| [openai-api.md](docs/context-memory/openai-api.md) | Pi, OpenCode or DSH needs OpenAI's API in a cloud session, an OpenAI request returns 401, a run must stay below GPT-6 Luna's 272k-token price line, or OpenCode or DSH needs a real-host run. |
 | [validation.md](docs/context-memory/validation.md) | Looking for earlier evidence. Newest entry first; search its headings rather than reading it whole. |
 | [v0.4.0-plan.md](docs/context-memory/v0.4.0-plan.md) | Questioning a settled design choice; its decision table records why. |
 | [v0.5.0-plan.md](docs/context-memory/v0.5.0-plan.md) | Working on 0.5.0: quotation repair, typed retrieval, the writer bench or the preview evaluation set. |
@@ -79,3 +79,4 @@ Open a document in `docs/context-memory/` when its row applies, not by default. 
 | Missing event lines, wrong error class, quotas, rotation | `events.ts`; `controller.ts` (`settle`, `guarded`, `compactionFailed`); `scripts/context-memory-report.mjs` |
 | Build identity, model baseline, release version | `scripts/stamp-context-memory.mjs`, `scripts/context-memory-model-data.mjs`, `.github/workflows/context-memory.yml` |
 | Preview writer cost, refusals, note size or recall on a real provider | `eval/preview/README.md`, `scripts/context-memory-preview-bench.mjs`. By default it reproduces a session's prompt cache; the request, time and cost limits go to the maintainer before the first request |
+| Native compaction and `context_history` on real OpenCode or DSH | `scripts/context-memory-host-run.mjs`, [openai-api.md](docs/context-memory/openai-api.md#host-runs). `--provider loopback` first; limits for a provider run go to the maintainer before the first request |

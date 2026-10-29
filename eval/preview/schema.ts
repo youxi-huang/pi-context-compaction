@@ -9,6 +9,11 @@ export const PREVIEW_FIXTURE_VERSION = "0.5-preview-fixtures.1";
  * would replace.
  */
 export const P4_FIXTURE_VERSION = "0.6-preview-fixtures.1";
+/**
+ * P5, the long route, under its own version and manifest: one session whose cuts sit near the 150k, 184k, 204k and
+ * 256k context lines, for first compactions on 200k and 272k routes. P1 to P4 keep their bytes and pins.
+ */
+export const P5_FIXTURE_VERSION = "0.7-preview-fixtures-long.1";
 export const PREVIEW_SCORER_VERSION = "0.5-preview-scorer.2";
 
 const id = Type.String({ minLength: 1 });
@@ -79,7 +84,7 @@ export const previewProbeSchema = Type.Object(
 
 export const previewFixtureSchema = Type.Object(
 	{
-		version: Type.Union([Type.Literal(PREVIEW_FIXTURE_VERSION), Type.Literal(P4_FIXTURE_VERSION)]),
+		version: Type.Union([Type.Literal(PREVIEW_FIXTURE_VERSION), Type.Literal(P4_FIXTURE_VERSION), Type.Literal(P5_FIXTURE_VERSION)]),
 		id,
 		description: id,
 		tokenMetric: Type.Literal("sum-ceil-utf8-source-bytes-div-3"),

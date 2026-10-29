@@ -1,5 +1,159 @@
 # Validation record
 
+## GPT-6 Luna on OpenCode and DSH: native compactions at 150k and 204k, then Slice retrieval, 2026-10-29 UTC
+
+A real-provider run, recorded apart from the synthetic evidence below.
+Official OpenCode 1.19.4 and DSH 0.2.1-rc.3 with the Slice retrieval
+packages, `openai/gpt-6-luna` on OpenAI's API at effort `max`, and each
+route's capacity profile ([capacity profiles](context-pressure.md)): a 200k
+route compacting at 150,000 tokens and a 272k route at 204,000, both with a
+32,000-token output cap. Fixture P5 ran as a session in which the user pastes
+every command's output: 37 messages of at most about 25,000 tokens, sent until
+the second native compaction had run or was due. Then came one message of
+P5's questions and one of four exact log timestamps
+([host runs](openai-api.md#host-runs)). The maintainer approved 300 requests,
+120 minutes and $5; everything below used 265 requests, about 33 minutes and
+$0.84 at catalog prices.
+
+| Host, route | Compacted after | Summary | Largest request | Requests | Cache share | Cost | Questions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| OpenCode, 200k | 152,810 and 152,487 | 93 and 93 s | 152,810 | 26 | 73% | $0.11 | 11 of 12 |
+| OpenCode, 272k | 212,890 and 220,203 | 84 and 78 s | 220,203 | 40 | 80% | $0.16 | 14 of 14 |
+| DSH, 200k | 164,030 and 157,286 | 14 and 14 s | 164,030 | 33 | 80% | $0.11 | 12 of 12 |
+| DSH, 272k | 206,478 and 212,182 | 12 and 15 s | 212,182 | 33 | 80% | $0.14 | 14 of 14 |
+
+"Compacted after" is the request that crossed the line: OpenCode compacts
+right after it, DSH before the next request. Cache share is cache reads over
+all input tokens. No request reached 272,000 tokens and no compaction failed.
+
+**The profiles held on both hosts.** Each route compacted twice near its line.
+DSH's summary calls ran without reasoning and returned 1,109 to 1,357 output
+tokens under the 8,192-token cap. OpenCode summarized at the session's `max`
+effort, 5,940 to 8,804 reasoning tokens a summary. Neither host's summary
+request read the session's cache: each wrote its 126,000 to 195,000 tokens
+again. OpenCode's own cost figures matched the catalog's; its catalog's tier
+above 200,000 tokens was not applied below 272,000.
+
+**Native summaries answered nearly everything.** 51 of 52 answers were right
+and none was wrong. Luna restated each pasted value in its replies, and the
+summaries kept those replies. Only OpenCode on the 272k route called
+`context_history` during the questions, three times for the peak lag. The one
+miss, the rollback time on OpenCode's 200k route, was answered unknown without
+a search.
+
+**Exact timestamps exposed a retrieval fault.** None of the four survived a
+summary. OpenCode found all four on both routes, with 28 and 26 calls and over
+two minutes each. DSH found three on the 200k route with 15 calls and gave
+`2026-01-02T02:13:00Z` for the lag peak at `2026-01-06T02:13:00Z`, inferred
+from the log's cycling timestamps. On the 272k route it answered all four
+unknown without a search. Replaying the 38 searches the model made showed
+why. A search excerpt opened at the first occurrence of any query term, so
+`lag_s=47` opened at an early `47`, hundreds of lines before the peak.
+Searches also returned the tool's own earlier results, 33 copies in those 38
+pages. Against the same snapshots the fixed search put the asked line on the
+first page in 32 of 38 searches, against 15 before, with no copies.
+
+**After the fix**, both 200k routes ran again from the start with
+`scripts/context-memory-host-run.mjs` and the rebuilt packages (OpenCode
+`78afdecd13cb1d63`, DSH `9aa0e2f88f26e6ad`; before, `f5c3a6c64aa34402` and
+`0a4be2f4888a472a`):
+
+| Host, 200k route | Questions | Timestamps | Their searches | Their requests and time |
+| --- | ---: | ---: | ---: | ---: |
+| OpenCode, before | 11 of 12 | 4 of 4 | 28 | 29 in 127 s |
+| OpenCode, after | 12 of 12 | 4 of 4 | 4 | 5 in 16 s |
+| DSH, before | 12 of 12 | 3 of 4 | 15 | 16 in 82 s |
+| DSH, after | 11 of 12 | 4 of 4 | 4 | 2 in 10 s |
+
+Compactions again ran after 154,773 and 153,677 tokens on OpenCode and
+157,589 and 153,772 on DSH. DSH's miss was again an unknown without a search,
+here for the peak lag. The adapters' tool descriptions said what the tool
+does but not when to use it; they now say that summaries drop exact values,
+quotes and timestamps, and to search before answering unknown. With that
+build, the DSH 272k session that had searched for none of the four answered
+two new questions, the time shard 17 halted and the rollback document's
+sentence, with two searches, both right, in 13 seconds. That is one session,
+not a measurement.
+
+The Pi preview searched with the resident copy of the same function and now
+uses the core's; its run above predates the fix. The frozen resident runtime
+keeps its copy.
+
+## GPT-6 Luna on OpenAI's API: first and repeated compactions on 200k and 272k routes, 2026-10-29 UTC
+
+A real-provider run, recorded apart from the synthetic evidence below. Official
+Pi 1.4.0 with the independent preview, `openai/gpt-6-luna` on OpenAI's API at
+thinking `max`, the maintainer's daily level. The key was a network secret and
+Pi held a placeholder ([openai-api.md](openai-api.md)). Fixture P5, version
+`0.7-preview-fixtures-long.1`: `--cuts 1,3,5` is a 200k route compacting three
+times at about 150,000 tokens of context, `--cuts 2,4` a 272k route compacting
+twice at about 204,000, each later round with the earlier notes in place. Probes
+ran only with `context_history`, as a session has it, and every run carried
+`--max-input-tokens 272000`. The maintainer approved 480 requests, 150 minutes
+and $8; the runs and diagnostics below used about 250 requests, 38 minutes and
+$0.59 at catalog prices.
+
+**First run**, preview `stock-preview+src.cacd9ac0956e0ff1` from `f6c5164`,
+`--cache warm`. Every compaction committed on its first attempt, with no repair.
+
+| Route, round | Writer input | Pause | Note | Current facts cited | Carried facts cited |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 200k, 1 | 149,444 | 132 s | 7,182 B | 8 of 8 | none due |
+| 200k, 2 | 155,629 | 138 s | 8,766 B | 7 of 8 | 14 of 16 |
+| 200k, 3 | 154,080 | 172 s | 10,931 B | 11 of 11 | 30 of 33 |
+| 272k, 1 | 207,551 | 119 s | 7,307 B | 8 of 8 | 8 of 8 |
+| 272k, 2 | 202,540 | 173 s | 9,819 B | 9 of 9 | 22 of 24 |
+
+Writer input is the first writer call's, in OpenAI's tokens; cited facts are gold
+answers whose evidence the committed note cites.
+
+Probes passed 25 of 30 on the 200k route and 15 of 19 on the 272k route, with
+nothing fabricated and no wrong value. One answer, `shard 17`, was right but
+scored incorrect against the number 17; the gold now accepts `17`, `shard 17`
+and `shard-17`, and rescored offline the 200k route passes 26 of 30. The other
+eight stopped at the bench's six-round limit while still calling
+`context_history`: Luna at `max` kept checking values the note already held,
+among them the current batch size, and did not settle the authority probe or
+the questions with no answer in the session. The runs made 182 retrieval calls for 49 questions. 221 requests,
+$0.34.
+
+**The writer read no cache.** It read none of about 459,000 input tokens on the
+200k route, and 202,537 of about 621,000 on the 272k route, all of them within
+one compaction that called the writer twice. Requests captured offline showed why. Pi 1.4.0 records the system
+prompt in the transcript; P5, like a session begun before 1.4.0, has its first
+record mid-history, where Pi sends it, with no leading prompt. The preview
+checked only the first message and put the prompt and tools at the head, so its
+request diverged from the session's at the first item. Two further facts came
+from small direct requests: Luna's implicit cache has a 30-minute lifetime when
+a request names none, and it serves a request only as a continuation of an
+earlier one; of two 5,104-token requests that differed only in their last line,
+the second read nothing and wrote 5,101 tokens again. The bench's warm-up, run
+on a copy, could therefore never warm the writer's request.
+
+**After the fix**, `8899292`, preview `stock-preview+src.240fab02437d72e9`, the writer sends the transcript as it stands when
+it records any system message, and `--cache session` runs the warm-up turn on
+the session itself. On one 150,000-token session the writer read 0 of 155,101
+tokens before and 150,145 of 153,696 after, at $0.0272 and $0.0068. The chains,
+again with `--compactions-only` so that probes were not repeated:
+
+| Route | Writer cache share | Writer cost | Pauses | Carried facts cited |
+| --- | ---: | ---: | --- | --- |
+| 200k, three rounds | 0% before, 95.2% after | $0.0796 before, $0.0329 after | 148, 108 and 138 s | 16 of 16, 29 of 33 |
+| 272k, two rounds | 32.6% before, 97.1% after | $0.0682 before, $0.0249 after | 129 and 186 s | 8 of 8, 23 of 24 |
+
+All five compactions again committed on their first attempt. Three of them
+answered first with a tool call, which the writer declined once as designed;
+the second call read the first one's cache too. The pause did not shorten
+consistently: it follows the reasoning Luna spends at `max`, 2,000 to 15,000
+tokens per call. The largest request of all runs, a warm-up turn, carried
+211,456 tokens, 60,544 below the 272,000-token price line.
+
+The resident runtime had the same first-message check, which there also
+duplicated the instructions. With the maintainer's approval it was fixed in
+`b5b1053`, its fingerprint is now `1.1.0-context-memory.0.3.0+src.c1ed81ca7698d24e`,
+and the frozen evaluator is pinned to `b5b1053`; `node scripts/context-memory-ops.mjs
+verify` and `node eval/check.mjs` passed offline after the pin.
+
 ## Capacity profile: official-host pressure simulations, 2026-10-28 UTC
 
 Candidate `stock-preview+src.cacd9ac0956e0ff1`, built from `9455070`. Every

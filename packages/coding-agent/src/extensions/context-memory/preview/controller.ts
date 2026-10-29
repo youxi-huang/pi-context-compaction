@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { getInitialSystemMessage, type Tool } from "@earendil-works/pi-ai";
+import type { Tool } from "@earendil-works/pi-ai";
 import {
 	buildSessionProjection,
 	type CompactionEntry,
@@ -191,6 +191,16 @@ export function piReserveTokens(
 /** Pi's own token estimate, four characters per token, so the request guards and Pi's threshold share a scale. */
 function piTokens(text: string): number {
 	return Math.ceil(text.length / 4);
+}
+
+/**
+ * Whether the transcript carries the system prompt itself. Pi 1.4.0 records system messages in the session and then
+ * sends the transcript as it stands, with no leading prompt of its own, even when the first one sits mid-history, as
+ * in a session begun before 1.4.0. Earlier hosts record none and send their prompt and tools first. A writer request
+ * that put them first anyway would diverge from the session's requests at the first item and miss the whole cache.
+ */
+export function carriesSystemPrompt(messages: readonly { role: string }[]): boolean {
+	return messages.some((message) => message.role === "system");
 }
 
 /**
@@ -568,7 +578,7 @@ export class PreviewMemoryController {
 			const messages = structuredClone(
 				convertToLlm(reductionView ? applyReduction(projection.messages, reductionView) : projection.messages),
 			);
-			const prefix = getInitialSystemMessage(messages)
+			const prefix = carriesSystemPrompt(messages)
 				? { messages, sessionId }
 				: { messages, sessionId, systemPrompt: ctx.getSystemPrompt(), tools: structuredClone(this.activeTools()) };
 			const config = { ...this.config, noteRepair: false };
@@ -1043,7 +1053,7 @@ export class PreviewMemoryController {
 			assertToolPairs(projected);
 			const estimate =
 				projected.reduce((sum, message) => sum + estimateTokens(message), 0) +
-				(getInitialSystemMessage(projected) ? 0 : piTokens(ctx.getSystemPrompt()));
+				(carriesSystemPrompt(projected) ? 0 : piTokens(ctx.getSystemPrompt()));
 			const limit = requestLimit(ctx.model);
 			if (estimate > limit) throw new Error("CONTEXT_INPUT_TOO_LARGE");
 			headroom = limit - estimate;
@@ -1075,7 +1085,7 @@ export class PreviewMemoryController {
 			if (messages.at(-1)?.role !== "user") return messages;
 			const session = ctx.sessionManager;
 			const outside = [
-				...(getInitialSystemMessage(messages) ? [] : [ctx.getSystemPrompt()]),
+				...(carriesSystemPrompt(messages) ? [] : [ctx.getSystemPrompt()]),
 				...this.activeTools().map(
 					(tool) => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters)}`,
 				),
@@ -1231,7 +1241,7 @@ export class PreviewMemoryController {
 			assertToolPairs(prefixMessages);
 			const sessionWriter = this.config.writerModel === SESSION_WRITER;
 			// The session's ID travels with the prefix, as Pi sends it with each of the session's requests.
-			const prefix = getInitialSystemMessage(prefixMessages)
+			const prefix = carriesSystemPrompt(prefixMessages)
 				? { messages: prefixMessages, sessionId: attempt.sessionId }
 				: {
 						systemPrompt: ctx.getSystemPrompt(),

@@ -312,7 +312,11 @@ The session writer's request is the session's own system prompt, tools and
 messages plus one closing message, and it sets no tool choice, just as the
 session's requests do. Since 0.5.3 it also carries the session's ID, which Pi
 sends with each of the session's requests: Pi's OpenAI providers key their
-prompt cache on that ID, and providers that need no key ignore it. A provider that
+prompt cache on that ID, and providers that need no key ignore it. When the
+transcript records the system prompt itself, as Pi 1.4.0 does, the writer sends
+it where the transcript has it, mid-history included in a session begun before
+1.4.0, and adds the host's prompt and tools at the head only when the transcript
+records none: the session's own requests are built the same way. A provider that
 caches prompt prefixes therefore serves most of the request from the cache the
 session has already warmed: on DeepSeek, 95 to 97% of the writer's input over
 192 compactions. The closing message tells

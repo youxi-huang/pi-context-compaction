@@ -1,5 +1,79 @@
 # Validation record
 
+## GPT-6 Luna on OpenAI's API: first and repeated compactions on 200k and 272k routes, 2026-10-29 UTC
+
+A real-provider run, recorded apart from the synthetic evidence below. Official
+Pi 1.4.0 with the independent preview, `openai/gpt-6-luna` on OpenAI's API at
+thinking `max`, the maintainer's daily level. The key was a network secret and
+Pi held a placeholder ([openai-api.md](openai-api.md)). Fixture P5, version
+`0.7-preview-fixtures-long.1`: `--cuts 1,3,5` is a 200k route compacting three
+times at about 150,000 tokens of context, `--cuts 2,4` a 272k route compacting
+twice at about 204,000, each later round with the earlier notes in place. Probes
+ran only with `context_history`, as a session has it, and every run carried
+`--max-input-tokens 272000`. The maintainer approved 480 requests, 150 minutes
+and $8; the runs and diagnostics below used about 250 requests, 38 minutes and
+$0.59 at catalog prices.
+
+**First run**, preview `stock-preview+src.cacd9ac0956e0ff1` from `f6c5164`,
+`--cache warm`. Every compaction committed on its first attempt, with no repair.
+
+| Route, round | Writer input | Pause | Note | Current facts cited | Carried facts cited |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 200k, 1 | 149,444 | 132 s | 7,182 B | 8 of 8 | none due |
+| 200k, 2 | 155,629 | 138 s | 8,766 B | 7 of 8 | 14 of 16 |
+| 200k, 3 | 154,080 | 172 s | 10,931 B | 11 of 11 | 30 of 33 |
+| 272k, 1 | 207,551 | 119 s | 7,307 B | 8 of 8 | 8 of 8 |
+| 272k, 2 | 202,540 | 173 s | 9,819 B | 9 of 9 | 22 of 24 |
+
+Writer input is the first writer call's, in OpenAI's tokens; cited facts are gold
+answers whose evidence the committed note cites.
+
+Probes passed 25 of 30 on the 200k route and 15 of 19 on the 272k route, with
+nothing fabricated and no wrong value. One answer, `shard 17`, was right but
+scored incorrect against the number 17. The other eight stopped at the bench's
+six-round limit while still calling `context_history`: Luna at `max` kept
+checking values the note already held, among them the current batch size, and
+did not settle the authority probe or the questions with no answer in the
+session. The runs made 182 retrieval calls for 49 questions. 221 requests,
+$0.34.
+
+**The writer read no cache.** It read none of about 459,000 input tokens on the
+200k route, and 202,537 of about 621,000 on the 272k route, all of them within
+one compaction that called the writer twice. Requests captured offline showed why. Pi 1.4.0 records the system
+prompt in the transcript; P5, like a session begun before 1.4.0, has its first
+record mid-history, where Pi sends it, with no leading prompt. The preview
+checked only the first message and put the prompt and tools at the head, so its
+request diverged from the session's at the first item. Two further facts came
+from small direct requests: Luna's implicit cache has a 30-minute lifetime when
+a request names none, and it serves a request only as a continuation of an
+earlier one; of two 5,104-token requests that differed only in their last line,
+the second read nothing and wrote 5,101 tokens again. The bench's warm-up, run
+on a copy, could therefore never warm the writer's request.
+
+**After the fix**, `8899292`, preview `stock-preview+src.240fab02437d72e9`, the writer sends the transcript as it stands when
+it records any system message, and `--cache session` runs the warm-up turn on
+the session itself. On one 150,000-token session the writer read 0 of 155,101
+tokens before and 150,145 of 153,696 after, at $0.0272 and $0.0068. The chains,
+again with `--compactions-only` so that probes were not repeated:
+
+| Route | Writer cache share | Writer cost | Pauses | Carried facts cited |
+| --- | ---: | ---: | --- | --- |
+| 200k, three rounds | 0% before, 95.2% after | $0.0796 before, $0.0329 after | 148, 108 and 138 s | 16 of 16, 29 of 33 |
+| 272k, two rounds | 32.6% before, 97.1% after | $0.0682 before, $0.0249 after | 129 and 186 s | 8 of 8, 23 of 24 |
+
+All five compactions again committed on their first attempt. Three of them
+answered first with a tool call, which the writer declined once as designed;
+the second call read the first one's cache too. The pause did not shorten
+consistently: it follows the reasoning Luna spends at `max`, 2,000 to 15,000
+tokens per call. The largest request of all runs, a warm-up turn, carried
+211,456 tokens, 60,544 below the 272,000-token price line.
+
+The resident runtime had the same first-message check, which there also
+duplicated the instructions. With the maintainer's approval it was fixed in
+`b5b1053`, its fingerprint is now `1.1.0-context-memory.0.3.0+src.c1ed81ca7698d24e`,
+and the frozen evaluator is pinned to `b5b1053`; `node scripts/context-memory-ops.mjs
+verify` and `node eval/check.mjs` passed offline after the pin.
+
 ## Capacity profile: official-host pressure simulations, 2026-10-28 UTC
 
 Candidate `stock-preview+src.cacd9ac0956e0ff1`, built from `9455070`. Every

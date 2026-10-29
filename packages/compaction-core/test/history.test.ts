@@ -5,11 +5,13 @@
 // untouched; this file imports nothing from Pi. Snapshots are built directly from invented
 // records because `freezeHistory` reads the host's session manager and stays host-side.
 import { describe, expect, it } from "vitest";
-import { type HistorySnapshot, queryHistory } from "../src/history.ts";
+import { excerptStart, type HistorySnapshot, queryHistory } from "../src/history.ts";
 import { hashEntries } from "../src/identity.ts";
 import type { SessionRecord } from "../src/records.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
+const sourceTextOf = (record: SessionRecord) =>
+	record.type === "message" && typeof record.message.content === "string" ? record.message.content : "";
 
 function user(id: string, parentId: string | null, content: string): SessionRecord {
 	return { type: "message", id, parentId, timestamp, message: { role: "user", content } };
@@ -97,6 +99,58 @@ describe("compaction core: branch-scoped history retrieval", () => {
 		// An entry ID in the query still outranks everything else.
 		expect(queryHistory(frozen, { operation: "search", query: "compact tool-dump" }).entries[0].entryId).toBe(
 			"tool-dump",
+		);
+	});
+
+	it("centers a search excerpt where the most query terms meet, not where one of them first appears", () => {
+		// A pasted lag report: "47" and "lag" appear from the first lines, the peak line comes much later.
+		const lines = Array.from(
+			{ length: 700 },
+			(_, i) =>
+				`2026-01-0${(i % 7) + 1}T02:${String(i % 60).padStart(2, "0")}:00Z lag batch=${i} rows=${(i * 37) % 900} latency_ms=${(i * 47) % 400} status=ok`,
+		);
+		lines[433] = "2026-01-06T02:13:00Z lag peak shard 09 lag_s=47 (highest in window)";
+		const report = user("lag-report", null, `$ node scripts/lag-report.js --hours 6\n${lines.join("\n")}`);
+		const frozen = snapshot([report]);
+		const [hit] = queryHistory(frozen, { operation: "search", query: "lag_s=47 peak" }).entries;
+		expect(hit.text).toContain("2026-01-06T02:13:00Z lag peak shard 09 lag_s=47");
+		const peak = sourceTextOf(report).indexOf("2026-01-06T02:13:00Z lag peak");
+		// The window may open on a "47" in the line before; the excerpt still holds the whole peak line.
+		expect(hit.offset).toBeLessThanOrEqual(peak);
+		expect(hit.offset).toBeGreaterThanOrEqual(peak - 400 - 120);
+		// A single term keeps its first occurrence, 120 characters of lead included.
+		const [first] = queryHistory(frozen, { operation: "search", query: "latency_ms" }).entries;
+		expect(first.offset).toBe(Math.max(0, sourceTextOf(report).indexOf("latency_ms") - 120));
+		// Terms that never meet fall back to the earliest hit.
+		expect(excerptStart("alpha ......... beta", ["beta", "alpha"])).toBe(0);
+		expect(excerptStart(`${"x".repeat(500)}alpha${"y".repeat(500)}alpha beta`, ["alpha", "beta"])).toBe(1005 - 120);
+		expect(excerptStart("nothing here", ["absent"])).toBe(0);
+	});
+
+	it("searches past the retrieval tool's own results, which a read by ID still returns", () => {
+		const fact = user("fact", null, "The rollback to eu-west takes 18 minutes.");
+		const result = (id: string, parentId: string, toolName: string): SessionRecord => ({
+			type: "message",
+			id,
+			parentId,
+			timestamp,
+			message: {
+				role: "toolResult",
+				toolCallId: `call-${id}`,
+				toolName,
+				isError: false,
+				content: [{ type: "text", text: '{"entries":[{"text":"The rollback to eu-west takes 18 minutes."}]}' }],
+			},
+		});
+		const frozen = snapshot([
+			fact,
+			result("earlier-search", "fact", "context_history"),
+			result("grep", "earlier-search", "grep"),
+		]);
+		const page = queryHistory(frozen, { operation: "search", query: "rollback minutes" });
+		expect(page.entries.map((entry) => entry.entryId)).toEqual(["fact", "grep"]);
+		expect(queryHistory(frozen, { operation: "read", entryId: "earlier-search" }).entries[0].text).toContain(
+			"18 minutes",
 		);
 	});
 

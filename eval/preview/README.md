@@ -36,6 +36,7 @@ node --experimental-strip-types eval/preview/pi-session.ts --check
 | P2 | about 51,000 | 2 | Decisions and errors among long tool outputs; a corrected threshold and due date; a file the user forbids creating |
 | P3 | about 44,000 | 3 | Answers a note cannot hold: exact values among 400 endpoint latencies, 200 audited packages and 900 log lines; twelve edit and write calls and four failed tool calls to count and tell apart; a timeout raised for every service and then restored for one |
 | P4 | about 70,000 | 3 | Answers in the entries a deterministic reduction would replace: a configuration, a source file and a runbook read again after they changed, and long test, log, search and load outputs that later turns consumed; user rulings and a failed command as controls; prompts naming request and merchant IDs that only tool outputs hold |
+| P5 | about 377,000 | 5 | Several compactions of one long session on two routes: checkpoints 1, 3 and 5 at about 150,000 tokens of context each on a 200k route, 2 and 4 at about 204,000 on a 272k route; early facts every later round must carry through the notes before it; a batch size changed after the first and second compactions and a window moved and moved back |
 
 P1 and P2 test what a note keeps; with no tools, the notes alone answered nearly all their probes in the first
 provider run. P3 tests retrieval: most of its answers are exact values or inventories that only `context_history`
@@ -46,11 +47,18 @@ through a user ruling, assistant text, a failed command's output or a file's lat
 both. Its records advance a clock, 15 seconds apart with one gap of 95 minutes before a user message, so an
 idle-gap rule can be measured; P1 to P3 carry one fixed time.
 
+P5 has its own version and manifest, `manifest-long.json`, so P1 to P4 keep their pins. Its context sizes are o200k
+tokens of the readable text, counted when the fixture was tuned; its source tokens run lower, because its logs hold
+about 2.6 bytes per token. A run measures one route with `--cuts`: `--cuts 1,3,5` compacts three times on a 200k
+route and `--cuts 2,4` twice on a 272k route, each later round with the earlier notes in place of what they replaced,
+as a session continues after `/compact`. Every compaction stays below 272,000 tokens, where OpenAI's long-context
+price begins. Its cuts release more than 80,000 source tokens, so it is not part of the default fixture set.
+
 Source tokens are `ceil(UTF-8 bytes / 3)` of the readable text, the preview's own size proxy. Each checkpoint
 follows a completed assistant turn. Every tool call has exactly one result. Every cut of P1 to P4 releases fewer
 than 80,000 source tokens, so all of them fall in the first v0.2.3 note-budget tier.
 
-The 108 probes each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
+The 108 probes of P1 to P4 and the 49 of P5 each ask for one JSON answer: `{"status":"answer","value":...,"evidence":[...]}` or
 `{"status":"unknown"}`. Values are numbers, booleans, short text with listed accepted forms, or an option letter.
 Probe kinds (current and previous values, counts, constraints, forbidden retries, withdrawn work, attribution,
 authority, absent answers, continuation and facts) live only in the gold files. A test keeps them out of every
@@ -94,7 +102,7 @@ node --experimental-strip-types scripts/context-memory-preview-bench.mjs \
 | --- | --- |
 | `smoke` | One small request over P1's opening turn, to check that the provider accepts the generated history |
 | `writer` | For each checkpoint, earlier cuts are compacted by a loopback writer that builds faithful notes from the gold files; the measured writer then compacts the cut on `--attempts` fresh copies. Reports refusals by code and quotation class, repairs, writer calls, usage and pause. For each committed note it also reports its size against the bytes it condenses (the previous note and every later message) and how many gold answers it cites, split into answers first asked at this cut and answers carried from earlier cuts |
-| `probes` | The measured writer compacts each fixture cut after cut; a refused cut is retried, as a user retries `/compact`, up to `--chain-attempts` attempts in all (default 4), so that recall is measured on committed notes while `writer` mode measures refusals. A cut still refused blocks its probes and every later one. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites |
+| `probes` | The measured writer compacts each fixture cut after cut; a refused cut is retried, as a user retries `/compact`, up to `--chain-attempts` attempts in all (default 4), so that recall is measured on committed notes while `writer` mode measures refusals. A cut still refused blocks its probes and every later one. Each probe runs on its own copy of the chain at its checkpoint, once with only `context_history` active and once with no tools. Reports scores per condition, `context_history` calls per question by operation, and missed-entry probes, whose answers sit in entries no checkpoint cites. `--probe-conditions history` runs only the condition a session has, and `--cuts` compacts only at the checkpoints it names |
 
 | `repair` | For each case of `repair.ts` at each cut, the writer's first call gets the case's planted candidate and only the quotation repair reaches the measured model, `--attempts` times per case. Reports scores by template, refusals by code, and for the repair calls their stop reasons, the effort asked for and the reasoning settings each request carried, output and reasoning tokens, time and cost |
 
@@ -108,7 +116,8 @@ scripted repair: it shows what official Pi sends for each `--thinking` level wit
 machine.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
-`--max-cost-usd` and starts no unit once any limit is reached; with `--concurrency N`, up to N units already running
+`--max-cost-usd` and starts no unit once any limit is reached, and `--max-input-tokens N` adds a fourth: the first
+request that reports more than N input tokens, cached tokens included, stops the run as the others do; with `--concurrency N`, up to N units already running
 may finish past it. Costs are Pi's catalog estimates, not invoices. `--unit-minutes`, 10 by default, stops a unit
 still running after that long: it settles as crashed and counts under `timedOut`, and a probe it held is scored as
 blocked, so one request that never returns cannot hold the run. The limits go to the maintainer before the first

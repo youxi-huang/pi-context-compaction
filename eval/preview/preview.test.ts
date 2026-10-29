@@ -8,6 +8,7 @@ import {
 	ANSWER_CONTRACT,
 	assertPreviewFixture,
 	P4_FIXTURE_VERSION,
+	P5_FIXTURE_VERSION,
 	PREVIEW_FIXTURE_VERSION,
 	PROBE_KINDS,
 	type PreviewFixture,
@@ -54,12 +55,39 @@ describe("preview evaluation fixtures", () => {
 		for (const id of ["P1", "P2", "P3"]) expect(load(id).fixture.version, id).toBe(PREVIEW_FIXTURE_VERSION);
 		expect([...generate().keys()].filter((path) => path.startsWith("manifest")).sort()).toEqual([
 			"manifest-0.6.json",
+			"manifest-long.json",
 			"manifest.json",
 		]);
 	});
 
+	it("pin P5 under its own version and manifest, with two compaction chains through one long session", () => {
+		const manifest = JSON.parse(read("manifest-long.json"));
+		expect(manifest.version).toBe(P5_FIXTURE_VERSION);
+		expect(Object.keys(manifest.files).sort()).toEqual(["P5/gold.json", "P5/session.jsonl"]);
+		for (const [path, hash] of Object.entries(manifest.files))
+			expect(createHash("sha256").update(read(path)).digest("hex"), path).toBe(hash);
+		const { fixture, entries } = load("P5");
+		expect(fixture.version).toBe(P5_FIXTURE_VERSION);
+		// Checkpoints 1, 3 and 5 are the 200k route's rounds, 2 and 4 the 272k route's; each grows the session.
+		expect(fixture.checkpoints.map((checkpoint) => checkpoint.id)).toEqual(["P5-cp1", "P5-cp2", "P5-cp3", "P5-cp4", "P5-cp5"]);
+		const sizes = fixture.checkpoints.map((checkpoint) => checkpoint.cumulativeSourceTokens);
+		sizes.forEach((size, index) => expect(size).toBeGreaterThan(sizes[index - 1] ?? 100_000));
+		// Every later round carries facts from before the first one, through each note in between.
+		const first = entries.findIndex((entry: Line) => entry.id === fixture.checkpoints[0].afterEntryId);
+		const early = (id: string) => entries.findIndex((entry: Line) => entry.id === id) <= first;
+		for (const checkpoint of ["P5-cp3", "P5-cp4", "P5-cp5"]) {
+			const carried = fixture.probes.filter((probe) => probe.checkpoint === checkpoint && probe.crossCheckpoint && probe.evidence.every(early));
+			expect(carried.length, checkpoint).toBeGreaterThanOrEqual(2);
+		}
+		// Values that changed after a compaction: the batch size before checkpoints 3 and 4, the window before 5.
+		const current = (checkpoint: string, prompt: RegExp) =>
+			fixture.probes.find((probe) => probe.checkpoint === checkpoint && probe.kind === "current" && prompt.test(probe.prompt))?.expected;
+		expect([1, 3, 4, 5].map((n) => current(`P5-cp${n}`, /batch size/))).toEqual([800, 650, 700, 700].map((value) => ({ type: "number", value })));
+		expect([2, 3, 5].map((n) => current(`P5-cp${n}`, /window/))).toEqual(["Sunday", "Sunday", "Saturday"].map((day) => ({ type: "text", accept: [day] })));
+	});
+
 	it("are linear Pi version-3 sessions whose cuts follow completed turns and whose gold precedes its cut", () => {
-		for (const id of ["P1", "P2", "P3", "P4"]) {
+		for (const id of ["P1", "P2", "P3", "P4", "P5"]) {
 			const { fixture, header, entries } = load(id);
 			expect(header).toMatchObject({ type: "session", version: 3 });
 			entries.forEach((entry, index) => expect(entry.parentId).toBe(entries[index - 1]?.id ?? null));
@@ -87,7 +115,7 @@ describe("preview evaluation fixtures", () => {
 	});
 
 	it("never name a probe's kind or any category in its prompt", () => {
-		for (const id of ["P1", "P2", "P3", "P4"]) {
+		for (const id of ["P1", "P2", "P3", "P4", "P5"]) {
 			for (const probe of load(id).fixture.probes) {
 				expect(probe.prompt, probe.id).not.toMatch(new RegExp(`\\b${probe.kind}\\b`, "i"));
 				expect(probe.prompt, probe.id).not.toMatch(/\b(kind|category|knowledge update|abstention|probe)\b/i);

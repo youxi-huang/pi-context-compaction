@@ -8,6 +8,7 @@ Changes under **Unreleased** are not included in an existing release tag or its 
 
 ### Added
 
+- The preview evaluation set gains P5, one long session for compactions on 200k and 272k routes: its checkpoints 1, 3 and 5 are three rounds at about 150,000 tokens of context, 2 and 4 two rounds at about 204,000, each later round compacting with the earlier notes in place. Its probes ask for early facts after two and three notes and for values that changed between rounds. P5 has its own version and manifest, so P1 to P4 keep their pins. The preview bench selects a route's rounds with `--cuts`, runs only the session's own probe condition with `--probe-conditions history`, and stops a run at the first request past `--max-input-tokens`, cached tokens included.
 - `scripts/context-memory-pressure-profile.mjs` prints native compaction settings for Pi, OpenCode 1.19.4 and DSH 0.2.1-rc.3 from verified context, output and optional input limits. A 200k route with a 32k output cap gets a 150k trigger and 15k of recent text; `--model` scopes Pi's values to that route. Missing or contradictory limits are refused, and OpenCode without `limit.input` is reported as keeping its 168k line. The script writes nothing and changes no adapter's scope.
 
 ### Fixed

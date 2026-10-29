@@ -129,7 +129,7 @@ test("without --session-settings no unit gets a settings file, so units run on t
 	assert.deepEqual(readExcerptSettings(agentDir), { enabled: false });
 });
 
-test("--provider openai is a provider run on the official API: limits required, no repair mode, codex gone", (t) => {
+test("--provider openai is a provider run on the official API, and the long-route options are checked before any file", (t) => {
 	const directory = scratch(t);
 	const output = join(directory, "output");
 	const bench = (...flags) =>
@@ -144,6 +144,15 @@ test("--provider openai is a provider run on the official API: limits required, 
 		[["--mode", "smoke", "--provider", "openai", "--max-requests", "1", "--max-minutes", "1", "--max-cost-usd", "0"], /--max-costUsd must be positive for a provider run/],
 		[["--mode", "repair", "--provider", "openai", "--max-requests", "1", "--max-minutes", "1", "--max-cost-usd", "0.01"], /--provider openai does not serve --mode repair/],
 		[["--mode", "smoke", "--provider", "codex"], /--provider must be loopback, deepseek, deepseek-local, openai or relay/],
+		// The long-route options: a chain's cuts only in probes mode and ascending, known probe conditions once each,
+		// and a positive per-request input line.
+		[["--mode", "writer", "--cuts", "1,3"], /--cuts applies to probes mode/],
+		[["--mode", "probes", "--cuts", "3,1"], /--cuts takes ascending checkpoint numbers from 1/],
+		[["--mode", "probes", "--cuts", "0,2"], /--cuts takes ascending checkpoint numbers from 1/],
+		[["--mode", "probes", "--probe-conditions", "history,history"], /--probe-conditions takes history, none or both/],
+		[["--mode", "probes", "--probe-conditions", "tools"], /--probe-conditions takes history, none or both/],
+		[["--mode", "writer", "--max-input-tokens", "0"], /--max-input-tokens must be positive/],
+		[["--mode", "writer", "--max-input-tokens", "many"], /--max-input-tokens must be positive/],
 	]) {
 		const result = bench(...flags);
 		assert.notEqual(result.status, 0, flags.join(" "));

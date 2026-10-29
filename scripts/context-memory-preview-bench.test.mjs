@@ -147,6 +147,8 @@ test("--provider openai is a provider run on the official API, and the long-rout
 		// The long-route options: a chain's cuts only in probes mode and ascending, known probe conditions once each,
 		// and a positive per-request input line.
 		[["--mode", "writer", "--cuts", "1,3"], /--cuts applies to probes mode/],
+		[["--mode", "writer", "--compactions-only"], /--compactions-only applies to probes mode/],
+		[["--mode", "probes", "--cache", "hot"], /--cache must be cold, warm or session/],
 		[["--mode", "probes", "--cuts", "3,1"], /--cuts takes ascending checkpoint numbers from 1/],
 		[["--mode", "probes", "--cuts", "0,2"], /--cuts takes ascending checkpoint numbers from 1/],
 		[["--mode", "probes", "--probe-conditions", "history,history"], /--probe-conditions takes history, none or both/],

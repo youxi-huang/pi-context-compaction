@@ -711,6 +711,62 @@ describe("preview prepared compaction keeps the formal commit gate", () => {
 		expect(stream.mock.calls[0][2]).not.toHaveProperty("sessionId");
 	});
 
+	describe("the session writer's system prompt", () => {
+		beforeEach(() => {
+			controller = new PreviewMemoryController({
+				config: { ...DEFAULT_MEMORY_CONFIG, noteRepair: false },
+				failureStore: store,
+				preparation,
+				journal,
+			});
+			controller.sessionStart(ctx);
+		});
+
+		it.each(["preparation", "compaction"] as const)(
+			"stays where the transcript records it on %s, mid-history in a session begun before Pi 1.4.0",
+			async (path) => {
+				// Pi then sends the transcript as it stands, with no leading prompt; a writer that put one first would
+				// diverge from the session's requests at their first item and miss the provider's prefix cache.
+				const system = {
+					role: "system",
+					content: "",
+					sections: { preamble: "Synthetic system prompt." },
+					timestamp: 2,
+				};
+				session.append({
+					type: "message",
+					id: "system-1",
+					parentId: session.getLeafId(),
+					timestamp,
+					message: system,
+				} as SessionEntry);
+				appendRuling();
+				const stream = vi.spyOn(ctx.modelRegistry, "streamSimple");
+				if (path === "preparation") await prepare();
+				else await controller.compact(event(), ctx);
+				expect(stream).toHaveBeenCalledTimes(1);
+				const sent = stream.mock.calls[0][1];
+				expect(sent.systemPrompt).toBeUndefined();
+				expect(sent.tools).toBeUndefined();
+				expect(sent.messages.slice(0, 4).map((message) => message.role)).toEqual([
+					"user",
+					"assistant",
+					"system",
+					"user",
+				]);
+				expect(sent.messages[2]).toEqual(system);
+			},
+		);
+
+		it("goes first, with the active tools, when the transcript records none", async () => {
+			const stream = vi.spyOn(ctx.modelRegistry, "streamSimple");
+			await controller.compact(event(), ctx);
+			const sent = stream.mock.calls[0][1];
+			expect(sent.systemPrompt).toBe("Synthetic system prompt.");
+			expect(sent.messages.some((message) => message.role === "system")).toBe(false);
+		});
+	});
+
 	it.each(["manual", "threshold"] as const)(
 		"shares the pre-writer read on %s compaction, then reads again at stage",
 		async (reason) => {

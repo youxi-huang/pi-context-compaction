@@ -40,6 +40,8 @@ import { checkpointRecords, equivalenceLine, errorClasses } from "./context-memo
 // --cuts 1,3,5, in probes mode, compacts the chain only at those checkpoints, appending everything between them, so one
 // fixture serves routes with different lines: P5's cuts 1, 3 and 5 are three rounds on a 200k route, 2 and 4 two
 // rounds on a 272k route. --probe-conditions history runs only the condition with context_history, as a session has it.
+// --compactions-only, in probes mode, runs a chain's warm-ups and compactions and no probe, for a run that measures the
+// writer alone after the probes were measured.
 // --max-input-tokens N stops the run once any request reports more than N input tokens, fresh, cached and
 // cache-written together, as OpenAI prices a request against its long-context line. No unit starts after it.
 // Output files hold counts, codes and timings. answers.jsonl keeps the synthetic probe replies for inspection.
@@ -48,7 +50,9 @@ import { checkpointRecords, equivalenceLine, errorClasses } from "./context-memo
 // units of a run share one working directory, and one request over the same history precedes each cut's
 // compactions, as a session's last turn would. Each warm-up is itself a cold request; warm-ups count against the
 // limits and are reported apart. --cache cold gives each unit its own working directory, which Pi's system prompt
-// ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run.
+// ends with, so only the prompt's opening can be cached; it reproduces the first 0.5.0 provider run. --cache session
+// runs each warm-up turn on the session itself, so it stays in the history the writer compacts: the writer's request
+// then continues it, as it continues a session's last turn, which a cache serving only continuations needs.
 // Writer and probes runs end with the token-overhead report of eval/preview/overhead.ts under `overhead`: writer
 // tokens against the records each note replaces, by cut and by v0.2.3 source-size tier; retrieval usage apart;
 // known usage of discarded work, read from the rows and each unit's call journal; calls without usage; cache
@@ -72,7 +76,7 @@ function argument(name, fallback) {
 	if (index >= 0 && args[index + 1] !== undefined) return args[index + 1];
 	if (fallback !== undefined) return fallback;
 	throw new Error(
-		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|openai|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold] [--cuts 1,3,5] [--probe-conditions history,none] [--max-input-tokens N] [--thinking high] [--concurrency 1] [--label name] [--session-settings ${SESSION_SWITCHES.join("|")}=on|off,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N] [--equivalence-out <file>]`,
+		`Missing ${name}. Usage: node --experimental-strip-types ${script} --package-dir <package> --stock-root <official Pi> --output-dir <dir> --mode writer|probes|smoke|repair [--provider loopback|deepseek|deepseek-local|openai|relay --base-url https://... [--relay-model provider/id --relay-id id]] [--fixtures P1,P2,P3] [--attempts 8] [--chain-attempts 4] [--cache warm|cold|session] [--cuts 1,3,5] [--probe-conditions history,none] [--compactions-only] [--max-input-tokens N] [--thinking high] [--concurrency 1] [--label name] [--session-settings ${SESSION_SWITCHES.join("|")}=on|off,...] [--control label] [--keep-sessions] [--unit-minutes 10] [--max-requests N --max-minutes N --max-cost-usd N] [--equivalence-out <file>]`,
 	);
 }
 
@@ -616,6 +620,7 @@ async function parent() {
 	const cache = argument("--cache", "warm");
 	const cutList = argument("--cuts", "");
 	const probeConditions = argument("--probe-conditions", "history,none").split(",");
+	const compactionsOnly = args.includes("--compactions-only");
 	const maxInputTokens = args.includes("--max-input-tokens") ? Number(argument("--max-input-tokens")) : Number.POSITIVE_INFINITY;
 	const label = argument("--label", "run");
 	const unitMinutes = Number(argument("--unit-minutes", "10"));
@@ -638,10 +643,11 @@ async function parent() {
 	const relay = provider === "relay" ? { model: { provider: relayModel.slice(0, relaySeparator), id: relayModel.slice(relaySeparator + 1) } } : undefined;
 	if (relay) relay.id = argument("--relay-id", relay.model.id);
 	if (relay && (relaySeparator <= 0 || !RELAY_KEYS[relay.model.provider] || !relay.id)) throw new Error(`--relay-model takes provider/id for a provider among ${Object.keys(RELAY_KEYS).join(", ")}`);
-	if (!["cold", "warm"].includes(cache)) throw new Error("--cache must be cold or warm");
+	if (!["cold", "warm", "session"].includes(cache)) throw new Error("--cache must be cold, warm or session");
 	// 1-based checkpoint numbers, ascending; the fixtures' own counts are checked when each fixture is read.
 	const cuts = cutList ? cutList.split(",").map(Number) : null;
 	if (cuts && mode !== "probes") throw new Error("--cuts applies to probes mode");
+	if (compactionsOnly && mode !== "probes") throw new Error("--compactions-only applies to probes mode");
 	if (cuts && (!cuts.length || cuts.some((cut, index) => !Number.isSafeInteger(cut) || cut < 1 || (index > 0 && cut <= cuts[index - 1]))))
 		throw new Error("--cuts takes ascending checkpoint numbers from 1, such as 1,3,5");
 	if (!probeConditions.length || probeConditions.some((condition) => !["history", "none"].includes(condition)) || new Set(probeConditions).size < probeConditions.length)
@@ -703,7 +709,7 @@ async function parent() {
 		const agentDir = join(runDir, "agents", id);
 		// Pi's system prompt ends with the working directory, so a directory per unit gives every request its own
 		// prefix after a few hundred tokens; a warm run shares one directory, as one user's session does.
-		const cwd = join(runDir, "cwd", cache === "warm" ? "shared" : id);
+		const cwd = join(runDir, "cwd", cache === "cold" ? id : "shared");
 		writeUnitSettings(agentDir, unitSettings);
 		const encoded = Buffer.from(JSON.stringify({ ...action, cwd, ...(action.provider === "relay" ? { baseUrl, relay } : {}), ...(equivalenceOut ? { equivalence: true } : {}) })).toString("base64url");
 		const child = spawn(process.execPath, [script, "--worker", "--action", encoded, "--package-dir", packageDir, "--stock-root", stockRoot], { cwd: runDir, env: environment(agentDir), stdio: ["ignore", "pipe", "pipe"] });
@@ -774,12 +780,18 @@ async function parent() {
 	/** Warm-up rows; the overhead report reads only the preparation calls their journals may hold. */
 	const warmups = [];
 	/**
-	 * In a warm run, one request over a copy of `file` with the session's own tools, as the main model's last turn
-	 * would be, so that the writer's attempts at this cut find the history's prefix cached.
+	 * In a warm or session run, one request with the session's own tools, as the main model's last turn would be, so
+	 * that the writer's attempts at this cut find the history cached: over a copy of `file` when warm, on `file` itself
+	 * when session.
 	 */
 	async function warm(fixture, cut, file) {
-		if (cache !== "warm" || exhausted()) return;
-		const result = await run({ type: "probe", provider, fixture: fixture.gold.id, sessionFile: copy(file, `${fixture.gold.id}-cut${cut + 1}-warm`), condition: "session", prompt: "Reply with the single word OK.", thinking });
+		if (cache === "cold" || exhausted()) return;
+		// --cache session runs the turn on the session itself, so the writer's request continues it as it would
+		// continue a session's last turn: a cache that serves only continuations of an earlier request, as OpenAI's
+		// implicit mode on GPT-6 Luna does, is then measured as a session meets it. --cache warm keeps the history
+		// unchanged and serves providers that match any shared prefix.
+		const sessionFile = cache === "session" ? file : copy(file, `${fixture.gold.id}-cut${cut + 1}-warm`);
+		const result = await run({ type: "probe", provider, fixture: fixture.gold.id, sessionFile, condition: "session", prompt: "Reply with the single word OK.", thinking });
 		spend(result, provider !== "loopback");
 		used.warmups++;
 		used.warmupCostUsd += result.usage?.cost ?? 0;
@@ -894,7 +906,7 @@ async function parent() {
 	}
 
 	const shown = Object.fromEntries(Object.entries(limits).map(([name, value]) => [name, Number.isFinite(value) ? value : "unlimited"]));
-	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : provider === "openai" ? { endpoint: OPENAI_HOST } : {}), thinking, cache, ...(cuts ? { cuts } : {}), ...(mode === "probes" ? { probeConditions } : {}), ...(mode === "writer" || mode === "repair" ? { attempts } : {}), ...(mode === "probes" ? { chainAttempts } : {}), concurrency, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, sessionSettings, unitSettings: Object.keys(unitSettings).length ? unitSettings : null, control, limits: { ...shown, inputTokensPerRequest: Number.isFinite(maxInputTokens) ? maxInputTokens : "unlimited" } };
+	const report = { label, mode, provider, model: provider === "loopback" ? LOOPBACK.id : relay ? `${relay.model.provider}/${relay.id}` : `${MEASURED[provider].provider}/${MEASURED[provider].id}`, ...(relay && relay.id !== relay.model.id ? { catalogModel: `${relay.model.provider}/${relay.model.id}` } : {}), ...(baseUrl ? { endpoint: new URL(baseUrl).host } : provider === "openai" ? { endpoint: OPENAI_HOST } : {}), thinking, cache, ...(cuts ? { cuts } : {}), ...(mode === "probes" ? { probeConditions, compactionsOnly } : {}), ...(mode === "writer" || mode === "repair" ? { attempts } : {}), ...(mode === "probes" ? { chainAttempts } : {}), concurrency, build: build.buildId ?? build.build ?? null, piVersion: hostVersion, fixtures, sessionSettings, unitSettings: Object.keys(unitSettings).length ? unitSettings : null, control, limits: { ...shown, inputTokensPerRequest: Number.isFinite(maxInputTokens) ? maxInputTokens : "unlimited" } };
 
 	if (mode === "smoke") {
 		// One small request through the history conversion: the opening turn of P1 and a one-word reply.
@@ -1112,7 +1124,7 @@ async function parent() {
 						.filter((entry) => entry.type === "compaction" && entry.details?.kind === "pi-context-memory")
 						.flatMap((entry) => Object.values(entry.details.note).flatMap((items) => (Array.isArray(items) ? items.flatMap((item) => item?.sources ?? []) : []))),
 				);
-				const units = probes.flatMap((probe) => probeConditions.map((condition) => ({ probe, condition })));
+				const units = compactionsOnly ? [] : probes.flatMap((probe) => probeConditions.map((condition) => ({ probe, condition })));
 				await pool(units, async ({ probe, condition }) => {
 					const copied = copy(snapshot, `${probe.id}-${condition}`);
 					const result = await run({ type: "probe", provider, fixture: id, probe: probe.id, sessionFile: copied, condition, prompt: `${probe.prompt}\n\n${ANSWER_CONTRACT}`, thinking });

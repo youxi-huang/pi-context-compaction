@@ -117,7 +117,11 @@ machine.
 `--provider deepseek` uses Pi's catalog model `deepseek/deepseek-flash` through the environment's network proxy,
 which supplies the key; Pi receives only a placeholder. A provider run requires `--max-requests`, `--max-minutes` and
 `--max-cost-usd` and starts no unit once any limit is reached, and `--max-input-tokens N` adds a fourth: the first
-request that reports more than N input tokens, cached tokens included, stops the run as the others do; with `--concurrency N`, up to N units already running
+request that reports more than N input tokens, cached tokens included, stops the run as the others do. `--cache session`
+runs each cut's warm-up turn on the session itself rather than on a copy, so the writer's request continues it as it
+continues a session's last turn; use it with `--provider openai`, whose cache serves only such continuations
+([openai-api.md](../../docs/context-memory/openai-api.md#prompt-cache)). `--compactions-only` runs a probes chain's
+warm-ups and compactions without its probes; with `--concurrency N`, up to N units already running
 may finish past it. Costs are Pi's catalog estimates, not invoices. `--unit-minutes`, 10 by default, stops a unit
 still running after that long: it settles as crashed and counts under `timedOut`, and a probe it held is scored as
 blocked, so one request that never returns cannot hold the run. The limits go to the maintainer before the first

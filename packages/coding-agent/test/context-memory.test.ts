@@ -990,6 +990,35 @@ describe("context memory: persistence, authorization and stop-send contracts", (
 		});
 	});
 
+	it("a first system message recorded mid-history gets no writer header of its own", async () => {
+		// A session begun before prompts were recorded: Pi records the first one at the turn after the upgrade and
+		// sends no leading prompt. A header would duplicate the instructions and diverge from the session's requests.
+		const store = manager();
+		const original = seed(store);
+		const tool = { name: "current_tool", description: "Current tool", parameters: { type: "object" } };
+		store.appendMessage({
+			role: "system",
+			content: "Persistent base instruction.",
+			toolsAdded: [tool],
+			timestamp: 5,
+		});
+		store.appendMessage({ role: "user", content: "Continue after the upgrade.", timestamp: 6 });
+		store.appendMessage(reply());
+		const before = store.buildSessionContext().messages;
+		expect(before[0].role).not.toBe("system");
+		const { session, runtime } = await sdk(store, { writerModel: "session" });
+		const writer = vi.spyOn(runtime, "completeSimple").mockResolvedValue(reply(JSON.stringify(note(original))));
+		await session.compact();
+		const context = writer.mock.calls[0][1];
+		expect(context.systemPrompt).toBeUndefined();
+		expect(context.tools).toBeUndefined();
+		expect(context.messages.slice(0, -1)).toEqual(convertToLlm(before));
+		const transcript = normalizeContext(context);
+		expect(transcript.messages.filter((message) => message.role === "system")).toHaveLength(1);
+		expect(getCurrentSystemPrompt(transcript.messages)).toBe(getCurrentSystemPrompt(before));
+		expect(getCurrentTools(transcript.messages)).toEqual([tool]);
+	});
+
 	it("transcript prompt and tool changes survive keep-none compaction and reopen without a duplicate writer header", async () => {
 		const store = manager();
 		const oldTool = { name: "old_tool", description: "Retired tool", parameters: { type: "object" } };

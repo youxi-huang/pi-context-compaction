@@ -102,6 +102,15 @@ values widely, compare them with native defaults on real providers: pause P50
 and P95, overflows, repeated compactions, recovery accuracy, summary truncation
 and total writer and retrieval tokens.
 
+On GPT-6 Luna, on 2026-10-29, both hosts compacted twice on each route at the
+profile's line and no request reached 272,000 tokens; the largest carried
+220,203. DSH's summary calls ran without reasoning and returned 1,109 to 1,357
+output tokens, so the 8,192-token cap had room to spare. OpenCode summarized at
+the session's `max` effort, with 5,940 to 8,804 reasoning tokens and 78 to 93
+seconds per summary, against 12 to 15 seconds on DSH. Neither host's summary
+request read the session's prompt cache. The comparison with native defaults
+is still open. Details are in the [validation record](validation.md).
+
 ### Native pressure simulations
 
 Build the adapters with `node scripts/context-memory-adapters-check.mjs`. For

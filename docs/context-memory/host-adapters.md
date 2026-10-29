@@ -71,7 +71,8 @@ tool calls/results remain part of the host's ordinary session history.
 
 - DSH citations use native event sequence numbers as strings, scoped by
   session. Retrieval follows the append log, even when surface replacement
-  seqs are non-monotonic. It does not expand a numeric `shadowedRange`.
+  seqs are non-monotonic. It does not expand a numeric `shadowedRange`. A
+  tool result takes its tool's name from the matching `tool/call` event.
 - OpenCode citations use native **part** IDs. Message envelopes retain native
   message IDs as opaque records. Tool output is attributed to `toolResult`,
   synthetic summaries to `context`; ignored text and reasoning/media remain
@@ -83,6 +84,10 @@ tool calls/results remain part of the host's ordinary session history.
 - Native forks/seeded sessions are refused until lineage authorization is
   supported. API failures and cancellation propagate. There is no fallback to
   another session, a current-window cache, or a private database.
+- Search skips the results of `context_history` itself, which copy other
+  records; a read by ID still returns them. Each hit's excerpt opens where the
+  most query terms meet, so a query for one line of a long log lands on that
+  line.
 - Only readable text is searchable. Original payloads remain in host storage;
   these tools do not download file attachments or reveal reasoning as text.
   A host that has deleted original content cannot be repaired by this adapter.

@@ -1,5 +1,84 @@
 # Validation record
 
+## GPT-6 Luna on OpenCode and DSH: native compactions at 150k and 204k, then Slice retrieval, 2026-10-29 UTC
+
+A real-provider run, recorded apart from the synthetic evidence below.
+Official OpenCode 1.19.4 and DSH 0.2.1-rc.3 with the Slice retrieval
+packages, `openai/gpt-6-luna` on OpenAI's API at effort `max`, and each
+route's capacity profile ([capacity profiles](context-pressure.md)): a 200k
+route compacting at 150,000 tokens and a 272k route at 204,000, both with a
+32,000-token output cap. Fixture P5 ran as a session in which the user pastes
+every command's output: 37 messages of at most about 25,000 tokens, sent until
+the second native compaction had run or was due. Then came one message of
+P5's questions and one of four exact log timestamps
+([host runs](openai-api.md#host-runs)). The maintainer approved 300 requests,
+120 minutes and $5; everything below used 265 requests, about 33 minutes and
+$0.84 at catalog prices.
+
+| Host, route | Compacted after | Summary | Largest request | Requests | Cache share | Cost | Questions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| OpenCode, 200k | 152,810 and 152,487 | 93 and 93 s | 152,810 | 26 | 73% | $0.11 | 11 of 12 |
+| OpenCode, 272k | 212,890 and 220,203 | 84 and 78 s | 220,203 | 40 | 80% | $0.16 | 14 of 14 |
+| DSH, 200k | 164,030 and 157,286 | 14 and 14 s | 164,030 | 33 | 80% | $0.11 | 12 of 12 |
+| DSH, 272k | 206,478 and 212,182 | 12 and 15 s | 212,182 | 33 | 80% | $0.14 | 14 of 14 |
+
+"Compacted after" is the request that crossed the line: OpenCode compacts
+right after it, DSH before the next request. Cache share is cache reads over
+all input tokens. No request reached 272,000 tokens and no compaction failed.
+
+**The profiles held on both hosts.** Each route compacted twice near its line.
+DSH's summary calls ran without reasoning and returned 1,109 to 1,357 output
+tokens under the 8,192-token cap. OpenCode summarized at the session's `max`
+effort, 5,940 to 8,804 reasoning tokens a summary. Neither host's summary
+request read the session's cache: each wrote its 126,000 to 195,000 tokens
+again. OpenCode's own cost figures matched the catalog's; its catalog's tier
+above 200,000 tokens was not applied below 272,000.
+
+**Native summaries answered nearly everything.** 51 of 52 answers were right
+and none was wrong. Luna restated each pasted value in its replies, and the
+summaries kept those replies. Only OpenCode on the 272k route called
+`context_history` during the questions, three times for the peak lag. The one
+miss, the rollback time on OpenCode's 200k route, was answered unknown without
+a search.
+
+**Exact timestamps exposed a retrieval fault.** None of the four survived a
+summary. OpenCode found all four on both routes, with 28 and 26 calls and over
+two minutes each. DSH found three on the 200k route with 15 calls and gave
+`2026-01-02T02:13:00Z` for the lag peak at `2026-01-06T02:13:00Z`, inferred
+from the log's cycling timestamps. On the 272k route it answered all four
+unknown without a search. Replaying the 38 searches the model made showed
+why. A search excerpt opened at the first occurrence of any query term, so
+`lag_s=47` opened at an early `47`, hundreds of lines before the peak.
+Searches also returned the tool's own earlier results, 33 copies in those 38
+pages. Against the same snapshots the fixed search put the asked line on the
+first page in 32 of 38 searches, against 15 before, with no copies.
+
+**After the fix**, both 200k routes ran again from the start with
+`scripts/context-memory-host-run.mjs` and the rebuilt packages (OpenCode
+`78afdecd13cb1d63`, DSH `9aa0e2f88f26e6ad`; before, `f5c3a6c64aa34402` and
+`0a4be2f4888a472a`):
+
+| Host, 200k route | Questions | Timestamps | Their searches | Their requests and time |
+| --- | ---: | ---: | ---: | ---: |
+| OpenCode, before | 11 of 12 | 4 of 4 | 28 | 29 in 127 s |
+| OpenCode, after | 12 of 12 | 4 of 4 | 4 | 5 in 16 s |
+| DSH, before | 12 of 12 | 3 of 4 | 15 | 16 in 82 s |
+| DSH, after | 11 of 12 | 4 of 4 | 4 | 2 in 10 s |
+
+Compactions again ran after 154,773 and 153,677 tokens on OpenCode and
+157,589 and 153,772 on DSH. DSH's miss was again an unknown without a search,
+here for the peak lag. The adapters' tool descriptions said what the tool
+does but not when to use it; they now say that summaries drop exact values,
+quotes and timestamps, and to search before answering unknown. With that
+build, the DSH 272k session that had searched for none of the four answered
+two new questions, the time shard 17 halted and the rollback document's
+sentence, with two searches, both right, in 13 seconds. That is one session,
+not a measurement.
+
+The Pi preview searched with the resident copy of the same function and now
+uses the core's; its run above predates the fix. The frozen resident runtime
+keeps its copy.
+
 ## GPT-6 Luna on OpenAI's API: first and repeated compactions on 200k and 272k routes, 2026-10-29 UTC
 
 A real-provider run, recorded apart from the synthetic evidence below. Official

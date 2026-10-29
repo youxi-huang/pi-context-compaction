@@ -54,6 +54,8 @@ about 2.6 bytes per token. A run measures one route with `--cuts`: `--cuts 1,3,5
 route and `--cuts 2,4` twice on a 272k route, each later round with the earlier notes in place of what they replaced,
 as a session continues after `/compact`. Every compaction stays below 272,000 tokens, where OpenAI's long-context
 price begins. Its cuts release more than 80,000 source tokens, so it is not part of the default fixture set.
+OpenCode and DSH take the same session through `scripts/context-memory-host-run.mjs`, with their native compaction
+in place of the preview's ([host runs](../../docs/context-memory/openai-api.md#host-runs)).
 
 Source tokens are `ceil(UTF-8 bytes / 3)` of the readable text, the preview's own size proxy. Each checkpoint
 follows a completed assistant turn. Every tool call has exactly one result. Every cut of P1 to P4 releases fewer

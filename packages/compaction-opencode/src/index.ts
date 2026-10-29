@@ -22,7 +22,7 @@ export const SliceHistory = async ({ client }: { client: ReturnType<typeof creat
 	tool: {
 		context_history: {
 			description:
-				"Search or read original text from this session's stored history. Results cite native part IDs. Repeat the query with its cursor for more. This tool does not compact history.",
+				"Search or read original text from this session's stored history. Summaries drop exact values, quotes and timestamps: search here before answering that an earlier detail is unknown. Results cite native part IDs. Repeat the query with its cursor for more. This tool does not compact history.",
 			args: {
 				operation: z.enum(["search", "read"]),
 				query: z.string().max(1000).optional(),

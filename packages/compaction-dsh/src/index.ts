@@ -12,7 +12,7 @@ export function apply(ctx: Context) {
 		defineTool({
 			name: "context_history",
 			description:
-				"Search or read original text in this session's durable history. Use native event IDs and repeat the query with its cursor for more. No other sessions are accessible. This tool does not compact history.",
+				"Search or read original text in this session's durable history. Native summaries drop exact values, quotes and timestamps: search here before answering that an earlier detail is unknown. Use native event IDs and repeat the query with its cursor for more. No other sessions are accessible. This tool does not compact history.",
 			parameters: {
 				operation: { type: "string", required: true, enum: ["search", "read"] },
 				query: { type: "string" },

@@ -322,6 +322,12 @@ const sum = (rows) => {
 	const of = (key) => rows.reduce((acc, row) => acc + (row[key] ?? 0), 0);
 	return { input: of("input"), cacheRead: of("cacheRead"), cacheWrite: of("cacheWrite"), output: of("output"), reasoning: of("reasoning") };
 };
+/** The request or cost limit the reported usage has reached, checked before a turn and during it. */
+export const limitReached = (rows, limits) => {
+	if (rows.length >= limits.requests) return "request limit";
+	if (limits.costUsd && cost(sum(rows)) >= limits.costUsd) return "cost limit";
+	return null;
+};
 /** Provider keys stay out of the hosts; the proxy supplies OpenAI's. */
 const hostEnvironment = () => Object.fromEntries(Object.entries(process.env).filter(([key]) => !/API_KEY|TOKEN|SECRET/i.test(key)));
 
@@ -575,16 +581,18 @@ export async function run(options) {
 		const last = before.rows.filter((row) => !row.summary).at(-1);
 		const next = (last ? total(last) + last.output : 0) + estimate + 3_000;
 		if (next >= GUARD_TOKENS) return { stopped: `guard: next request about ${next} tokens`, due: host.compactsNextStep && last !== undefined && total(last) >= route.line };
-		if (before.rows.length >= options.limits.requests) return { stopped: "request limit" };
-		if (options.limits.costUsd && cost(sum(before.rows)) >= options.limits.costUsd) return { stopped: "cost limit" };
+		const reached = limitReached(before.rows, options.limits);
+		if (reached) return { stopped: reached };
 		if (Date.now() >= deadline) return { stopped: "time limit" };
 		const started = Date.now();
-		// A turn can make many calls; the request limit holds inside it too.
-		let capped = false;
+		// A turn can make many calls; both limits hold inside it too. A failed read skips one check
+		// instead of ending the process before report.json is written.
+		let capped = null;
 		const watchdog = setInterval(async () => {
-			if (capped || (await host.read()).rows.length < options.limits.requests) return;
-			capped = true;
-			await host.abort();
+			const { rows } = await host.read().catch(() => ({ rows: [] }));
+			if (capped) return;
+			capped = limitReached(rows, options.limits);
+			if (capped) await host.abort();
 		}, 5_000);
 		const { reply, failed } = await host.send(text, Math.min(20 * 60_000, deadline - Date.now())).finally(() => clearInterval(watchdog));
 		const after = await host.read();
@@ -601,7 +609,7 @@ export async function run(options) {
 		};
 		report.turns.push(row);
 		appendFileSync(journal, `${JSON.stringify({ ...row, reply: reply?.slice(0, 400) ?? null })}\n`);
-		if (capped) return { stopped: "request limit, turn aborted", reply };
+		if (capped) return { stopped: `${capped}, turn aborted`, reply };
 		if (failed) return { stopped: `turn failed: ${failed}`, reply };
 		if (row.largest >= PRICE_LINE) return { stopped: `price line crossed: ${row.largest}`, reply };
 		return { reply };

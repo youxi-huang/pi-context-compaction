@@ -155,8 +155,10 @@ node --experimental-strip-types scripts/context-memory-host-run.mjs \
 `--provider loopback` answers from a local stand-in for the Responses API and
 spends nothing; it checks the wiring, not the model. `--provider openai` needs
 `--max-requests`, `--max-minutes` and `--max-cost-usd`, approved by the
-maintainer before the first request; the request limit also holds inside a
-turn. The script gives each run its own `HOME` and XDG directories or
-`DSH_HOME` under the output directory. `report.json` holds each model call's
-usage, the compactions with their pauses, the retrieval calls and both scores;
-`turns.jsonl` holds the replies.
+maintainer before the first request; the request and cost limits also hold
+inside a turn, checked every five seconds against the usage the host has
+reported, so a call already in flight can still finish above them. Neither
+host records usage for the call an abort cuts off. The script gives each run
+its own `HOME` and XDG directories or `DSH_HOME` under the output directory.
+`report.json` holds each model call's usage, the compactions with their
+pauses, the retrieval calls and both scores; `turns.jsonl` holds the replies.

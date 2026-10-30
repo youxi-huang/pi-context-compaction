@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 // Importing the script starts no run: only its helpers are read here.
-import { answers, hostMessages, MESSAGES, parseOptions, QUESTIONNAIRE_MARK, questionnaire, startLoopback } from "./context-memory-host-run.mjs";
+import { answers, hostMessages, limitReached, MESSAGES, parseOptions, QUESTIONNAIRE_MARK, questionnaire, startLoopback } from "./context-memory-host-run.mjs";
 
 const records = readFileSync(fileURLToPath(new URL("../eval/preview/fixtures/P5/records.jsonl", import.meta.url)), "utf8")
 	.trim()
@@ -24,6 +24,16 @@ test("options are checked before any host starts, and a provider run needs all t
 	assert.throws(() => parseOptions([...openai, "--max-requests", "0", "--max-minutes", "1", "--max-cost-usd", "1"]), /--max-requests must be positive/);
 	assert.throws(() => parseOptions(["--host", "opencode", ...required.slice(2), "--summary-tokens", "16384"]), /applies only to --host dsh/);
 	assert.equal(parseOptions([...required, "--summary-tokens", "16384"]).summaryTokens, 16384);
+});
+
+test("the cost limit can stop a turn before the request limit, and counts only when it is set", () => {
+	const row = (input) => ({ input, cacheRead: 0, cacheWrite: 0, output: 0 });
+	const limits = { requests: 3, costUsd: 0.1 };
+	assert.equal(limitReached([row(400_000)], limits), null);
+	// 1,000,000 input tokens at $0.10 per million.
+	assert.equal(limitReached([row(400_000), row(600_000)], limits), "cost limit");
+	assert.equal(limitReached([row(1), row(1), row(1)], limits), "request limit");
+	assert.equal(limitReached([row(1e9)], { requests: 3, costUsd: 0 }), null);
 });
 
 test("the host messages carry every P5 user instruction and tool output once, in order, without assistant text", () => {

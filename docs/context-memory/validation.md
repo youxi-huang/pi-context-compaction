@@ -1,5 +1,36 @@
 # Validation record
 
+## Host-run cost limit inside a turn on OpenCode and DSH, 2026-10-30 UTC
+
+A real-provider run, recorded apart from the synthetic evidence below: the
+setup of the next entry on the 200k route only, official OpenCode 1.19.4 and
+DSH 0.2.1-rc.3 with `openai/gpt-6-luna` at effort `max`. Each run's
+`--max-cost-usd` was placed inside the first compaction's turn, read from a
+loopback run, so that the limit would be reached while that turn was still
+running. The maintainer approved 100 requests, 45 minutes and $0.50; the two
+runs used 24 requests, about five minutes and $0.10 at catalog prices.
+
+| Host | Cost limit | Before the turn | After its summary | Stop |
+| --- | ---: | ---: | ---: | --- |
+| OpenCode | $0.045 | $0.0279 | $0.0507 | cost limit, turn aborted |
+| DSH | $0.036 | $0.0318 | $0.0485 | cost limit, turn aborted |
+
+**Both hosts stopped at the first check after the summary.** In each turn the
+compaction summary carried the total past the limit: OpenCode's after the
+turn's first call, in 61 seconds, DSH's before it, in 11. The watchdog then
+aborted the call that followed. OpenCode returned `MessageAbortedError`; DSH
+exited 130 on SIGINT about four seconds after its summary. Both compactions
+completed and both reports were written.
+
+**The overshoot is the summary already in flight.** It came to $0.006 on
+OpenCode and $0.012 on DSH. A limit can stop the next call but not one under
+way, and a summary of 150,000 tokens is the largest call in the run.
+
+**The aborted call is missing from the report.** Neither host recorded its
+usage: OpenCode wrote no step-finish, DSH no assistant message. Its input, the
+context left after compaction, may still be billed, so `report.json` can fall
+short of the invoice by about one request.
+
 ## GPT-6 Luna on OpenCode and DSH: native compactions at 150k and 204k, then Slice retrieval, 2026-10-29 UTC
 
 A real-provider run, recorded apart from the synthetic evidence below.
